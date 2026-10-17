@@ -403,23 +403,26 @@ export function buildRaccoonNickname(
 }
 
 /**
- * 支持「锁定永久积分」的 provider 白名单。
+ * 支持「锁定长期积分」的 provider 白名单。
  *
  * ⚠️ **必须与前端 `credits-capabilities.js` 的 `supportsPermanentLock` 一致**：
  * 前端拿它决定要不要渲染按钮、要不要发读取请求；后端拿它拒绝越权写入。
  * 两边不一致的后果是「按钮出现但点了报错」或「功能存在却点不出来」。
  *
- * 只有这三家有两个可分的积分池：
+ * 这四家有两个可分的积分池：
  * - Loomy：服务端直接给 `dailyBalance`（当日到期）与 `balance`（永久）；
  * - CodeBuddy / WorkBuddy：要从资源包列表按**扣费截止距今是否满 15 天**现算
- *   （判据见 `buddy-balance-rank.ts`，实测两站形状不同但都成立）。
- * 其余渠道（CodeArts / LobsterAI / Qoder / TRAE / Cline / Raccoon）的积分
+ *   （判据见 `buddy-balance-rank.ts`，实测两站形状不同但都成立）；
+ * - Raccoon：服务端给 `daily_points`（每日发放、次日作废）与
+ *   `reward / monthly / topup`（长期池），判据见 `raccoon-balance-selector.ts`。
+ * 其余渠道（CodeArts / LobsterAI / Qoder / TRAE / Cline）的积分
  * 模型里没有「会不会作废」这一层区分，登记进来只会多一个无效开关。
  */
 export const PERMANENT_LOCK_PROVIDERS: ReadonlySet<string> = new Set([
   LOOMY.id,
   CODEBUDDY.id,
   WORKBUDDY.id,
+  RACCOON.id,
 ])
 
 /**

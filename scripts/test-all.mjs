@@ -48,6 +48,7 @@ const suites = [
   ['chan-relay', 'chan-relay-test.mjs', []],
   ['channel-pack', 'channel-pack-test.mjs', []],
   ['channel-network', 'channel-network-test.mjs', []],
+  ['raccoon-balance', 'raccoon-balance-test.mjs', []],
   ['forward-boot', 'forward-boot-test.mjs', []],
   ['standalone', 'standalone-test.mjs', []],
   ['desktop', 'desktop-test.mjs', []],
