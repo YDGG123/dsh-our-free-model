@@ -91,6 +91,19 @@ node scripts/fork-release.mjs --no-push      # 只签名并提交到本地，先
 node scripts/fork-release.mjs --check-only   # 只核对清单与磁盘是否一致（CI 用）
 ```
 
+⚠️ **本机推送走 API，不走 git push。** 本机到 `github.com:443` 的 git 传输
+被阻断（`api.github.com` 可达），`fork-release.mjs` 的推送步骤在这里会失败。
+实际流程：
+
+```bash
+node scripts/fork-release.mjs --no-push   # 1. 签名 + 本地提交
+GH_TOKEN=<token> node scripts/api-push-squash.mjs   # 2. 差异推送到远端
+```
+
+`api-push-squash.mjs` 以远端 tree 为基准只上传差异文件，tree SHA 与本地
+逐字节一致（内容寻址自证）。使用前确认脚本头部的 `REMOTE_SHA` 与远端
+当前一致，避免覆盖远端新提交。
+
 私钥路径可用 `OFM_RELEASE_KEY` 覆盖。脚本会拒绝权限过宽的私钥（要求 `600`）。
 
 > 为什么不用 GitHub Actions：推送 workflow 文件需要 token 具备 `workflow`
