@@ -532,6 +532,10 @@ window.__ModuleLoader__.load({
         'chan.credits.failed': '余额查询失败：{reason}',
         'chan.credits.partial': '{count} 个账号未能查询余额，请展开账号查看原因并重试。',
         'chan.credits.unavailable': '未返回余额数据',
+        'chan.lock.label': '锁定长期积分',
+        'chan.lock.on': '长期积分已锁定',
+        'chan.lock.hint': '锁定后只消耗每日积分；每日用尽时请求会明确报错，不再烧长期积分',
+        'chan.lock.failed': '锁定开关切换失败：{reason}',
         'chan.claim.failed': '领取失败：{reason}',
         'chan.auto.title': '每日自动签到',
         'chan.auto.running': '签到进行中…',
@@ -1217,6 +1221,10 @@ window.__ModuleLoader__.load({
         'chan.credits.failed': 'Balance query failed: {reason}',
         'chan.credits.partial': 'Could not query {count} accounts. Expand accounts to see the reasons and retry.',
         'chan.credits.unavailable': 'No balance data returned',
+        'chan.lock.label': 'Lock long-term credits',
+        'chan.lock.on': 'Long-term credits locked',
+        'chan.lock.hint': 'While locked, only daily credits are spent; requests fail loudly once daily credits run out instead of burning long-term credits',
+        'chan.lock.failed': 'Failed to toggle the lock: {reason}',
         'chan.claim.failed': 'Claim failed: {reason}',
         'chan.auto.title': 'Daily auto check-in',
         'chan.auto.running': 'Check-in running…',
@@ -1526,6 +1534,7 @@ window.__ModuleLoader__.load({
 .ofm_btn.primary:hover:not(:disabled){background:linear-gradient(180deg,var(--dsw-alias-state-business-primary),color-mix(in srgb,var(--dsw-alias-state-business-primary) 88%,#000));border-color:var(--dsw-alias-state-business-primary);box-shadow:inset 0 1px 0 rgb(255 255 255 / 20%),0 4px 14px color-mix(in srgb,var(--dsw-alias-state-business-primary) 42%,transparent)}
 .ofm_btn.ghost{background:transparent;box-shadow:none;border-color:transparent;color:var(--dsw-alias-label-secondary)}
 .ofm_btn.ghost:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 80%,transparent);border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}
+.ofm_btn.ghost.lock[aria-pressed="true"]{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 58%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-label-primary)}
 .ofm_minibtn{font:inherit;font-size:11px;font-weight:540;padding:3px 9px;border-radius:8px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 85%,transparent);background:color-mix(in srgb,var(--dsw-alias-bg-layer-3) 70%,transparent);color:var(--dsw-alias-label-secondary);cursor:pointer;transition:transform .12s ease,border-color .16s ease,color .16s ease,background .16s ease,opacity .16s ease}
 .ofm_minibtn:hover:not(:disabled){border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 60%,transparent);color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 7%,transparent);transform:translateY(-1px)}
 .ofm_minibtn:active:not(:disabled){transform:scale(.96)}
@@ -3972,15 +3981,18 @@ window.__ModuleLoader__.load({
     /** 与现有 RPC 的能力对应：余额、每日领取及独立签到状态分别判断。 */
     const CHANNEL_CREDITS = {
       codearts: { claim: true },
-      buddy: { claim: true, status: true },
-      workbuddy: {},
+      // lock: 后端 PERMANENT_LOCK_PROVIDERS 白名单（channel-pack-rpc.ts）里
+      // 有两个可分积分池的渠道 —— 必须与白名单保持一致，否则按钮出现但点了
+      // 报错，或功能存在却点不出来。当前四家：loomy / buddy / workbuddy / raccoon。
+      buddy: { claim: true, status: true, lock: true },
+      workbuddy: { lock: true },
       lobsterai: { claim: true },
       qoder: { claim: true },
       qodercn: { claim: true },
       trae: { claim: true },
       cline: { unit: 'dollars' },
-      loomy: { claim: true },
-      raccoon: {},
+      loomy: { claim: true, lock: true },
+      raccoon: { lock: true },
       minimax: { claim: true, status: true },
       zcode: { claim: true, unit: 'tokens' },
       gemini: { unit: 'quota', quota: true },
@@ -4079,6 +4091,10 @@ window.__ModuleLoader__.load({
       const balancePending = useRef(null)
       const balanceGeneration = useRef(0)
       const claimPending = useRef(false)
+      // 「锁定长期积分」开关状态：undefined=查询中/未渲染，null=后端拒绝
+      // （视为该渠道不支持，按钮隐藏——与白名单不一致时的降级），true/false=状态。
+      const [lock, setLock] = useState(undefined)
+      const [lockBusy, setLockBusy] = useState(false)
       const creditCapability = CHANNEL_CREDITS[channel.id]
       const [zcodeProvider, setZcodeProvider] = useState(() => {
         try { return window.localStorage?.getItem(ZCODE_PROVIDER_KEY) === 'zai' ? 'zai' : 'bigmodel' } catch { return 'bigmodel' }
@@ -4341,6 +4357,28 @@ window.__ModuleLoader__.load({
 
       const creditFor = accountId => (credits ?? []).find(row => row.accountId === accountId)?.status ?? null
 
+      // 锁定开关：初始读一次（省略 locked 即只读回显），切换后用返回值更新。
+      // 查询失败按「不支持」降级隐藏按钮，而不是渲染一个必报错的开关。
+      useEffect(() => {
+        if (!creditCapability?.lock) return undefined
+        let alive = true
+        rpc('credits.permanentLock', { provider: channel.id }, 15_000)
+          .then(value => { if (alive) setLock(value?.locked === true) })
+          .catch(() => { if (alive) setLock(null) })
+        return () => { alive = false }
+      }, [creditCapability?.lock, rpc, channel.id])
+      const toggleLock = async () => {
+        if (lock !== true && lock !== false) return
+        if (lockBusy) return
+        setLockBusy(true); setNotice('')
+        try {
+          const value = await rpc('credits.permanentLock', { provider: channel.id, locked: !lock }, 15_000)
+          setLock(value?.locked === true)
+        } catch (error) {
+          setNotice(t('chan.lock.failed').replace('{reason}', String(error?.message ?? error)))
+        } finally { setLockBusy(false) }
+      }
+
       const card = h('article', {
         className: `ofm_chan ofm_glass${status?.closed === true ? ' off' : ''}`,
         'data-state': chanState,
@@ -4396,6 +4434,13 @@ window.__ModuleLoader__.load({
             type: 'button', className: 'ofm_btn ghost', disabled: busy !== '' || !rpc, 'aria-busy': busy === 'claim' ? 'true' : undefined,
             onClick: claim,
           }, busy === 'claim' ? '…' : t('chan.act.claim')) : null,
+          creditCapability?.lock && lock !== null ? h('button', {
+            type: 'button', className: 'ofm_btn ghost lock', disabled: lockBusy || busy !== '' || !rpc,
+            'aria-pressed': lock === true ? 'true' : 'false',
+            'aria-busy': lockBusy ? 'true' : undefined,
+            title: t('chan.lock.hint'),
+            onClick: () => void toggleLock(),
+          }, lockBusy ? '…' : lock === true ? t('chan.lock.on') : t('chan.lock.label')) : null,
           h('button', { type: 'button', className: 'ofm_foldtoggle', 'data-open': open === 'accounts' ? 'true' : 'false', onClick: () => void toggle('accounts') },
             h('svg', { viewBox: '0 0 12 12', 'aria-hidden': 'true' }, h('path', { d: 'M3 1.5l6 4.5-6 4.5z' })),
             t('chan.fold.accounts'), accounts === undefined ? null : ` (${accounts.length})`),

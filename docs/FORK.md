@@ -91,6 +91,19 @@ node scripts/fork-release.mjs --no-push      # 只签名并提交到本地，先
 node scripts/fork-release.mjs --check-only   # 只核对清单与磁盘是否一致（CI 用）
 ```
 
+⚠️ **本机推送走 API，不走 git push。** 本机到 `github.com:443` 的 git 传输
+被阻断（`api.github.com` 可达），`fork-release.mjs` 的推送步骤在这里会失败。
+实际流程：
+
+```bash
+node scripts/fork-release.mjs --no-push   # 1. 签名 + 本地提交
+GH_TOKEN=<token> node scripts/api-push-squash.mjs   # 2. 差异推送到远端
+```
+
+`api-push-squash.mjs` 以远端 tree 为基准只上传差异文件，tree SHA 与本地
+逐字节一致（内容寻址自证）。使用前确认脚本头部的 `REMOTE_SHA` 与远端
+当前一致，避免覆盖远端新提交。
+
 私钥路径可用 `OFM_RELEASE_KEY` 覆盖。脚本会拒绝权限过宽的私钥（要求 `600`）。
 
 > 为什么不用 GitHub Actions：推送 workflow 文件需要 token 具备 `workflow`
@@ -121,10 +134,28 @@ node scripts/build-manifest.mjs --check --key .private/ofm-release-key.pem
 2. 应用后自动校验清单签名与每个文件的 sha256
 3. 失败会回滚到备份（见 `docs/issue-93-upgrade-recovery.md`）
 
-## 五、与上游同步（下一阶段）
+## 五、与上游同步（已自动化）
 
-本 fork 的定位是「上游的功能 + 自己的功能都要」。同步方案见后续的
-`sync-upstream` 工作流：定时拉上游 → 合并 → 跑测试 → 无冲突自动合。
+本 fork 的定位是「上游的功能 + 自己的功能都要」。`scripts/sync-upstream.mjs`
+由 launchd 每日 11:30 触发（`~/Library/LaunchAgents/com.ydgg.ofm-sync-upstream.plist`）：
+
+1. 经镜像 fetch 上游 main（免认证）
+2. 已在本地历史 → 退出；有新提交 → 合并
+3. **只有生成产物冲突时自动解决**（manifest/catalog/pack.js 取 ours 后
+   重建重签）；源码冲突 → 回滚并留待人工
+4. 重建 pack.js → catalog revision 跟随 → 重签 manifest
+5. 目标测试集（raccoon-balance/updater/catalog/chan-relay/feed/picks），
+   失败 → 回滚到合并前，远端不受影响
+6. `api-push-squash` 推送，游标写入 `.private/upstream-sync-state.json`
+
+手动运行 / 查看日志：
+
+```bash
+node scripts/sync-upstream.mjs            # 手动同步
+node scripts/sync-upstream.mjs --dry-run  # 到推送前为止
+tail .private/sync.log                    # 日志
+launchctl kickstart -k gui/$(id -u)/com.ydgg.ofm-sync-upstream  # 立即触发
+```
 
 降低冲突的两条纪律：
 
