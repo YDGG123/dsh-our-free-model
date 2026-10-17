@@ -43,3 +43,8 @@ packages/desktop/src-tauri/.node-license-cache/
 packages/desktop/node_modules/
 
 _audit/
+
+# 发布签名私钥 —— 绝不入库（对应 GitHub Actions secret
+# RELEASE_MANIFEST_PRIVATE_KEY）。提交它等于把信任根交给任何人。
+.private/
+*.pem

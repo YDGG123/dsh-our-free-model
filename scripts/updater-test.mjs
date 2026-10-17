@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
-import { parseVersion, compareVersions, parseManifest, fileUrlOf, downloadManifest, PluginUpdater, stageRelease, verifyStaged, backupPackage, restoreBackup, installStaged, verifyInstalled, signManifest, verifyManifestSignature, stableStringify, PINNED_MANIFEST_PUBLIC_KEY } from '../src/updater.js'
+import { parseVersion, compareVersions, parseManifest, fileUrlOf, downloadManifest, PluginUpdater, stageRelease, verifyStaged, backupPackage, restoreBackup, installStaged, verifyInstalled, signManifest, verifyManifestSignature, stableStringify, PINNED_MANIFEST_PUBLIC_KEY, DEFAULT_MANIFEST_SOURCES } from '../src/updater.js'
 import { selfReload } from '../src/reload.js'
 const CONTROLLED_DEFAULTS = ['http://127.0.0.1:1/never.json']
 
@@ -118,7 +118,14 @@ const corruptManifest = manifestFor(newFiles)
 // The mutable ref can move or serve stale bytes; only a resolved SHA is stable.
 const SNAPSHOT = 'a'.repeat(40)
 const NEXT_SNAPSHOT = 'b'.repeat(40)
-const REPOSITORY = 'Ebony-Vinyl/dsh-our-free-model'
+// The repository is read from the implementation, not restated here: this is a
+// fork whose updater points at its own GitHub repo, and a test that hardcoded
+// the upstream name would fail the moment `REPO` in src/updater.js changes
+// (which it deliberately did). Deriving it keeps the fixture about the
+// *behaviour* — snapshot pinning, CDN fallback — rather than about one URL.
+const REPOSITORY = new URL(DEFAULT_MANIFEST_SOURCES[0]).pathname
+  .replace(/^\//, '')
+  .replace(/\/main\/feed\/manifest\.json$/, '')
 const rawSource = `https://raw.githubusercontent.com/${REPOSITORY}/main/feed/manifest.json`
 const cdnSource = `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/feed/manifest.json`
 const resolverUrl = `https://api.github.com/repos/${REPOSITORY}/commits/main`
