@@ -1,0 +1,229 @@
+/**
+ * 定时把上游 Ebony-Vinyl/dsh-our-free-model 的更新合并进本 fork 并发布。
+ *
+ * ## 设计目标
+ *
+ * 用户对 fork 的要求：「上游更新了，自动拿来，把我们修改过的功能加进去，
+ * 上游更新的功能我们用的上，我们自己添加的功能也用的上。」本脚本是这个
+ * 要求的自动化实现，由 launchd 每日触发（也可手动运行）。
+ *
+ * ## 流程
+ *
+ * 1. `git fetch upstream`（remote 已指向 gh-proxy 镜像；公开仓库拉取无需
+ *    认证 —— 本机 github.com:443 被阻断，详见 docs/FORK.md）。
+ * 2. 上游 main 已是本地祖先 → 更新状态文件退出（无事可做）。
+ * 3. 工作区必须干净（脏树直接退出 —— 宁可不同步也不覆盖未提交的改动）。
+ * 4. `git merge upstream/main`：
+ *    - 冲突文件**全部**属于生成产物（feed/manifest.json、catalog/*、
+ *      vendor/channel-pack/pack.js）→ 取 ours 后重建/重签，内容总是对的；
+ *    - 出现生成产物以外的冲突 → abort 并报错，**留待人工处理**
+ *      （自动化只承诺干净合并；真冲突需要人判断）。
+ * 5. 重建 pack.js（上游若改了 vendor 源码，旧产物就过期了）。
+ * 6. catalog revision 跟随「最后触碰发布文件的提交」，重签 manifest。
+ * 7. 跑目标测试集；失败 → reset 回合并前并报错（已推送的内容不受影响）。
+ * 8. `api-push-squash.mjs` 推送到 fork；更新状态文件。
+ *
+ * ## 用法
+ *
+ *     node scripts/sync-upstream.mjs            # 正常运行（或无事可做）
+ *     node scripts/sync-upstream.mjs --dry-run  # 到推送前一步为止，不推送
+ *
+ * GH_TOKEN 从环境变量或 `.private/gh-token` 读取（推送需要；拉取不需要）。
+ *
+ * ## 状态与日志
+ *
+ * - 上游游标：`.private/upstream-sync-state.json`（机器状态，不入库）
+ * - 日志：调用方重定向（launchd plist 写 `.private/sync.log`）
+ *
+ * @module scripts/sync-upstream.mjs
+ */
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+const root = path.join(fileURLToPath(new URL('..', import.meta.url)))
+const statePath = path.join(root, '.private', 'upstream-sync-state.json')
+const tokenPath = path.join(root, '.private', 'gh-token')
+const keyPath = process.env.OFM_RELEASE_KEY ?? path.join(root, '.private', 'ofm-release-key.pem')
+
+const dryRun = process.argv.includes('--dry-run')
+
+/** 与 package.json files 列表对应的「发布内容」路径（revision 判据）。 */
+const SHIPPED = ['package.json', 'index.js', 'client.js', 'adapter', 'src',
+  'vendor/channel-pack/pack.js', 'vendor/channel-pack/qoder-auth-wasm.wasm',
+  'locale', 'icon.svg', 'cordis.patch.yml', 'LICENSE']
+
+/** 冲突时可以安全「取 ours」的生成产物（随后重建/重签，内容总是正确的）。 */
+const GENERATED = new Set([
+  'feed/manifest.json',
+  'catalog/integrity.json',
+  'catalog/dsh-plugin.json',
+  'catalog/provenance.json',
+  'vendor/channel-pack/pack.js',
+])
+
+/** 合并后必须通过的目标测试集（全量 test-all 中已知稳定通过的部分；
+ * reload 套件在上游纯净分支同样失败，属上游与 Node 24 的兼容问题，不列入）。 */
+const TESTS = [
+  'scripts/raccoon-balance-test.mjs',
+  'scripts/updater-test.mjs',
+  'scripts/catalog-test.mjs',
+  'scripts/chan-relay-test.mjs',
+  'scripts/feed-test.mjs',
+  'scripts/picks-test.mjs',
+]
+
+const say = message => console.log(`[${new Date().toISOString()}] ${message}`)
+const git = (...args) => execFileSync('git', args, { cwd: root, maxBuffer: 512 * 1024 * 1024 }).toString()
+const run = (command, args, env = {}) => {
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, env: { ...process.env, ...env } })
+  return { code: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+}
+
+/** git 身份：从既有提交读取（launchd 环境里没有 shell 的 git 配置）。 */
+const identity = (() => {
+  const [name, email] = git('log', '-1', '--format=%an|%ae').trim().split('|')
+  return { name: name || 'YDGG123', email: email || 'YDGG123@users.noreply.github.com' }
+})()
+const GIT_ENV = {
+  GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email,
+  GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email,
+}
+
+function readState() {
+  try { return JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch { return {} }
+}
+function writeState(state) {
+  fs.mkdirSync(path.dirname(statePath), { recursive: true })
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
+}
+
+function main() {
+  say(`sync-upstream 开始${dryRun ? '（--dry-run）' : ''}`)
+
+  // ── 1. 拉上游（镜像免认证） ─────────────────────────────────────────────
+  say('fetch upstream …')
+  const fetched = run('git', ['fetch', '--force', 'upstream', 'main:refs/remotes/upstream/main'])
+  if (fetched.code !== 0) { say(`❌ fetch 失败：${fetched.output.slice(0, 300)}`); process.exit(1) }
+  const upstreamHead = git('rev-parse', 'refs/remotes/upstream/main').trim()
+  say(`上游 main = ${upstreamHead.slice(0, 7)}`)
+
+  // ── 2. 已是祖先 → 无事可做 ──────────────────────────────────────────────
+  const isAncestor = run('git', ['merge-base', '--is-ancestor', upstreamHead, 'HEAD']).code === 0
+  const lastSynced = readState().lastUpstreamSha
+  if (isAncestor && lastSynced === upstreamHead) {
+    say('✅ 上游无新提交，退出')
+    return
+  }
+  if (isAncestor) {
+    say('上游提交已在本地历史中，仅更新游标')
+    writeState({ lastUpstreamSha: upstreamHead })
+    say('✅ 完成')
+    return
+  }
+
+  // ── 3. 工作区必须干净 ──────────────────────────────────────────────────
+  const dirty = git('status', '--porcelain').trim()
+  if (dirty !== '') {
+    say(`❌ 工作区不干净，放弃本次同步（不覆盖未提交改动）：\n${dirty}`)
+    process.exit(1)
+  }
+  const preMergeHead = git('rev-parse', 'HEAD').trim()
+  say(`合并前 HEAD = ${preMergeHead.slice(0, 7)}`)
+
+  // ── 4. 合并 ────────────────────────────────────────────────────────────
+  const merged = run('git', ['merge', '--no-edit', upstreamHead], GIT_ENV)
+  if (merged.code !== 0) {
+    const conflicted = git('diff', '--name-only', '--diff-filter=U').split('\n').filter(Boolean)
+    const unresolvable = conflicted.filter(file => !GENERATED.has(file))
+    if (conflicted.length === 0 || unresolvable.length > 0) {
+      run('git', ['merge', '--abort'])
+      say(`❌ 存在需要人工判断的冲突，已回滚合并，留待处理：\n${unresolvable.join('\n')}`)
+      process.exit(1)
+    }
+    // 生成产物冲突：取 ours（随后重建/重签，内容总是正确的）。
+    for (const file of conflicted) {
+      run('git', ['checkout', '--ours', '--', file])
+      run('git', ['add', file])
+      say(`  冲突取 ours：${file}（生成产物，稍后重建）`)
+    }
+    const resolved = run('git', ['commit', '--no-edit'], GIT_ENV)
+    if (resolved.code !== 0) {
+      run('git', ['merge', '--abort'])
+      say(`❌ 冲突解决后提交失败：${resolved.output.slice(0, 200)}`)
+      process.exit(1)
+    }
+  }
+  const mergedHead = git('rev-parse', 'HEAD').trim()
+  say(`合并完成 → ${mergedHead.slice(0, 7)}`)
+
+  try {
+    // ── 5. 重建 pack.js（上游改过 vendor 源码时旧产物已过期） ─────────────
+    say('重建 vendor/channel-pack/pack.js …')
+    const built = run('node', ['scripts/build-channel-pack.mjs'])
+    if (built.code !== 0) throw new Error(`pack 重建失败：${built.output.slice(0, 300)}`)
+    if (git('status', '--porcelain', '--', 'vendor/channel-pack/pack.js').trim() !== '') {
+      run('git', ['add', 'vendor/channel-pack/pack.js'])
+      const committed = run('git', ['commit', '-m', `build(channel-pack): 重建上游合并后的产物`], GIT_ENV)
+      if (committed.code !== 0) throw new Error('pack 提交失败')
+      say('  pack.js 已重建并提交')
+    } else {
+      say('  pack.js 无变化')
+    }
+
+    // ── 6. catalog revision + 重签 ────────────────────────────────────────
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+    const contentRevision = git('log', '-1', '--format=%H', '--', ...SHIPPED).trim()
+    for (const [file, key] of [['catalog/dsh-plugin.json', 'revision'], ['catalog/provenance.json', 'sourceRevision']]) {
+      const doc = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'))
+      const target = file.includes('dsh-plugin') ? doc.source : doc.subject
+      target.version = pkg.version
+      target[key] = contentRevision
+      fs.writeFileSync(path.join(root, file), JSON.stringify(doc, null, 2) + '\n')
+    }
+    say(`catalog → ${pkg.version} @ ${contentRevision.slice(0, 7)}`)
+    const signed = run('node', ['scripts/build-manifest.mjs', '--key', keyPath])
+    if (signed.code !== 0) throw new Error(`manifest 签名失败：${signed.output.slice(0, 300)}`)
+    run('git', ['add', 'feed/manifest.json', 'catalog/integrity.json', 'catalog/dsh-plugin.json', 'catalog/provenance.json'])
+    const signCommit = run('git', ['commit', '-m', `catalog: sign the release over ${contentRevision.slice(0, 7)}`], GIT_ENV)
+    if (signCommit.code !== 0) throw new Error('签名提交失败')
+    say('manifest 已重签并提交')
+
+    // ── 7. 测试 ───────────────────────────────────────────────────────────
+    say('运行目标测试集 …')
+    for (const test of TESTS) {
+      const result = run('node', [test])
+      const passed = result.code === 0
+      say(`  ${passed ? '✅' : '❌'} ${path.basename(test)}`)
+      if (!passed) throw new Error(`测试失败：${test}\n${result.output.slice(-1500)}`)
+    }
+    const check = run('node', ['scripts/build-manifest.mjs', '--check'])
+    if (check.code !== 0) throw new Error(`manifest --check 失败：${check.output.slice(0, 300)}`)
+    say('  ✅ build-manifest --check')
+
+    // ── 8. 推送 + 游标 ────────────────────────────────────────────────────
+    if (dryRun) {
+      say('--dry-run：到推送前为止，不推送')
+      say(`本地 HEAD = ${git('rev-parse', 'HEAD').trim().slice(0, 7)}`)
+      return
+    }
+    const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
+    if (token === '') throw new Error('无 GH_TOKEN（环境变量或 .private/gh-token）')
+    const pushed = run('node', ['scripts/api-push-squash.mjs'], { GH_TOKEN: token })
+    say(pushed.output.trim())
+    if (pushed.code !== 0) throw new Error('推送失败')
+
+    writeState({ lastUpstreamSha: upstreamHead })
+    say(`✅ 同步完成：上游 ${upstreamHead.slice(0, 7)} → 本地 ${git('rev-parse', 'HEAD').trim().slice(0, 7)}`)
+  } catch (error) {
+    // 测试/构建/签名任一失败：回滚到合并前。远端未动，无副作用。
+    say(`❌ ${error.message}`)
+    run('git', ['reset', '--hard', preMergeHead])
+    say(`已回滚到 ${preMergeHead.slice(0, 7)}（远端未受影响）`)
+    process.exit(1)
+  }
+}
+
+main()
