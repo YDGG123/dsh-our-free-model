@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Our Free Model",
-  "version": "2.3.0",
+  "version": "2.5.2",
   "identifier": "com.ourfreemodel.desktop",
   "build": {
     "frontendDist": "../splash",
@@ -18,7 +18,8 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "nsis",
+      "dmg"
     ],
     "icon": [
       "icons/32x32.png",

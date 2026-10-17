@@ -110,8 +110,8 @@ async function checkBodyLimits(temporary) {
 // Keep local .env files and module state out of both this check and later suites.
 if (process.argv[2] === '--body-limit-child') {
   await checkBodyLimits(process.argv[3])
-  process.exit(failures === 0 ? 0 : 1)
-}
+  process.exitCode = failures === 0 ? 0 : 1
+} else {
 const bodyLimitDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-body-limit-'))
 try {
   for (const name of ['worker.js', 'gateway-node.mjs', 'auth-github.mjs']) {
@@ -165,6 +165,10 @@ const { createGatewayServer, resetAnalytics, poolProbe } = await import('../work
   check('the gate refuses one Tauri signal alone (home path only)', partialAio, null)
   const bareHarness = detectSealedHost({ env: {}, profileName: 'desktop' })
   check('the gate admits the desktop profile name alone (kernel-authoritative, Electron scrubs the env marker)', bareHarness, 'harness')
+  check('the kernel-provided DSH Tauri profile is a desktop host (#267)', detectSealedHost({ env: {}, profileName: 'tauri' }), 'harness')
+  check('a Tauri command line without kernel profile context is still refused', detectSealedHost({
+    env: { DSH_HOME: 'D:/dsh' }, execPath: 'D:/node.exe', argv: ['node.exe', '--profile', 'tauri'],
+  }), null)
   const aio = detectSealedHost({
     env: { DSH_HOME: 'C:/Users/u/AppData/Roaming/com.deepseek.dsh.desktop.aio/releases/6.9.3/dsh-home' },
     execPath: 'D:/DSHEAC AIO/resources/node/node.exe',
@@ -800,6 +804,12 @@ const { createGatewayServer, resetAnalytics, poolProbe } = await import('../work
   ])
   check('an unknown id still shows its own name, tagged', roster[3].name, 'EAC Some Model 9')
   check('the ids stay the raw namespaced ids', roster[0].id, 'deepseek-ai/deepseek-v4.1-flash')
+  // The card's small line shows the model's own id: the `org/` prefix is what
+  // keeps this row distinct from the free lane's same-named model during the
+  // merge, but it is routing detail the reader never needs to see.
+  check('the card label drops the org prefix', roster.map(entry => entry.label), [
+    'deepseek-v4.1-flash', 'kimi-k3', 'glm-5.3-flash', 'some-model-9',
+  ])
   check('isEacEntry answers the channel field', [isEacEntry(roster[0]), isEacEntry({ id: 'mimo-v2.6-flash-free' })], [true, false])
   check('display names never leak the org prefix', roster.every(entry => !entry.name.includes('deepseek-ai/') && !entry.name.includes('moonshotai/')), true)
 }
@@ -957,6 +967,22 @@ const { createGatewayServer, resetAnalytics, poolProbe } = await import('../work
   }
 
   {
+    const { ctx, api, restore } = await bootWith({ profileName: 'tauri' })
+    try {
+      const adapter = ctx.__captured.adapters[0]?.adapter
+      await until(async () => (await adapter.listModels(ROUTE_MAIN)).some(model => model.id === 'deepseek-ai/deepseek-v4.1-flash'), {
+        what: 'the sealed roster on a DSH Tauri host', timeoutMs: 10000,
+      })
+      const summary = await callRoute(api(), 'GET', '/api/our-free-model/summary')
+      check('a DSH Tauri boot lists the sealed models and opens the lane (#267)', [
+        (summary.json.catalog ?? []).some(entry => entry.id === 'moonshotai/kimi-k3'), summary.json.laneAvailable,
+      ], [true, true])
+      const poolRow = await callRoute(api(), 'GET', '/api/our-free-model/pool')
+      check('the pool route answers on a DSH Tauri host', poolRow.json?.ok, true)
+    } finally { restore() }
+  }
+
+  {
     const { ctx, api, restore } = await bootWith({ simulateAio: false })
     try {
       const adapter = ctx.__captured.adapters[0]?.adapter
@@ -975,4 +1001,5 @@ const { createGatewayServer, resetAnalytics, poolProbe } = await import('../work
 }
 
 console.log(failures === 0 ? '\nvault-test: all checks passed' : `\nvault-test: ${failures} check(s) FAILED`)
-process.exit(failures === 0 ? 0 : 1)
+process.exitCode = failures === 0 ? 0 : 1
+}

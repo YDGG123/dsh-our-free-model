@@ -1,3 +1,4 @@
+mod external;
 mod service;
 
 use service::ServiceProcess;
@@ -35,7 +36,11 @@ fn start_service(app: &tauri::AppHandle) -> Result<String, String> {
     } else {
         app.path().resource_dir().map_err(|_| "无法定位安装资源")?
     };
-    let node = resources.join("runtime/node.exe");
+    let node = if cfg!(target_os = "windows") {
+        resources.join("runtime/node.exe")
+    } else {
+        resources.join("runtime/node")
+    };
     let host = resources.join("service/packages/desktop/service-host.mjs");
     if !node.is_file() || !host.is_file() {
         return Err("安装资源不完整，请重新安装桌面程序".into());
@@ -94,7 +99,15 @@ fn show_main(app: &tauri::AppHandle, address: &str) -> tauri::Result<()> {
         .center()
         .decorations(false)
         .initialization_script(titlebar_script(&origin))
-        .on_navigation(move |url| url.origin().ascii_serialization() == origin)
+        .on_navigation(move |url| {
+            if url.origin().ascii_serialization() == origin { return true; }
+            if let Err(message) = external::open_external(url) { eprintln!("{message}"); }
+            false
+        })
+        .on_new_window(|url, _| {
+            if let Err(message) = external::open_external(&url) { eprintln!("{message}"); }
+            tauri::webview::NewWindowResponse::Deny
+        })
         .build()?;
     Ok(())
 }

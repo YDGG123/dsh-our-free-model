@@ -34101,6 +34101,16 @@ function normalizeHarnessMessages(messages) {
   }
   return normalized;
 }
+function collectHarnessSystem(messages) {
+  const parts = [];
+  for (const message2 of messages) {
+    if (message2 === null || typeof message2 !== "object" || message2.role !== "system") continue;
+    const content = message2.content;
+    const text = typeof content === "string" ? content : Array.isArray(content) ? content.filter((block) => typeof block === "object" && block !== null && block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n") : "";
+    if (text !== "") parts.push(text);
+  }
+  return parts.join("\n\n");
+}
 
 // vendor/channel-pack/src/sse.ts
 import { EMPTY_RESPONSE_CODE, LlmError } from "@deepseek-ai/dsh-llm";
@@ -35251,9 +35261,11 @@ function serializeMessages(messages) {
         function: { name: String(block.name), arguments: normalizeToolArguments(String(block.arguments)) }
       }));
       const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
+      const text2 = contentToText(content2);
+      if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       wire.push({
         role: "assistant",
-        content: contentToText(content2),
+        content: text2,
         // 后端（deepseek-v4-flash/pro）校验要求 assistant 消息必须包含
         // reasoning_content 字段：历史里的推理块在上一轮被持久化，回传时
         // 若缺失该字段会直接 400（"Missing `reasoning_content` field"）。
@@ -35270,7 +35282,7 @@ function serializeMessages(messages) {
     const content = Array.isArray(message2.content) ? message2.content : [];
     const toolResults = content.filter((block) => typeof block === "object" && block !== null && block.type === "tool-result");
     const text = contentToText(message2.content);
-    if (text.length > 0 || toolResults.length === 0) wire.push({ role: "user", content: text });
+    if (text.trim().length > 0) wire.push({ role: "user", content: text });
     for (const result of toolResults) {
       if (!keepResultIds.has(String(result.toolCallId))) continue;
       wire.push({
@@ -35951,10 +35963,12 @@ var CodeArtsAdapter = class extends LlmAdapter {
     const proseLoopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
     let proseLoopDetected = false;
     const suppressor = createBlankReasoningSuppressor();
+    const proseSuppressor = createBlankReasoningSuppressor();
     const dsmlContentExtractor = new DsmlContentExtractor();
     const dsmlReasoningExtractor = new DsmlContentExtractor();
     async function* emitDsmlFeed(text, reasoning, dsmlCalls) {
-      if (text.length > 0) {
+      const textDelta = text.length > 0 ? proseSuppressor.feed(text) : void 0;
+      if (textDelta !== void 0) {
         let block = blocks.find((candidate) => candidate.kind === "text");
         if (block === void 0) {
           block = { index: nextIndex++, kind: "text", text: "" };
@@ -35962,11 +35976,11 @@ var CodeArtsAdapter = class extends LlmAdapter {
           yield { type: "block-start", index: block.index, blockType: "text" };
         }
         if (proseLoopGuard !== void 0) {
-          if (proseLoopGuard.observe(text)) proseLoopDetected = true;
+          if (proseLoopGuard.observe(textDelta)) proseLoopDetected = true;
         }
         if (!proseLoopDetected) {
-          block.text += text;
-          yield { type: "text-delta", index: block.index, text };
+          block.text += textDelta;
+          yield { type: "text-delta", index: block.index, text: textDelta };
         }
       }
       if (reasoning.length > 0) {
@@ -36215,9 +36229,13 @@ var CodeArtsAdapter = class extends LlmAdapter {
         }
       };
     }
-    if (textBlock !== void 0 || visible !== "") {
+    if (visible.trim() !== "") {
       blockCount += 1;
-      yield { type: "block-end", index: textBlock?.index ?? nextIndex, block: { type: "text", text: visible } };
+      const index = textBlock?.index ?? nextIndex++;
+      if (textBlock === void 0) yield { type: "block-start", index, blockType: "text" };
+      yield { type: "block-end", index, block: { type: "text", text: visible } };
+    } else if (textBlock !== void 0) {
+      yield { type: "block-end", index: textBlock.index, block: { type: "text", text: "" } };
     }
     if (reasoningBlock !== void 0 && reasoningBlock.text.trim() !== "") {
       if (reasoningText !== "") {
@@ -37294,6 +37312,7 @@ function serializeMessages2(messages, imageUrls) {
       }));
       const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
       const text2 = contentToText2(content2);
+      if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       flushToolImages();
       wire.push({
         role: "assistant",
@@ -37318,7 +37337,7 @@ function serializeMessages2(messages, imageUrls) {
     if (parts !== void 0) {
       flushToolImages();
       wire.push({ role: "user", content: parts });
-    } else if (text.length > 0 || toolResults.length === 0) {
+    } else if (text.trim().length > 0) {
       flushToolImages();
       wire.push({ role: "user", content: text });
     }
@@ -37357,7 +37376,13 @@ function errorMessage2(error) {
 }
 function isContentRejection(body) {
   if (body.length === 0) return false;
-  return /"code"\s*:\s*11140/.test(body) || /request illegal/i.test(body) || /安全审核|safety review/i.test(body);
+  try {
+    const data = JSON.parse(body);
+    if (data?.code === 11128 || data?.code === "11128") return false;
+    if (data?.code === 11140 || data?.code === "11140") return true;
+  } catch {
+  }
+  return /request illegal/i.test(body) || /安全审核|safety review/i.test(body);
 }
 var BUDDY_POLICY_BLOCK_COOLDOWN_MS = 30 * 6e4;
 function contentRejectionError(productId, status, body, rotated) {
@@ -37884,6 +37909,9 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     if (options.system !== void 0 && options.system.length > 0) {
       messages.unshift({ role: "system", content: options.system });
     }
+    if (this.product.id === "workbuddy" && (messages.length === 0 || messages[0].role !== "system")) {
+      messages.unshift({ role: "system", content: "You are a helpful assistant." });
+    }
     const tools = options.tools?.map((tool) => ({
       type: "function",
       function: {
@@ -38124,6 +38152,11 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     headers.set("X-IDE-Version", this.product.clientVersion);
     headers.set(HTTP_HEADER_PRODUCT, this.product.attributionName);
     headers.set("User-Agent", resolveUserAgent(this.product, options.model));
+    if (this.product.id === "workbuddy") {
+      headers.set("X-Conversation-ID", this.sessionId);
+      headers.set("X-Conversation-Message-ID", crypto.randomUUID());
+      headers.set("X-Conversation-Request-ID", crypto.randomUUID());
+    }
     try {
       return await this.fetchImpl(`${this.product.endpoint}/v2/chat/completions`, {
         method: "POST",
@@ -38156,6 +38189,7 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
     const proseLoopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
     let proseLoopDetected = false;
     const suppressor = createBlankReasoningSuppressor();
+    const proseSuppressor = createBlankReasoningSuppressor();
     const toolCalls = /* @__PURE__ */ new Map();
     const toolOrder = [];
     const toolIds = /* @__PURE__ */ new Map();
@@ -38200,6 +38234,13 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
           } catch {
             continue;
           }
+          if (data.choices === void 0 && (data.code === 11128 || data.code === "11128")) {
+            throw new LlmError3(
+              `${this.product.id}: code=11128 ${errorDetail2(payload)}`,
+              "INVALID_REQUEST",
+              { status: response.status }
+            );
+          }
           if (data.choices === void 0 && isContentRejection(payload)) {
             await markPolicyBlockedAccount(
               this.options.accountPool,
@@ -38217,7 +38258,8 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
           if (typeof choice?.finish_reason === "string") {
             finishReason2 = choice.finish_reason;
           }
-          if (delta?.content) {
+          const textDelta = delta?.content ? proseSuppressor.feed(delta.content) : void 0;
+          if (textDelta !== void 0) {
             let block = blocks.find((candidate) => candidate.kind === "text");
             if (block === void 0) {
               block = { index: nextIndex++, kind: "text", text: "" };
@@ -38225,11 +38267,11 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
               yield { type: "block-start", index: block.index, blockType: "text" };
             }
             if (proseLoopGuard !== void 0) {
-              if (proseLoopGuard.observe(delta.content)) proseLoopDetected = true;
+              if (proseLoopGuard.observe(textDelta)) proseLoopDetected = true;
             }
             if (!proseLoopDetected) {
-              block.text += delta.content;
-              yield { type: "text-delta", index: block.index, text: delta.content };
+              block.text += textDelta;
+              yield { type: "text-delta", index: block.index, text: textDelta };
             }
           }
           if (delta?.reasoning_content) {
@@ -38359,10 +38401,12 @@ var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
       textOut = stripBareThinkCloseTagIfEnabled(textOut);
       const truncated = proseLoopDetected && proseLoopGuard?.cutAt !== void 0 ? textOut.slice(0, proseLoopGuard.cutAt) : textOut;
       const cleaned = stripCourseLeakIfEnabled(truncated);
-      if (cleaned !== "") {
+      if (cleaned.trim() !== "") {
         blockCount += 1;
         emittedProse = cleaned;
         yield { type: "block-end", index: textBlock.index, block: { type: "text", text: cleaned } };
+      } else {
+        yield { type: "block-end", index: textBlock.index, block: { type: "text", text: "" } };
       }
     }
     const reasoningBlock = blocks.find((block) => block.kind === "reasoning");
@@ -38961,6 +39005,7 @@ function serializeMessages3(messages, imageUrls) {
       }));
       const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
       const text2 = contentToText3(content2);
+      if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       flushToolImages();
       wire.push({
         role: "assistant",
@@ -38984,7 +39029,7 @@ function serializeMessages3(messages, imageUrls) {
     if (parts !== void 0) {
       flushToolImages();
       wire.push({ role: "user", content: parts });
-    } else if (text.length > 0 || toolResults.length === 0) {
+    } else if (text.trim().length > 0) {
       flushToolImages();
       wire.push({ role: "user", content: text });
     }
@@ -39482,6 +39527,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
     const proseLoopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
     let proseLoopDetected = false;
     const suppressor = createBlankReasoningSuppressor();
+    const proseSuppressor = createBlankReasoningSuppressor();
     const toolCalls = /* @__PURE__ */ new Map();
     const toolOrder = [];
     const toolIds = /* @__PURE__ */ new Map();
@@ -39541,9 +39587,10 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
             finishReason2 = choice.finish_reason;
           }
           const deltaContent = delta?.content;
-          const textDelta = typeof deltaContent === "string" && deltaContent.length > 0 ? deltaContent : !gotAnyContent && typeof choice?.message?.content === "string" ? choice.message.content : void 0;
+          const rawTextDelta = typeof deltaContent === "string" && deltaContent.length > 0 ? deltaContent : !gotAnyContent && typeof choice?.message?.content === "string" ? choice.message.content : void 0;
+          if (typeof deltaContent === "string" && deltaContent.length > 0) gotAnyContent = true;
+          const textDelta = rawTextDelta === void 0 ? void 0 : proseSuppressor.feed(rawTextDelta);
           if (textDelta !== void 0 && textDelta.length > 0) {
-            if (typeof deltaContent === "string" && deltaContent.length > 0) gotAnyContent = true;
             let block = blocks.find((candidate) => candidate.kind === "text");
             if (block === void 0) {
               block = { index: nextIndex++, kind: "text", text: "" };
@@ -39679,10 +39726,12 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       textOut = stripBareThinkCloseTagIfEnabled(textOut);
       const truncated = proseLoopDetected && proseLoopGuard?.cutAt !== void 0 ? textOut.slice(0, proseLoopGuard.cutAt) : textOut;
       const cleaned = stripCourseLeakIfEnabled(truncated);
-      if (cleaned !== "") {
+      if (cleaned.trim() !== "") {
         blockCount += 1;
         emittedProse = cleaned;
         yield { type: "block-end", index: textBlock.index, block: { type: "text", text: cleaned } };
+      } else {
+        yield { type: "block-end", index: textBlock.index, block: { type: "text", text: "" } };
       }
     }
     const reasoningBlock = blocks.find((block) => block.kind === "reasoning");
@@ -40726,6 +40775,7 @@ function serializeMessages4(messages, imageUrls) {
       }));
       const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
       const text2 = contentToText4(content2);
+      if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       flushToolImages();
       wire.push({
         role: "assistant",
@@ -40749,7 +40799,7 @@ function serializeMessages4(messages, imageUrls) {
     if (parts !== void 0) {
       flushToolImages();
       wire.push({ role: "user", content: parts });
-    } else if (text.length > 0 || toolResults.length === 0) {
+    } else if (text.trim().length > 0) {
       flushToolImages();
       wire.push({ role: "user", content: text });
     }
@@ -40832,6 +40882,7 @@ function isTransportError4(error) {
 var RAW_SNIPPET_LIMIT = 400;
 async function* consumeOpenAiSse(response, options, config) {
   const { label } = config;
+  const restoreToolName2 = config.restoreToolName ?? ((name2) => name2);
   if (!response.body) throw new LlmError6(`${label}: empty model response body`, "EMPTY_RESPONSE");
   const blocks = [];
   let nextIndex = 0;
@@ -40840,6 +40891,7 @@ async function* consumeOpenAiSse(response, options, config) {
   const proseLoopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
   let proseLoopDetected = false;
   const suppressor = createBlankReasoningSuppressor();
+  const proseSuppressor = createBlankReasoningSuppressor();
   const toolCalls = /* @__PURE__ */ new Map();
   const toolOrder = [];
   const toolIds = /* @__PURE__ */ new Map();
@@ -40852,6 +40904,7 @@ async function* consumeOpenAiSse(response, options, config) {
   let firstTokenReceived = false;
   let sawDataFrame = false;
   let rawSnippet = "";
+  let rawJson = "";
   try {
     for (; ; ) {
       if (streamEnded) break;
@@ -40871,6 +40924,9 @@ async function* consumeOpenAiSse(response, options, config) {
       }
       if (result.done) break;
       const decoded = decoder2.decode(result.value, { stream: true });
+      if (!sawDataFrame && config.isQuotaError !== void 0 && rawJson.length < 65536) {
+        rawJson = (rawJson + decoded).slice(0, 65536);
+      }
       if (rawSnippet.length < RAW_SNIPPET_LIMIT) {
         rawSnippet = (rawSnippet + decoded).slice(0, RAW_SNIPPET_LIMIT);
       }
@@ -40897,6 +40953,9 @@ async function* consumeOpenAiSse(response, options, config) {
             config.onFrame(data);
           } catch {
           }
+        }
+        if (data.choices === void 0 && config.isQuotaError?.(data)) {
+          throw new LlmError6(`${label}: ${errorDetail4(payload)}`, "QUOTA_EXCEEDED");
         }
         if (data.error !== void 0) {
           throw new LlmError6(`${label}: ${data.error.message ?? "unknown error"}`, "SERVER");
@@ -40958,9 +41017,10 @@ async function* consumeOpenAiSse(response, options, config) {
           finishReason2 = choice.finish_reason;
         }
         const deltaContent = delta?.content;
-        const textDelta = typeof deltaContent === "string" && deltaContent.length > 0 ? deltaContent : !gotAnyContent && typeof choice?.message?.content === "string" ? choice.message.content : void 0;
+        const rawTextDelta = typeof deltaContent === "string" && deltaContent.length > 0 ? deltaContent : !gotAnyContent && typeof choice?.message?.content === "string" ? choice.message.content : void 0;
+        if (typeof deltaContent === "string" && deltaContent.length > 0) gotAnyContent = true;
+        const textDelta = rawTextDelta === void 0 ? void 0 : proseSuppressor.feed(rawTextDelta);
         if (textDelta !== void 0 && textDelta.length > 0) {
-          if (typeof deltaContent === "string" && deltaContent.length > 0) gotAnyContent = true;
           let block = blocks.find((candidate) => candidate.kind === "text");
           if (block === void 0) {
             block = { index: nextIndex++, kind: "text", text: "" };
@@ -41018,7 +41078,7 @@ async function* consumeOpenAiSse(response, options, config) {
               type: "tool-call-delta",
               index: block.index,
               id: ToolCallId4(callId),
-              name: block.name,
+              name: restoreToolName2(block.name),
               argumentsDelta: block.text
             };
             continue;
@@ -41027,7 +41087,7 @@ async function* consumeOpenAiSse(response, options, config) {
             type: "tool-call-delta",
             index: block.index,
             id: ToolCallId4(callId),
-            ...block.name !== void 0 ? { name: block.name } : {},
+            ...block.name !== void 0 ? { name: restoreToolName2(block.name) } : {},
             argumentsDelta: fragment
           };
         }
@@ -41070,7 +41130,7 @@ async function* consumeOpenAiSse(response, options, config) {
       block: {
         type: "tool-call",
         id: ToolCallId4(block.callId ?? ""),
-        name: block.name,
+        name: restoreToolName2(block.name),
         // 仅把「无参数工具下发的空分片」补成 {}；**残缺参数保持原样**，
         // 由 max-tokens 判定触发重试 —— 把残缺 JSON 补成 {} 会伪造出
         // 合法外观，让 harness 报 missing required property 而非重试。
@@ -41098,10 +41158,12 @@ async function* consumeOpenAiSse(response, options, config) {
     textOut = stripBareThinkCloseTagIfEnabled(textOut);
     const truncatedText = proseLoopDetected && proseLoopGuard?.cutAt !== void 0 ? textOut.slice(0, proseLoopGuard.cutAt) : textOut;
     const cleanedText = stripCourseLeakIfEnabled(truncatedText);
-    if (cleanedText !== "") {
+    if (cleanedText.trim() !== "") {
       blockCount += 1;
       emittedProse = cleanedText;
       yield { type: "block-end", index: textBlock.index, block: { type: "text", text: cleanedText } };
+    } else {
+      yield { type: "block-end", index: textBlock.index, block: { type: "text", text: "" } };
     }
   }
   const reasoningBlock = blocks.find((block) => block.kind === "reasoning");
@@ -41118,6 +41180,14 @@ async function* consumeOpenAiSse(response, options, config) {
   const incompleteTools = finishReason2 === void 0 && toolOrder.length > 0;
   const droppedUnnamedCalls = [...toolCalls.values()].some((block) => !block.announced);
   if (!sawDataFrame) {
+    let data;
+    try {
+      data = JSON.parse(rawJson);
+    } catch {
+    }
+    if (typeof data === "object" && data !== null && !Array.isArray(data) && config.isQuotaError?.(data)) {
+      throw new LlmError6(`${label}: ${errorDetail4(rawJson)}`, "QUOTA_EXCEEDED");
+    }
     const snippet = rawSnippet.trim();
     if (snippet.length > 0) {
       throw new LlmError6(
@@ -42728,6 +42798,8 @@ function serializeTraeMessages(messages, imageUrls) {
         }
       }));
       const text2 = contentToText6(content2);
+      if (text2.trim().length === 0 && toolCalls.length === 0) continue;
+      flushToolImages();
       wire.push({
         role: "assistant",
         content: text2.length === 0 && toolCalls.length > 0 ? null : text2,
@@ -42736,6 +42808,7 @@ function serializeTraeMessages(messages, imageUrls) {
       continue;
     }
     if (message2.role === "system") {
+      flushToolImages();
       wire.push({ role: "system", content: contentToText6(message2.content) });
       continue;
     }
@@ -42753,7 +42826,8 @@ function serializeTraeMessages(messages, imageUrls) {
       if (parts !== void 0) {
         flushToolImages();
         wire.push({ role: "user", content: parts });
-      } else {
+      } else if (text.trim().length > 0) {
+        flushToolImages();
         wire.push({ role: "user", content: text });
       }
     }
@@ -42773,8 +42847,8 @@ function serializeTraeMessages(messages, imageUrls) {
       flushToolImages();
       wire.push({ role: "user", content: parts ?? text });
     }
-    flushToolImages();
   }
+  flushToolImages();
   return wire;
 }
 function errorDetail5(body) {
@@ -43314,6 +43388,7 @@ var TraeAdapter = class extends LlmAdapter5 {
     const proseLoopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
     let proseLoopDetected = false;
     const suppressor = createBlankReasoningSuppressor();
+    const proseSuppressor = createBlankReasoningSuppressor();
     const toolCalls = /* @__PURE__ */ new Map();
     const toolOrder = [];
     const toolIds = /* @__PURE__ */ new Map();
@@ -43371,7 +43446,8 @@ var TraeAdapter = class extends LlmAdapter5 {
                     delta.tool_calls = ev.toolCalls;
                   }
                   if (Object.keys(delta).length > 0) {
-                    if (delta.content !== void 0) {
+                    const textDelta = delta.content === void 0 ? void 0 : proseSuppressor.feed(delta.content);
+                    if (textDelta !== void 0) {
                       let block = blocks.find((c) => c.kind === "text");
                       if (block === void 0) {
                         block = { index: nextIndex++, kind: "text", text: "" };
@@ -43379,11 +43455,11 @@ var TraeAdapter = class extends LlmAdapter5 {
                         yield { type: "block-start", index: block.index, blockType: "text" };
                       }
                       if (proseLoopGuard !== void 0) {
-                        if (proseLoopGuard.observe(delta.content)) proseLoopDetected = true;
+                        if (proseLoopGuard.observe(textDelta)) proseLoopDetected = true;
                       }
                       if (!proseLoopDetected) {
-                        block.text += delta.content;
-                        yield { type: "text-delta", index: block.index, text: delta.content };
+                        block.text += textDelta;
+                        yield { type: "text-delta", index: block.index, text: textDelta };
                       }
                     }
                     if (delta.reasoning_content !== void 0) {
@@ -43548,10 +43624,12 @@ var TraeAdapter = class extends LlmAdapter5 {
       textOut = stripBareThinkCloseTagIfEnabled(textOut);
       const truncated = proseLoopDetected && proseLoopGuard?.cutAt !== void 0 ? textOut.slice(0, proseLoopGuard.cutAt) : textOut;
       const cleaned = stripCourseLeakIfEnabled(truncated);
-      if (cleaned !== "") {
+      if (cleaned.trim() !== "") {
         blockCount += 1;
         emittedProse = cleaned;
         yield { type: "block-end", index: textBlock.index, block: { type: "text", text: cleaned } };
+      } else {
+        yield { type: "block-end", index: textBlock.index, block: { type: "text", text: "" } };
       }
     }
     const reasoningBlock = blocks.find((block) => block.kind === "reasoning");
@@ -45140,9 +45218,9 @@ var LoomyAdapter = class extends LlmAdapter7 {
       }
     }
     let credential = await this.options.resolveCredential(options.model);
+    let accountId = credential === void 0 ? void 0 : await this.options.accountPool?.findAccountIdByCredential(this.product.id, credential.access_token);
     if (credential === void 0 || isLoomyExpired(credential)) {
-      await this.options.refresh();
-      credential = await this.options.resolveCredential(options.model);
+      credential = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
       throw new LlmError10("loomy: no usable credential; log in first", "MISSING_CREDENTIAL");
@@ -45191,27 +45269,63 @@ var LoomyAdapter = class extends LlmAdapter7 {
         throw error;
       }
     };
-    let response = await send(credential.access_token);
-    if (response.status === 401 || response.status === 403) {
-      await this.options.refresh();
-      const refreshed = await this.options.resolveCredential(options.model);
-      if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError10("loomy: credential expired and refresh failed", "AUTH", { status: response.status });
+    const tried = /* @__PURE__ */ new Set();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (accountId) tried.add(accountId);
+      let emitted = false;
+      try {
+        let response = await send(credential.access_token);
+        if (response.status === 401 || response.status === 403) {
+          await response.body?.cancel();
+          credential = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
+          if (credential === void 0 || credential.access_token.length === 0) {
+            throw new LlmError10("loomy: credential expired and refresh failed", "AUTH", { status: response.status });
+          }
+          response = await send(credential.access_token);
+        }
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          let quota = response.status === 402;
+          try {
+            quota ||= isLoomyQuotaError(JSON.parse(errorText));
+          } catch {
+          }
+          throw new LlmError10(
+            `loomy: ${errorDetail4(errorText)}`,
+            quota ? "QUOTA_EXCEEDED" : httpErrorCode4(response.status),
+            { status: response.status }
+          );
+        }
+        for await (const chunk of consumeOpenAiSse(response, { signal: options.signal }, {
+          label: "loomy",
+          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs7(),
+          chunkTimeoutMs: resolveChunkTimeoutMs7(),
+          isQuotaError: isLoomyQuotaError,
+          ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
+        })) {
+          emitted = true;
+          yield chunk;
+        }
+        return;
+      } catch (error) {
+        if (options.signal?.aborted || !(error instanceof LlmError10) || error.code !== "QUOTA_EXCEEDED") throw error;
+        if (accountId) {
+          await this.options.accountPool?.updateModelRateLimit(accountId, options.model, nextUtc8DayStartMs());
+        }
+        if (emitted || attempt === 2 || this.options.nextAccount === void 0) throw error;
+        const next = await this.options.nextAccount(options.model, tried);
+        if (next === void 0 || tried.has(next.accountId)) throw error;
+        accountId = next.accountId;
+        credential = next.credential;
+        if (isLoomyExpired(credential)) credential = await this.options.refresh(accountId) ?? credential;
       }
-      response = await send(refreshed.access_token);
     }
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      throw new LlmError10(`loomy: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
-    }
-    yield* consumeOpenAiSse(response, { signal: options.signal }, {
-      label: "loomy",
-      firstTokenTimeoutMs: resolveFirstTokenTimeoutMs7(),
-      chunkTimeoutMs: resolveChunkTimeoutMs7(),
-      ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
-    });
   }
 };
+function isLoomyQuotaError(data) {
+  const error = typeof data.error === "object" && data.error !== null ? data.error : data;
+  return String(error.code ?? data.code) === "402" || /积分不足|余额不足|insufficient[_\s]+(?:points|balance|credits)/i.test(String(error.message ?? error.msg ?? ""));
+}
 function resolveFirstTokenTimeoutMs7() {
   const raw = Number(process.env.DSH_LOOMY_FIRST_TOKEN_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 12e4;
@@ -45411,6 +45525,12 @@ var RACCOON = {
 };
 
 // vendor/channel-pack/src/raccoon-adapter.ts
+function isQuotaError(data) {
+  const error = typeof data.error === "object" && data.error !== null ? data.error : data;
+  return String(error.code ?? data.code) === "402" || /积分不足|余额不足|insufficient[_\s]+(?:points|balance|credits)/i.test(
+    String(error.message ?? error.msg ?? "")
+  );
+}
 function raccoonThinkingExtraBody(effort) {
   if (effort === void 0 || effort.length === 0) return void 0;
   const type = effort === RACCOON_EFFORT_OFF ? "disabled" : "enabled";
@@ -45574,9 +45694,9 @@ var RaccoonAdapter = class extends LlmAdapter8 {
       }
     }
     let credential = await this.options.resolveCredential(options.model);
+    let accountId = credential === void 0 ? void 0 : await this.options.accountPool?.findAccountIdByCredential(this.product.id, credential.access_token);
     if (credential === void 0 || isRaccoonExpired(credential)) {
-      await this.options.refresh();
-      credential = await this.options.resolveCredential(options.model);
+      credential = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
       throw new LlmError11("raccoon: no usable credential; log in first", "MISSING_CREDENTIAL");
@@ -45638,26 +45758,60 @@ var RaccoonAdapter = class extends LlmAdapter8 {
         throw error;
       }
     };
-    let response = await send();
-    if (response.status === 401 || response.status === 403) {
-      await this.options.refresh();
-      const refreshed = await this.options.resolveCredential(options.model);
-      if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError11("raccoon: credential expired and refresh failed", "AUTH", { status: response.status });
+    const tried = /* @__PURE__ */ new Set();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (accountId) tried.add(accountId);
+      let emitted = false;
+      try {
+        let response = await send();
+        if (response.status === 401 || response.status === 403) {
+          await response.body?.cancel();
+          const refreshed = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
+          if (refreshed === void 0 || refreshed.access_token.length === 0) {
+            throw new LlmError11("raccoon: credential expired and refresh failed", "AUTH", { status: response.status });
+          }
+          credential = refreshed;
+          response = await send();
+        }
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          let quota = response.status === 402;
+          try {
+            quota ||= isQuotaError(JSON.parse(errorText));
+          } catch {
+          }
+          throw new LlmError11(
+            `raccoon: ${errorDetail4(errorText)}`,
+            quota ? "QUOTA_EXCEEDED" : httpErrorCode4(response.status),
+            { status: response.status }
+          );
+        }
+        for await (const chunk of consumeOpenAiSse(response, { signal: options.signal }, {
+          label: "raccoon",
+          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs8(),
+          chunkTimeoutMs: resolveChunkTimeoutMs8(),
+          isQuotaError,
+          ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
+        })) {
+          emitted = true;
+          yield chunk;
+        }
+        return;
+      } catch (error) {
+        if (options.signal?.aborted || !(error instanceof LlmError11) || error.code !== "QUOTA_EXCEEDED") throw error;
+        if (accountId) {
+          await this.options.accountPool?.updateModelRateLimit(accountId, options.model, nextUtc8DayStartMs());
+        }
+        if (emitted || attempt === 2 || this.options.nextAccount === void 0) throw error;
+        const next = await this.options.nextAccount(options.model, tried);
+        if (next === void 0 || tried.has(next.accountId)) throw error;
+        accountId = next.accountId;
+        credential = next.credential;
+        if (isRaccoonExpired(credential)) {
+          credential = await this.options.refresh(accountId) ?? credential;
+        }
       }
-      credential = refreshed;
-      response = await send();
     }
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      throw new LlmError11(`raccoon: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
-    }
-    yield* consumeOpenAiSse(response, { signal: options.signal }, {
-      label: "raccoon",
-      firstTokenTimeoutMs: resolveFirstTokenTimeoutMs8(),
-      chunkTimeoutMs: resolveChunkTimeoutMs8(),
-      ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
-    });
   }
 };
 function resolveFirstTokenTimeoutMs8() {
@@ -60802,8 +60956,9 @@ function translateGeminiRequest(options) {
     generationConfig: buildGenerationConfig(options.spec, options.maxTokens, options.temperature),
     sessionId
   };
-  if (options.system !== void 0 && options.system !== "") {
-    request2.systemInstruction = { role: "system", parts: [{ text: options.system }] };
+  const systemText = [...new Set([options.system, collectHarnessSystem(normalized)].filter((text) => typeof text === "string" && text !== ""))].join("\n\n");
+  if (systemText !== "") {
+    request2.systemInstruction = { role: "system", parts: [{ text: systemText }] };
   }
   if (options.tools !== void 0 && options.tools.length > 0) {
     request2.tools = [{
@@ -61900,7 +62055,9 @@ var OPENCODE = {
   // ⚠️ 必须与客户端 `PROVIDERS` 里的 label 逐字一致（rail 宽度算式依赖它，
   // 且 `opencode-client-panel.spec.ts` 有跨文件一致性断言）。
   displayName: "OpenCode",
-  baseUrl: "https://opencode.ai/zen",
+  // 免费模型的新入口统一挂在 /inference/v1；/zen/v1 对匿名免费模型
+  // 会返回 FreeTierError。这里保留 v1 后缀拆分，便于复用下方路径字段。
+  baseUrl: "https://opencode.ai/inference",
   chatPath: "/v1/chat/completions",
   modelsPath: "/v1/models",
   // ⚠️ 与本仓库其余 provider 的流式超时常量同档（保守值）。
@@ -61909,8 +62066,11 @@ var OPENCODE = {
   // ⚠️ 匿名凭证是**字面量** `public`：opencode 官方 CLI 在没有 key 时自己就用它
   // （其 provider.ts 的 opencode 分支：`options: ok ? {} : { apiKey: 'public' }`）。
   anonymousKey: "public",
-  // ⚠️ 兜底 UA 版本号。接线层会用真机 `opencode --version` 的结果覆盖它。
-  defaultUserAgent: "opencode/1.18.22",
+  // ⚠️ 兜底 UA。**v2 形状**（`opencode/<channel>/<version>/<client>`，major ≥ 2）：
+  // 旧的 `opencode/1.18.22` 自 2026-10-14 起被上游按名字拒掉（403 FreeTierError）。
+  // 接线层会用真机 `opencode --version` 的结果改写成同形状（`opencode.ts` 的
+  // `opencodeUserAgentForVersion`）。
+  defaultUserAgent: "opencode/latest/2.0.26/cli",
   /**
    * 模型能力元数据源（**远端**，能力的主来源）。
    *
@@ -61932,6 +62092,8 @@ var OPENCODE_FALLBACK_MODELS = [
   { id: "longcat-2.5-preview-free", name: "LongCat 2.5 Preview Free", isFree: true, contextWindow: 262144 },
   { id: "mimo-v2.6-flash-free", name: "MiMo-V2.6-Flash Free", isFree: true, contextWindow: 262144 },
   { id: "mimo-v2.5-free", name: "MiMo-V2.5 Free", isFree: true, contextWindow: 262144 },
+  { id: "deepseek-v4.1-flash-free", name: "DeepSeek V4.1 Flash Free", isFree: true, contextWindow: 2e5 },
+  { id: "glm-5.3-flash-free", name: "GLM 5.3 Flash Free", isFree: true, contextWindow: 2e5 },
   // ⚠️ 这两个官方 docs 标注走 `/v1/models/{id}`（Gemini 风格），但**实测
   // chat 端点也通** ⇒ 按 chat 处理。**以实测为准，不以 docs 为准。**
   { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", isFree: true, contextWindow: 262144 },
@@ -62011,26 +62173,42 @@ function deriveProjectId(identity, generation) {
   return createHash6("sha1").update(`git-remote:opencode/${inner}`).digest("hex");
 }
 function deriveSessionId2() {
-  const time = Buffer.alloc(6);
-  let now = BigInt(Date.now());
-  for (let i = 0; i < 6; i++) {
-    time[i] = Number(now & 0xffn);
-    now >>= 8n;
+  const timestamp = Date.now();
+  if (timestamp !== lastSessionStamp) {
+    lastSessionStamp = timestamp;
+    sessionSequence = 0;
   }
-  return `ses_${time.toString("hex")}${randomBase62(SESSION_RANDOM_LENGTH)}`;
+  sessionSequence += 1;
+  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(sessionSequence));
+  let hex = "";
+  for (let i = 0; i < 6; i += 1) {
+    hex += Number(value >> BigInt(40 - 8 * i) & 0xffn).toString(16).padStart(2, "0");
+  }
+  return `ses_${hex}${randomBase62(SESSION_RANDOM_LENGTH)}`;
 }
-function deriveRequestId() {
-  return `req_${randomBytes8(16).toString("hex")}`;
-}
+var lastSessionStamp = 0;
+var sessionSequence = 0;
+var OPENCODE_V2_UA = /^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i;
 function opencodeUserAgent(override) {
   const value = override?.trim();
-  return value !== void 0 && value.length > 0 ? value : OPENCODE.defaultUserAgent;
+  if (value !== void 0 && value.length > 0 && OPENCODE_V2_UA.test(value)) return value;
+  return OPENCODE.defaultUserAgent;
 }
-function opencodeHeaders(fingerprint, sessionId, requestId, userAgent) {
+function opencodeUserAgentForVersion(version) {
+  const value = version?.trim();
+  if (value === void 0 || !/^\d+\.\d+\.\d+$/.test(value)) return void 0;
+  const [major] = value.split(".");
+  if (Number(major) < 2) return void 0;
+  return `opencode/latest/${value}/cli`;
+}
+function opencodeHeaders(fingerprint, sessionId, userAgent) {
   return {
     "x-opencode-project": fingerprint.projectId,
     "x-opencode-session": sessionId,
-    "x-opencode-request": requestId,
+    // v2：这四个头同值，缺一即 403。
+    "x-opencode-session-id": sessionId,
+    "x-session-affinity": sessionId,
+    "x-session-id": sessionId,
     "x-opencode-client": "cli",
     "user-agent": userAgent
   };
@@ -67342,7 +67520,10 @@ function createOpenAiGateway(options) {
       if (server === void 0) return;
       const current = server;
       server = void 0;
-      await new Promise((resolve2) => current.close(() => resolve2()));
+      await new Promise((resolve2) => {
+        current.close(() => resolve2());
+        current.closeAllConnections?.();
+      });
       logger2.info("[openai-gateway] \u5DF2\u5173\u95ED");
     },
     address() {
@@ -67459,7 +67640,7 @@ function createLoopResumeController(options) {
         return false;
       }
       if (agent.status !== "idle") return false;
-      if (agent.inbox.hasPending) return false;
+      if (agent.inbox.hasPending === true || (agent.inbox.nextTurn?.length ?? 0) > 0 || (agent.inbox.nextStep?.length ?? 0) > 0) return false;
       let injectedId;
       try {
         const message2 = createUserMessage2({
@@ -67488,6 +67669,10 @@ function createLoopResumeController(options) {
       state.attempts = 0;
       state.pending = false;
     },
+    cancelPending(agent) {
+      const state = states.get(agent.id);
+      if (state !== void 0) state.pending = false;
+    },
     forget(agent) {
       states.delete(agent.id);
     },
@@ -67505,6 +67690,10 @@ function installLoopResume(ctx) {
     return;
   }
   ctx.inject(["agents"], (scope) => {
+    let active = true;
+    const scheduled = /* @__PURE__ */ new Map();
+    const live = /* @__PURE__ */ new Map();
+    const disposed = /* @__PURE__ */ new WeakSet();
     const controller = createLoopResumeController({
       policy,
       log: ctx.logger,
@@ -67517,17 +67706,65 @@ function installLoopResume(ctx) {
         });
       }
     });
+    const cancelPending = (agent) => {
+      scheduled.delete(agent);
+      if (live.get(agent.id) === agent) controller.cancelPending(agent);
+    };
+    scope.effect(() => () => {
+      active = false;
+      scheduled.clear();
+      for (const agent of live.values()) controller.forget(agent);
+      live.clear();
+    });
     scope.on("agent/error", ({ agent, error }) => {
+      if (!active || disposed.has(agent)) return;
+      const previous = live.get(agent.id);
+      if (previous !== void 0 && previous !== agent) {
+        cancelPending(previous);
+        controller.forget(previous);
+      }
+      live.set(agent.id, agent);
+      scheduled.delete(agent);
       controller.observeFailure(agent, error);
     });
     scope.on("agent/status", ({ agent, status }) => {
-      if (status === "idle") controller.observeIdle(agent);
+      if (!active || disposed.has(agent)) return;
+      if (status !== "idle") {
+        cancelPending(agent);
+        return;
+      }
+      if (live.get(agent.id) !== agent || scheduled.has(agent)) return;
+      const token = /* @__PURE__ */ Symbol();
+      scheduled.set(agent, token);
+      queueMicrotask(() => {
+        if (!active || ctx.fiber?.uid === null || scope.fiber?.uid === null || disposed.has(agent) || scheduled.get(agent) !== token) return;
+        scheduled.delete(agent);
+        if (live.get(agent.id) !== agent) return;
+        controller.observeIdle(agent);
+      });
     });
     scope.on("agent/inbox/inserted", ({ agent, message: message2 }) => {
+      if (!active || disposed.has(agent) || live.get(agent.id) !== agent) return;
+      scheduled.delete(agent);
       controller.observeInput(agent, message2);
     });
+    scope.on("agent/inbox/discarded", ({ agent }) => {
+      cancelPending(agent);
+    });
+    scope.on("session/event", (session, event) => {
+      const agent = live.get(session.id);
+      if (agent === void 0 || agent.session !== void 0 && agent.session !== session) return;
+      if (event.type === "turn/start" || event.type === "agent/inbox/spliced" && event.data.outcome === "canceled" || event.type === "turn/end" && !(event.data.reason.kind === "error" && event.data.reason.error.code === REASONING_LOOP_CODE)) {
+        cancelPending(agent);
+      }
+    });
     scope.on("agent/disposed", ({ agent }) => {
-      controller.forget(agent);
+      disposed.add(agent);
+      cancelPending(agent);
+      if (live.get(agent.id) === agent) {
+        live.delete(agent.id);
+        controller.forget(agent);
+      }
     });
   });
 }
@@ -68475,7 +68712,8 @@ function buildMinimaxMessagesPayload(options) {
     messages: serializeMinimaxMessages(options.messages, options.images)
   };
   if (options.maxTokens !== void 0) payload.max_tokens = options.maxTokens;
-  if (options.system !== void 0 && options.system !== "") payload.system = options.system;
+  const systemText = [...new Set([options.system, collectHarnessSystem(options.messages)].filter((text) => typeof text === "string" && text !== ""))].join("\n\n");
+  if (systemText !== "") payload.system = systemText;
   if (options.temperature !== void 0) payload.temperature = options.temperature;
   if (options.stop !== void 0 && options.stop.length > 0) payload.stop_sequences = [...options.stop];
   if (options.tools !== void 0 && options.tools.length > 0) {
@@ -69970,16 +70208,129 @@ function createGeminiSigStore(ctx) {
 import { LlmAdapter as LlmAdapter12, LlmError as LlmError19, ReasoningEffortId as ReasoningEffortId15 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/opencode-messages.ts
-var FREE_LANE_GATE_TOOLS = ["bash", "read"];
+var FREE_LANE_GATE_TOOLS = ["read", "shell"];
+var FREE_LANE_GATE_TOOL_SET = new Set(FREE_LANE_GATE_TOOLS);
+var GATE_TOOL_DEFINITIONS = Object.freeze({
+  read: {
+    description: "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File or directory to read" },
+        offset: { type: "integer", minimum: 0, description: "The line or directory entry to start reading from (1-based)" },
+        limit: { type: "integer", minimum: 0, description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)" }
+      },
+      required: ["path"],
+      additionalProperties: false
+    }
+  },
+  shell: {
+    description: "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command string to execute" },
+        workdir: { type: "string", description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead." },
+        timeout: { type: "integer", minimum: 0, description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
+        background: { type: "boolean", description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion." }
+      },
+      required: ["command"],
+      additionalProperties: false
+    }
+  }
+});
 function gateTool(name2) {
+  const definition = GATE_TOOL_DEFINITIONS[name2];
   return {
     type: "function",
     function: {
       name: name2,
-      description: "Reserved for the host runtime; do not call it.",
-      parameters: { type: "object", properties: {} }
+      description: definition?.description ?? "",
+      parameters: definition?.parameters ?? { type: "object", properties: {} }
     }
   };
+}
+function wireToolName(tool) {
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) return "";
+  const row = tool;
+  const name2 = typeof row.name === "string" && row.name.trim() !== "" ? row.name : row.function?.name;
+  return typeof name2 === "string" ? name2.trim() : "";
+}
+function isOfficialGateTool(tool, name2) {
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) return false;
+  const row = tool;
+  const wrapper = row.function !== null && typeof row.function === "object" ? row.function : row;
+  const definition = GATE_TOOL_DEFINITIONS[name2];
+  if (definition === void 0) return false;
+  return wrapper.description === definition.description && JSON.stringify(wrapper.parameters) === JSON.stringify(definition.parameters);
+}
+function withWireToolName(tool, name2) {
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) return tool;
+  const row = tool;
+  if (row.function !== null && typeof row.function === "object" && !Array.isArray(row.function)) {
+    return { ...row, function: { ...row.function, name: name2 } };
+  }
+  return { ...row, name: name2 };
+}
+function noteInjectedGateTools(payload, names) {
+  const list = names.map((name2) => `\`${name2}\``).join(" or ");
+  const note = names.length > 1 ? `Do not call the ${list} tools; they are placeholders that do nothing. Use the other tools you have been given instead.` : `Do not call the ${list} tool; it is a placeholder that does nothing. Use the other tools you have been given instead.`;
+  if (typeof payload.system === "string" && payload.system !== "") {
+    payload.system = `${payload.system}
+
+${note}`;
+    return;
+  }
+  if (typeof payload.system === "string") {
+    payload.system = note;
+    return;
+  }
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  const first = messages[0];
+  if (first?.role === "system" && typeof first.content === "string") {
+    payload.messages = [{ ...first, content: `${first.content}
+
+${note}` }, ...messages.slice(1)];
+    return;
+  }
+  payload.messages = [{ role: "system", content: note }, ...messages];
+}
+function retargetGateToolChoice(payload, toolNameMap) {
+  if (toolNameMap === void 0 || toolNameMap.size === 0) return;
+  const choice = payload.tool_choice;
+  if (choice === null || typeof choice !== "object" || Array.isArray(choice)) return;
+  const aliases = new Map([...toolNameMap].map(([alias, original]) => [original, alias]));
+  const row = choice;
+  if (typeof row.name === "string") {
+    const alias = aliases.get(row.name.trim());
+    if (alias !== void 0) payload.tool_choice = { ...row, name: alias };
+    return;
+  }
+  const fn = row.function;
+  if (fn !== null && typeof fn === "object" && typeof fn.name === "string") {
+    const alias = aliases.get(fn.name.trim());
+    if (alias !== void 0) payload.tool_choice = { ...row, function: { ...fn, name: alias } };
+  }
+}
+function aliasHistoryToolCalls(payload, toolNameMap) {
+  if (toolNameMap === void 0 || toolNameMap.size === 0) return;
+  const aliases = new Map([...toolNameMap].map(([alias, original]) => [original, alias]));
+  if (!Array.isArray(payload.messages)) return;
+  payload.messages = payload.messages.map((message2) => {
+    if (message2 === null || typeof message2 !== "object" || Array.isArray(message2)) return message2;
+    const row = message2;
+    if (!Array.isArray(row.tool_calls)) return message2;
+    return {
+      ...row,
+      tool_calls: row.tool_calls.map((call) => {
+        if (call === null || typeof call !== "object" || Array.isArray(call)) return call;
+        const entry = call;
+        const name2 = entry.function?.name;
+        if (typeof name2 !== "string" || !aliases.has(name2)) return call;
+        return { ...entry, function: { ...entry.function, name: aliases.get(name2) } };
+      })
+    };
+  });
 }
 function buildOpencodeTools(tools) {
   if (tools === void 0 || tools.length === 0) return [];
@@ -69992,24 +70343,64 @@ function buildOpencodeTools(tools) {
     }
   }));
 }
-function ensureFreeLaneShape(payload) {
+function ensureFreeLaneShape(payload, toolNameMap) {
   if (!Array.isArray(payload.messages)) return payload;
   const tools = Array.isArray(payload.tools) ? payload.tools : [];
-  const names = /* @__PURE__ */ new Set();
+  const taken = /* @__PURE__ */ new Set();
   for (const tool of tools) {
-    if (typeof tool !== "object" || tool === null) continue;
-    const fn = tool.function;
-    if (typeof fn?.name === "string") names.add(fn.name);
+    const name2 = wireToolName(tool);
+    if (name2 !== "") taken.add(name2);
   }
-  const missing = FREE_LANE_GATE_TOOLS.filter((name2) => !names.has(name2));
-  if (missing.length === 0) return payload;
-  return {
-    ...payload,
-    tools: [...tools, ...missing.map(gateTool)],
-    ...tools.length === 0 ? { tool_choice: "none" } : {}
-  };
+  const seen = /* @__PURE__ */ new Set();
+  const present = /* @__PURE__ */ new Set();
+  const next = [];
+  let changed = false;
+  for (const tool of tools) {
+    const name2 = wireToolName(tool);
+    if (!FREE_LANE_GATE_TOOL_SET.has(name2)) {
+      next.push(tool);
+      continue;
+    }
+    if (seen.has(name2)) {
+      changed = true;
+      continue;
+    }
+    seen.add(name2);
+    if (isOfficialGateTool(tool, name2)) {
+      next.push(tool);
+      present.add(name2);
+      continue;
+    }
+    let alias = `${name2}_client`;
+    for (let i = 2; taken.has(alias); i += 1) alias = `${name2}_client${i}`;
+    taken.add(alias);
+    toolNameMap?.set(alias, name2);
+    next.push(withWireToolName(tool, alias));
+    changed = true;
+  }
+  const injected = [];
+  for (const name2 of FREE_LANE_GATE_TOOLS) {
+    if (present.has(name2)) continue;
+    next.push(gateTool(name2));
+    injected.push(name2);
+    changed = true;
+  }
+  if (!changed) {
+    retargetGateToolChoice(payload, toolNameMap);
+    aliasHistoryToolCalls(payload, toolNameMap);
+    return payload;
+  }
+  const shaped = { ...payload, tools: next };
+  retargetGateToolChoice(shaped, toolNameMap);
+  aliasHistoryToolCalls(shaped, toolNameMap);
+  if (injected.length > 0) noteInjectedGateTools(shaped, injected);
+  if (shaped.tool_choice === "none" || shaped.tool_choice !== null && typeof shaped.tool_choice === "object" && shaped.tool_choice.type === "none") {
+    delete shaped.tool_choice;
+  }
+  return shaped;
 }
-function buildOpencodePayload(input) {
+function buildOpencodePayloadWithToolMap(input) {
+  const toolNameMap = /* @__PURE__ */ new Map();
   const base = {
     model: input.model,
     messages: input.messages,
@@ -70028,11 +70419,12 @@ function buildOpencodePayload(input) {
     // `ling-3.0-flash-fin-free` 传非法值时，错误信息变成 `[400] reasoning_…`
     // （与基线的 `Endpoint is unavailable` 不同），说明 Zen 侧确实解析并校验它。
     //
-    // ⚠️ `none`（关闭思考）照发：models.dev 的 `toggle` 形态就产出这一档，
-    // 上游靠它区分「关」与「最低档开」。
+    // ⚠️ 只发**模型声明过的**档位：上游对非法值是 400，而档位表来自 models.dev
+    // 的 `reasoning_options`（官方 CLI 的同一份数据）。上游对越界值的兜底由
+    // 适配器的 `resolveOpencodeEffort()` 负责（就近翻译 / 丢弃）。
     ...typeof input.reasoningEffort === "string" && input.reasoningEffort.length > 0 ? { reasoning_effort: input.reasoningEffort } : {}
   };
-  return ensureFreeLaneShape(base);
+  return { payload: ensureFreeLaneShape(base, toolNameMap), toolNameMap };
 }
 
 // vendor/channel-pack/src/opencode-capability.ts
@@ -70071,8 +70463,6 @@ function normalizeEfforts(entry) {
       for (const v of option.values) {
         if (typeof v === "string" && v.length > 0 && !out.includes(v)) out.push(v);
       }
-    } else if (option.type === "toggle" && !out.includes("none")) {
-      out.push("none", "low");
     }
   }
   return out;
@@ -70114,7 +70504,7 @@ async function ensureDiskLoaded() {
   try {
     const raw = await readFile(cacheFilePath(), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed?.version === 2 && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+    if (parsed?.version === 3 && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
       memory = parsed.entries;
       cacheFileAt = typeof parsed.at === "number" ? parsed.at : 0;
     }
@@ -70127,7 +70517,7 @@ function loadDiskCacheSync() {
   try {
     const raw = readFileSync12(cacheFilePath(), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed?.version === 2 && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+    if (parsed?.version === 3 && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
       memory = parsed.entries;
       cacheFileAt = typeof parsed.at === "number" ? parsed.at : 0;
     }
@@ -70138,7 +70528,7 @@ async function writeDiskCache(entries) {
   try {
     const path2 = cacheFilePath();
     await mkdir(join12(path2, ".."), { recursive: true });
-    const payload = { version: 2, at: Date.now(), entries };
+    const payload = { version: 3, at: Date.now(), entries };
     await writeFile(path2, JSON.stringify(payload), "utf8");
   } catch {
   }
@@ -70254,6 +70644,16 @@ function opencodeRetryAfterMs(kind, retryAfterMs, attempt) {
   if (kind === "quota") return 24 * 60 * 6e4;
   if (kind === "auth") return RATE_LIMIT_BASE_MS;
   return Math.min(RATE_LIMIT_BASE_MS * 2 ** Math.max(0, attempt - 1), RETRY_AFTER_CAP_MS);
+}
+function resolveOpencodeEffort(model, requested, capabilities) {
+  if (typeof requested !== "string" || requested.length === 0) return { outcome: "passthrough" };
+  const capability = capabilities.find((c) => c.id === model);
+  if (capability === void 0) return { effort: requested, outcome: "passthrough" };
+  if (capability.efforts.length === 0) return { outcome: "dropped" };
+  const translated = translateReasoningEffort(requested, capability.efforts);
+  if (translated.kind === "exact") return { effort: translated.effort, outcome: "exact" };
+  if (translated.kind === "mapped") return { effort: translated.effort, outcome: "mapped" };
+  return { outcome: "dropped" };
 }
 var OpencodeAdapter = class extends LlmAdapter12 {
   constructor(options) {
@@ -70450,19 +70850,27 @@ var OpencodeAdapter = class extends LlmAdapter12 {
   async *streamVia(slot2, options) {
     const imageUrls = await this.resolveImageUrls(options.model, options.messages);
     const messages = serializeMessages4(options.messages, imageUrls);
-    const payload = buildOpencodePayload({
+    const effort = resolveOpencodeEffort(
+      options.model,
+      options.reasoningEffort === void 0 ? void 0 : String(options.reasoningEffort),
+      getOpencodeCapabilitiesSync()
+    );
+    if (effort.outcome === "mapped" || effort.outcome === "dropped") {
+      this.options.warn?.(
+        `opencode: \u6A21\u578B "${options.model}" \u4E0D\u63A5\u53D7\u6863\u4F4D "${String(options.reasoningEffort)}"${effort.outcome === "mapped" ? `\uFF0C\u5C31\u8FD1\u6539\u7528 "${effort.effort}"` : "\uFF0C\u672C\u8F6E\u4E0D\u4E0B\u53D1\u8BE5\u53C2\u6570"}`
+      );
+    }
+    const { payload, toolNameMap } = buildOpencodePayloadWithToolMap({
       model: options.model,
       messages,
       ...options.system !== void 0 && options.system.length > 0 ? { system: options.system } : {},
       ...options.tools !== void 0 ? { tools: options.tools } : {},
       ...options.temperature !== void 0 ? { temperature: options.temperature } : {},
       ...options.maxTokens !== void 0 ? { maxTokens: options.maxTokens } : {},
-      // ⚠️ 思考档位（issue IKJJ0V）：`ReasoningEffortId` 是品牌类型，转普通字符串。
-      // `none`（关闭思考）也照发 —— models.dev 的 toggle 形态就产出这一档。
-      ...options.reasoningEffort !== void 0 ? { reasoningEffort: String(options.reasoningEffort) } : {}
+      ...effort.effort !== void 0 ? { reasoningEffort: effort.effort } : {}
     });
     const headers = {
-      ...opencodeHeaders(slot2.fingerprint, sessionIdOf(options), deriveRequestId(), opencodeUserAgent(slot2.userAgent)),
+      ...opencodeHeaders(slot2.fingerprint, sessionIdOf(options), opencodeUserAgent(slot2.userAgent)),
       "content-type": "application/json",
       accept: "text/event-stream",
       authorization: `Bearer ${slot2.apiKey}`
@@ -70495,7 +70903,8 @@ var OpencodeAdapter = class extends LlmAdapter12 {
       label: "opencode",
       firstTokenTimeoutMs: OPENCODE.chatHeaderTimeoutMs,
       chunkTimeoutMs: OPENCODE.chatChunkTimeoutMs,
-      ...options.maxTokens !== void 0 ? { maxTokens: options.maxTokens } : {}
+      ...options.maxTokens !== void 0 ? { maxTokens: options.maxTokens } : {},
+      restoreToolName: (name2) => toolNameMap.get(name2) ?? name2
     });
   }
 };
@@ -70534,7 +70943,7 @@ function lazyOpencodeUserAgent() {
       });
     }).then((out) => {
       const version = out.match(/(\d+\.\d+\.\d+)/)?.[1];
-      return version === void 0 ? OPENCODE.defaultUserAgent : `opencode/${version}`;
+      return opencodeUserAgentForVersion(version) ?? OPENCODE.defaultUserAgent;
     }).catch(() => OPENCODE.defaultUserAgent);
     let cached2 = OPENCODE.defaultUserAgent;
     void pending.then((ua) => {
@@ -70849,6 +71258,7 @@ function apply(ctx, config = {}) {
         return available2.credential;
       }
       activeQoderAccountId.set(QODER.id, void 0);
+      throwIfAllAccountsRateLimited(QODER, modelId);
       const resolved = await ctx.credentials.resolve(credentialRef16(QODER.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
@@ -70884,6 +71294,7 @@ function apply(ctx, config = {}) {
         return available2.credential;
       }
       activeQoderAccountId.set(QODER_CN.id, void 0);
+      throwIfAllAccountsRateLimited(QODER_CN, modelId);
       const resolved = await ctx.credentials.resolve(credentialRef16(QODER_CN.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
@@ -71024,6 +71435,7 @@ function apply(ctx, config = {}) {
           );
         }
       }
+      throwIfAllAccountsRateLimited(LOOMY, modelId);
       const resolved = await ctx.credentials.resolve(credentialRef16(LOOMY.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
@@ -71032,10 +71444,23 @@ function apply(ctx, config = {}) {
         return void 0;
       }
     },
-    refresh: async () => {
-      const available2 = await pool.getAvailableAccount(LOOMY.id, "");
-      if (available2) await loomy.refreshAccountCredential(available2.entry.credentialRef, pool, available2.entry.id);
+    refresh: async (accountId) => {
+      const entry = accountId === void 0 ? void 0 : pool.listAccountsByProvider(LOOMY.id).find((account) => account.id === accountId);
+      if (accountId !== void 0 && entry === void 0) throw new Error("loomy: account no longer exists");
+      if (entry) await loomy.refreshAccountCredential(entry.credentialRef, pool, entry.id);
       else await loomy.refresh();
+      const resolved = await ctx.credentials.resolve(credentialRef16(entry?.credentialRef ?? LOOMY.defaultCredentialRef));
+      if (!resolved) throw new Error("loomy: credential no longer exists");
+      return JSON.parse(resolved.value);
+    },
+    nextAccount: async (modelId, tried) => {
+      const candidates = pool.listAccountsByProvider(LOOMY.id).filter((account) => account.enabled && !tried.has(account.id)).filter((account) => !account.modelRateLimits?.[modelId] || Date.now() >= account.modelRateLimits[modelId]).map((account) => ({ id: account.id, credentialRef: account.credentialRef }));
+      const picked = await loomyBalanceSelector.select(candidates, { allowPermanent: !pool.permanentLocked(LOOMY.id) });
+      if (!picked.ok) return void 0;
+      const credential = await resolveLoomyCredentialByRef(picked.account.credentialRef);
+      if (!credential) return void 0;
+      reportLedgerAccount(LOOMY.id, picked.account.id);
+      return { accountId: picked.account.id, credential };
     },
     // 远端模型目录：GET /api/v1/models。
     // ⚠️ 必须用 **token 头**（业务端点），不是 Bearer —— 带错会得到
@@ -71131,19 +71556,48 @@ function apply(ctx, config = {}) {
         reportLedgerAccount(RACCOON.id, picked.id);
         return picked.credential;
       }
-      return void 0;
-    },
-    refresh: async () => {
-      const picked = await pickRaccoonAccount("", false);
-      if (picked && picked.pool) {
-        await raccoon.refreshAccountCredential(
-          picked.credentialRef,
-          pool,
-          picked.id
-        );
-      } else {
-        await raccoon.refresh();
+      throwIfAllAccountsRateLimited(RACCOON, modelId);
+      const resolved = await ctx.credentials.resolve(credentialRef16(RACCOON.defaultCredentialRef));
+      if (!resolved) return void 0;
+      try {
+        return JSON.parse(resolved.value);
+      } catch {
+        return void 0;
       }
+    },
+    refresh: async (accountId) => {
+      if (accountId === void 0) {
+        const picked = await pickRaccoonAccount("", false);
+        if (picked && picked.pool) {
+          await raccoon.refreshAccountCredential(picked.credentialRef, pool, picked.id);
+          return picked.credential;
+        }
+        await raccoon.refresh();
+        return void 0;
+      }
+      const entry = pool.listAccountsByProvider(RACCOON.id).find((account) => account.id === accountId);
+      if (entry === void 0) throw new Error("raccoon: account no longer exists");
+      await raccoon.refreshAccountCredential(entry.credentialRef, pool, entry.id);
+      const resolved = await ctx.credentials.resolve(credentialRef16(entry.credentialRef));
+      if (!resolved) throw new Error("raccoon: credential no longer exists");
+      return JSON.parse(resolved.value);
+    },
+    nextAccount: async (modelId, tried) => {
+      const candidates = pool.listAccountsByProvider(RACCOON.id).filter((account) => account.enabled && !tried.has(account.id)).filter((account) => {
+        if (modelId.length === 0) return true;
+        if (!account.modelRateLimits) return true;
+        const resetAt = account.modelRateLimits[modelId];
+        return resetAt === void 0 || resetAt === 0 || Date.now() >= resetAt;
+      }).map((account) => ({ id: account.id, credentialRef: account.credentialRef }));
+      if (candidates.length === 0) return void 0;
+      const locked = pool.permanentLocked(RACCOON.id);
+      const picked = await raccoonBalanceSelector.select(candidates, { locked });
+      if (!picked.ok) return void 0;
+      const credential = await resolveRaccoonCredentialByRef(picked.account.credentialRef);
+      if (credential === void 0) return void 0;
+      raccoonBalanceSelector.invalidate(picked.account.id);
+      reportLedgerAccount(RACCOON.id, picked.account.id);
+      return { accountId: picked.account.id, credential };
     },
     // 远端模型目录：委托给 RaccoonAuth.fetchModels（它负责 Bearer 头与
     // visible 过滤 + raccoonDisplayName 生成含倍率的展示名）。
