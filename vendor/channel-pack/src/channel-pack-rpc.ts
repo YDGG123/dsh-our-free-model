@@ -426,6 +426,20 @@ export const PERMANENT_LOCK_PROVIDERS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * 支持「长期积分优先账号」的 provider 白名单。
+ *
+ * 与 {@link PERMANENT_LOCK_PROVIDERS} 的区别：那个白名单里的四家都有
+ * 「锁定」语义（选号层共用一套判据）；而「优先账号」需要**各选号器**
+ * 显式消费（`RaccoonRankOptions.longTermFirst`）。当前只有 Raccoon 的
+ * 选号器接线了；给 Loomy / 两个 buddy 补上 `permanentFirst` 之类的选项
+ * 后再把它们加进来 —— 在此之前登记它们会让面板出现「点了没效果」的
+ * 无效开关。
+ */
+export const LONG_TERM_PREFERRED_PROVIDERS: ReadonlySet<string> = new Set([
+  RACCOON.id,
+])
+
+/**
  * 汇总一次批量领取的结果。
  * 纯函数，便于单测；inactive（无资格/活动结束）与 failed 分开计数，
  * 因为前者是正常的业务状态、后者才是需要用户关注的问题。
@@ -2381,6 +2395,54 @@ function registerChannelPackEndpoints(
           ctx.logger?.warn?.(`[channel-pack] 广播 llm/adapters-updated 失败（不影响已保存的开关）: ${String(error)}`)
         }
         return { ok: true, value: lockResponse() }
+      }
+
+      /**
+       * 「长期积分优先账号」：每日额度用尽后，先烧指定账号的长期积分，
+       * 其余账号按手动顺序。与 `credits.permanentLock` 同款读写约定：
+       * 载荷省略 `accountId` 时**只读**（面板初始化回显）。
+       *
+       * ⚠️ 写入会改变**选号结果**（长期档的烧钱顺序），故与锁定开关一样
+       * 广播 `llm/adapters-updated`；通知失败不反噬已落盘的设置。
+       *
+       * `accountId: null` 清除（回到手动顺序）；非空字符串必须是该
+       * provider 池内真实存在的账号 —— 指向不存在账号的偏好只会让面板
+       * 显示一个幽灵状态。
+       */
+      case 'credits.longTermPreferred': {
+        const req = payload as { provider?: unknown, accountId?: unknown }
+        const provider = typeof req.provider === 'string' ? req.provider.trim() : ''
+        if (!LONG_TERM_PREFERRED_PROVIDERS.has(provider)) {
+          return {
+            ok: false,
+            error: { code: 'bad-request', message: `该 provider 不支持长期积分优先账号：${provider || '(空)'}` },
+          }
+        }
+        const preferredResponse = () => ({
+          provider,
+          accountId: pool.longTermPreferred(provider) ?? null,
+        })
+        if (req.accountId === undefined) {
+          return { ok: true, value: preferredResponse() }
+        }
+        if (req.accountId === null) {
+          await pool.setLongTermPreferred(provider, undefined)
+        } else {
+          if (typeof req.accountId !== 'string' || req.accountId.trim().length === 0) {
+            return { ok: false, error: { code: 'bad-request', message: 'accountId 必须是非空字符串或 null' } }
+          }
+          const accountId = req.accountId.trim()
+          if (!pool.listAccountsByProvider(provider).some(account => account.id === accountId)) {
+            return { ok: false, error: { code: 'bad-request', message: `账号不存在：${accountId}` } }
+          }
+          await pool.setLongTermPreferred(provider, accountId)
+        }
+        try {
+          ctx.emit('llm/adapters-updated')
+        } catch (error) {
+          ctx.logger?.warn?.(`[channel-pack] 广播 llm/adapters-updated 失败（不影响已保存的设置）: ${String(error)}`)
+        }
+        return { ok: true, value: preferredResponse() }
       }
 
       /**

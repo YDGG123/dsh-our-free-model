@@ -536,6 +536,9 @@ window.__ModuleLoader__.load({
         'chan.lock.on': '长期积分已锁定',
         'chan.lock.hint': '锁定后只消耗每日积分；每日用尽时请求会明确报错，不再烧长期积分',
         'chan.lock.failed': '锁定开关切换失败：{reason}',
+        'chan.preferred.label': '长期优先',
+        'chan.preferred.hint': '每日积分用尽后，先消耗此账号的长期积分；再次点击恢复手动顺序',
+        'chan.preferred.failed': '设置长期优先失败：{reason}',
         'chan.claim.failed': '领取失败：{reason}',
         'chan.auto.title': '每日自动签到',
         'chan.auto.running': '签到进行中…',
@@ -1225,6 +1228,9 @@ window.__ModuleLoader__.load({
         'chan.lock.on': 'Long-term credits locked',
         'chan.lock.hint': 'While locked, only daily credits are spent; requests fail loudly once daily credits run out instead of burning long-term credits',
         'chan.lock.failed': 'Failed to toggle the lock: {reason}',
+        'chan.preferred.label': 'Long-term first',
+        'chan.preferred.hint': 'Once daily credits run out, the preferred account\'s long-term credits burn first; click again to restore manual order',
+        'chan.preferred.failed': 'Failed to set the preferred account: {reason}',
         'chan.claim.failed': 'Claim failed: {reason}',
         'chan.auto.title': 'Daily auto check-in',
         'chan.auto.running': 'Check-in running…',
@@ -1535,6 +1541,7 @@ window.__ModuleLoader__.load({
 .ofm_btn.ghost{background:transparent;box-shadow:none;border-color:transparent;color:var(--dsw-alias-label-secondary)}
 .ofm_btn.ghost:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 80%,transparent);border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}
 .ofm_btn.ghost.lock[aria-pressed="true"]{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 58%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-label-primary)}
+.ofm_minibtn.preferred[aria-pressed="true"]{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 58%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-label-primary);font-weight:620}
 .ofm_minibtn{font:inherit;font-size:11px;font-weight:540;padding:3px 9px;border-radius:8px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2) 85%,transparent);background:color-mix(in srgb,var(--dsw-alias-bg-layer-3) 70%,transparent);color:var(--dsw-alias-label-secondary);cursor:pointer;transition:transform .12s ease,border-color .16s ease,color .16s ease,background .16s ease,opacity .16s ease}
 .ofm_minibtn:hover:not(:disabled){border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 60%,transparent);color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 7%,transparent);transform:translateY(-1px)}
 .ofm_minibtn:active:not(:disabled){transform:scale(.96)}
@@ -3984,6 +3991,8 @@ window.__ModuleLoader__.load({
       // lock: 后端 PERMANENT_LOCK_PROVIDERS 白名单（channel-pack-rpc.ts）里
       // 有两个可分积分池的渠道 —— 必须与白名单保持一致，否则按钮出现但点了
       // 报错，或功能存在却点不出来。当前四家：loomy / buddy / workbuddy / raccoon。
+      // preferred: 后端 LONG_TERM_PREFERRED_PROVIDERS 白名单 —— 选号器显式
+      // 消费「长期优先账号」的渠道（当前仅 raccoon）。
       buddy: { claim: true, status: true, lock: true },
       workbuddy: { lock: true },
       lobsterai: { claim: true },
@@ -3992,7 +4001,7 @@ window.__ModuleLoader__.load({
       trae: { claim: true },
       cline: { unit: 'dollars' },
       loomy: { claim: true, lock: true },
-      raccoon: { lock: true },
+      raccoon: { lock: true, preferred: true },
       minimax: { claim: true, status: true },
       zcode: { claim: true, unit: 'tokens' },
       gemini: { unit: 'quota', quota: true },
@@ -4379,6 +4388,29 @@ window.__ModuleLoader__.load({
         } finally { setLockBusy(false) }
       }
 
+      // 「长期积分优先账号」：每日用尽后先烧指定号的长期积分。undefined=查询中，
+      // null=不支持/失败（隐藏按钮，与 lock 的降级同策），string=当前优先账号 id。
+      const [preferred, setPreferred] = useState(undefined)
+      const [preferredBusy, setPreferredBusy] = useState(false)
+      useEffect(() => {
+        if (!creditCapability?.preferred) return undefined
+        let alive = true
+        rpc('credits.longTermPreferred', { provider: channel.id }, 15_000)
+          .then(value => { if (alive) setPreferred(typeof value?.accountId === 'string' ? value.accountId : null) })
+          .catch(() => { if (alive) setPreferred(null) })
+        return () => { alive = false }
+      }, [creditCapability?.preferred, rpc, channel.id])
+      const setPreferredAccount = async accountId => {
+        if (preferredBusy || busy !== '') return
+        setPreferredBusy(true); setNotice('')
+        try {
+          const value = await rpc('credits.longTermPreferred', { provider: channel.id, accountId }, 15_000)
+          setPreferred(typeof value?.accountId === 'string' ? value.accountId : null)
+        } catch (error) {
+          setNotice(t('chan.preferred.failed').replace('{reason}', String(error?.message ?? error)))
+        } finally { setPreferredBusy(false) }
+      }
+
       const card = h('article', {
         className: `ofm_chan ofm_glass${status?.closed === true ? ' off' : ''}`,
         'data-state': chanState,
@@ -4478,6 +4510,13 @@ window.__ModuleLoader__.load({
                       `${balanceLabel} ${reading}`)
                   })(),
                   h('span', { className: 'ofm_acctacts' },
+                    creditCapability?.preferred && preferred !== null ? h('button', {
+                      type: 'button', className: 'ofm_minibtn preferred', disabled: preferredBusy || busy !== '' || !rpc,
+                      'aria-pressed': preferred === row.id ? 'true' : 'false',
+                      'aria-busy': preferredBusy ? 'true' : undefined,
+                      title: t('chan.preferred.hint'),
+                      onClick: () => void setPreferredAccount(preferred === row.id ? null : row.id),
+                    }, preferredBusy ? '…' : t('chan.preferred.label')) : null,
                     h('button', {
                       type: 'button', className: 'ofm_minibtn', disabled: busy !== '' || !rpc,
                       onClick: () => accountAction('test:' + row.id, row.id, async () => {

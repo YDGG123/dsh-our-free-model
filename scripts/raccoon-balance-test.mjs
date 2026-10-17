@@ -167,6 +167,55 @@ try {
     )
   })
 
+  await check('longTermFirst：指定账号排在长期档最前，其余保持手动顺序', async () => {
+    const balances = {
+      'token-a': { available_points: 500, daily_points: 0 },
+      'token-b': { available_points: 300, daily_points: 0 },
+      'token-c': { available_points: 700, daily_points: 0 },
+    }
+    const { selector } = makeSelector({ balances })
+    assert.deepEqual(
+      ids(await selector.rank(accounts('token-a', 'token-b', 'token-c'), { longTermFirst: 'id-token-b' })),
+      ['id-token-b', 'id-token-a', 'id-token-c'],
+      'B 被指定为优先 → 长期档内 B 先烧，A/C 保持手动顺序',
+    )
+  })
+
+  await check('longTermFirst 不改档位判定：优先账号还有每日积分时仍走每日档', async () => {
+    const balances = {
+      'token-a': { available_points: 500, daily_points: 300 },
+      'token-b': { available_points: 900, daily_points: 0 },
+    }
+    const { selector } = makeSelector({ balances })
+    // 指定 B（只有长期）→ A 的每日档仍在最前（档位优先于档内偏好）。
+    assert.deepEqual(ids(await selector.rank(accounts('token-a', 'token-b'), { longTermFirst: 'id-token-b' })), ['id-token-a', 'id-token-b'])
+    // 指定 A（在每日档）→ 不把 B 提前，A 仍在档 0。
+    assert.deepEqual(ids(await selector.rank(accounts('token-a', 'token-b'), { longTermFirst: 'id-token-a' })), ['id-token-a', 'id-token-b'])
+  })
+
+  await check('longTermFirst 不在候选里：安全回退手动顺序', async () => {
+    const balances = {
+      'token-a': { available_points: 500, daily_points: 0 },
+      'token-b': { available_points: 300, daily_points: 0 },
+    }
+    const { selector } = makeSelector({ balances })
+    assert.deepEqual(ids(await selector.rank(accounts('token-a', 'token-b'), { longTermFirst: 'id-ghost' })), ['id-token-a', 'id-token-b'])
+  })
+
+  await check('longTermFirst 优先于 longTermOrder descending', async () => {
+    const balances = {
+      'token-a': { available_points: 100, daily_points: 0 },
+      'token-b': { available_points: 300, daily_points: 0 },
+      'token-c': { available_points: 900, daily_points: 0 },
+    }
+    const { selector } = makeSelector({ balances })
+    assert.deepEqual(
+      ids(await selector.rank(accounts('token-a', 'token-b', 'token-c'), { longTermFirst: 'id-token-a', longTermOrder: 'descending' })),
+      ['id-token-a', 'id-token-c', 'id-token-b'],
+      '显式指定的 A 置前，其余按余额降序（C > B）',
+    )
+  })
+
   await check('每日积分字段缺失按长期档处理（不编造「有今日额度」）', async () => {
     const { selector } = makeSelector({ balances: {
       'token-a': { available_points: 500 },
@@ -414,6 +463,75 @@ try {
       const chunks = await stream()
       assert.ok(JSON.stringify(chunks).includes('balance-selected'))
       assert.equal(chatRequests.at(-1), 'Bearer token-a', '解锁后每日/长期都可用，手动第一的 A 排在长期档首位')
+    } finally { for (const cleanup of dispose.reverse()) await cleanup() }
+  })
+
+  await check('RPC：长期优先账号 读取/设置/清除/校验（非白名单与不存在账号被拒）', async () => {
+    writeLocks(false)
+    const { call, dispose } = await mount()
+    try {
+      const initial = await call('credits.longTermPreferred', { provider: 'raccoon' })
+      assert.equal(initial.ok, true)
+      assert.equal(initial.value.accountId, null, '未设置时回 null（跟随手动顺序）')
+      const set = await call('credits.longTermPreferred', { provider: 'raccoon', accountId: 'raccoon-b' })
+      assert.equal(set.ok, true)
+      assert.equal(set.value.accountId, 'raccoon-b')
+      const readBack = await call('credits.longTermPreferred', { provider: 'raccoon' })
+      assert.equal(readBack.value.accountId, 'raccoon-b', '省略 accountId 的只读回显')
+      const missing = await call('credits.longTermPreferred', { provider: 'raccoon', accountId: 'raccoon-ghost' })
+      assert.equal(missing.ok, false)
+      assert.equal(missing.error.code, 'bad-request')
+      const rejected = await call('credits.longTermPreferred', { provider: 'trae', accountId: 'x' })
+      assert.equal(rejected.ok, false)
+      assert.equal(rejected.error.code, 'bad-request')
+      const cleared = await call('credits.longTermPreferred', { provider: 'raccoon', accountId: null })
+      assert.equal(cleared.ok, true)
+      assert.equal(cleared.value.accountId, null)
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(scratch, 'channel-pack', 'long-term-preferred.json'), 'utf8')),
+        { schema: 'dsh-codearts-auth/long-term-preferred/v1', preferred: {} },
+        '清除后独立文档同步为空表')
+    } finally { for (const cleanup of dispose.reverse()) await cleanup() }
+  })
+
+  await check('长期优先：每日用尽时先烧指定账号，清除后回到手动顺序', async () => {
+    writeLocks(false)
+    balanceMode = 'noDaily'
+    const { call, stream, dispose } = await mount()
+    try {
+      await call('credits.longTermPreferred', { provider: 'raccoon', accountId: 'raccoon-b' })
+      let chunks = await stream()
+      assert.ok(JSON.stringify(chunks).includes('balance-selected'))
+      assert.equal(chatRequests.at(-1), 'Bearer token-b', '每日用尽后，指定为优先的 B 先烧长期积分（而非手动第一的 A）')
+      await call('credits.longTermPreferred', { provider: 'raccoon', accountId: null })
+      chunks = await stream()
+      assert.ok(JSON.stringify(chunks).includes('balance-selected'))
+      assert.equal(chatRequests.at(-1), 'Bearer token-a', '清除优先后回到手动顺序（A 先烧）')
+    } finally { for (const cleanup of dispose.reverse()) await cleanup() }
+  })
+
+  await check('长期优先：指定账号还有每日积分时不影响每日档的选号', async () => {
+    writeLocks(false)
+    balanceMode = 'mixed'
+    const { call, stream, dispose } = await mount()
+    try {
+      // mixed：A 只剩长期，B 有每日。指定 A 为「长期优先」—— 但当前每日档
+      // 由 B 提供，选号仍应走 B（档位判定优先于档内偏好）。
+      await call('credits.longTermPreferred', { provider: 'raccoon', accountId: 'raccoon-a' })
+      const chunks = await stream()
+      assert.ok(JSON.stringify(chunks).includes('balance-selected'))
+      assert.equal(chatRequests.at(-1), 'Bearer token-b')
+    } finally { for (const cleanup of dispose.reverse()) await cleanup() }
+  })
+
+  await check('删除指定为长期优先的账号：偏好同步清除', async () => {
+    writeLocks(false)
+    const { call, dispose } = await mount()
+    try {
+      await call('credits.longTermPreferred', { provider: 'raccoon', accountId: 'raccoon-b' })
+      const removed = await call('account.delete', { accountId: 'raccoon-b' })
+      assert.equal(removed.ok, true)
+      const after = await call('credits.longTermPreferred', { provider: 'raccoon' })
+      assert.equal(after.value.accountId, null, '被删账号正是优先账号时，偏好随之清除（不留幽灵状态）')
     } finally { for (const cleanup of dispose.reverse()) await cleanup() }
   })
 

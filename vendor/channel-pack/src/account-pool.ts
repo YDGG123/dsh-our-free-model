@@ -6,6 +6,8 @@ import { createChannelPackStore, mergeLegacyLoomyLock, sanitizeAccounts, sanitiz
 import type { ChannelPackStore, ChannelPackState, ModelDisableMap, PermanentLockMap } from './channel-pack-store.js'
 import { createPermanentLockStore } from './permanent-lock-store.js'
 import type { PermanentLockStore } from './permanent-lock-store.js'
+import { createLongTermPreferredStore } from './long-term-preferred-store.js'
+import type { LongTermPreferredMap, LongTermPreferredStore } from './long-term-preferred-store.js'
 import type {
   CodeArtsCredential,
   ProviderAccountEntry,
@@ -124,6 +126,18 @@ export class AccountPool {
    */
   private permanentLockCache: PermanentLockMap = {}
   /**
+   * 「长期积分优先账号」表的进程内副本（provider → 账号 id）。
+   *
+   * 语义：每日积分全部用尽、选号落到长期档时，该账号的长期积分先烧，
+   * 其余账号按手动顺序。缺键 = 跟随手动顺序。
+   *
+   * ⚠️ 与 {@link permanentLockCache} 同款理由放在**独立文档**
+   * （`long-term-preferred.json`）：state.json 是同机多 profile 共享的，
+   * 另一条工作区的旧代码全量重写时不带它不认识的键。丢失本键的后果
+   * 较轻（回到手动顺序，可重设），但独立成文与锁定表行为一致。
+   */
+  private longTermPreferredCache: LongTermPreferredMap = {}
+  /**
    * 「本机 OpenAI 网关」开关的进程内副本。
    *
    * 缺键语义是**启用**（与 `channel-pack-store.ts` 的 `sanitizeGatewayEnabled`
@@ -152,10 +166,13 @@ export class AccountPool {
   private storeChain: Promise<void> = Promise.resolve()
   /** 锁定表的独立后端（权威落盘点）。 */
   private readonly lockStore: PermanentLockStore
+  /** 长期优先表的独立后端（权威落盘点）。 */
+  private readonly preferredStore: LongTermPreferredStore
 
   constructor(private readonly ctx: Context) {
     this.store = createChannelPackStore(ctx)
     this.lockStore = createPermanentLockStore(ctx)
+    this.preferredStore = createLongTermPreferredStore(ctx)
     if (this.store.kind === 'memory') {
       this.ctx.logger?.warn?.('[channel-pack] 无可用持久化后端，账号列表与模型黑名单仅存在于内存中')
     }
@@ -177,6 +194,8 @@ export class AccountPool {
       this.providerOrderCache = state.providerOrder ?? []
     }
     this.loadLocks(state)
+    // 长期优先表无旧版前身，不需要迁移：独立文档是唯一来源。
+    this.longTermPreferredCache = this.preferredStore.load().preferred
   }
 
   /**
@@ -624,6 +643,45 @@ export class AccountPool {
     return Object.keys(this.permanentLockCache).filter(p => this.permanentLockCache[p] === true)
   }
 
+  /**
+   * 某 provider 的「长期积分优先账号」id；未设置时 `undefined`（跟随手动顺序）。
+   *
+   * 消费方是各双池渠道的余额选号器（当前 Raccoon，见
+   * `raccoon-balance-selector.ts` 的 `longTermFirst` 选项）：它只影响
+   * **长期档内部**的顺序，不改档位判定，也不影响每日档。
+   */
+  longTermPreferred(provider: string): string | undefined {
+    this.ensureLoaded()
+    const accountId = this.longTermPreferredCache[provider]
+    return typeof accountId === 'string' && accountId.length > 0 ? accountId : undefined
+  }
+
+  /**
+   * 设置（或清除）某 provider 的长期积分优先账号。
+   *
+   * @param accountId `undefined` 删除该键（回到手动顺序）；非空字符串写入。
+   *   账号是否真实存在由 RPC 层校验（池内无法在同步写路径里反查凭据语义），
+   *   这里只保证键值形状合法。
+   */
+  async setLongTermPreferred(provider: string, accountId: string | undefined): Promise<void> {
+    if (provider.length === 0) return
+    this.ensureLoaded()
+    const next: LongTermPreferredMap = { ...this.longTermPreferredCache }
+    if (accountId === undefined || accountId.length === 0) delete next[provider]
+    else next[provider] = accountId
+    this.longTermPreferredCache = next
+    await this.persistPreferred()
+  }
+
+  /** 落盘长期优先表：只写权威独立文档，无 state.json 镜像（无旧版前身）。 */
+  private async persistPreferred(): Promise<void> {
+    if (this.preferredStore.kind === 'memory') {
+      this.ctx.logger?.warn?.('[channel-pack] 无法定位 DSH home，长期积分优先账号仅存在于内存中')
+      return
+    }
+    await this.preferredStore.save({ ...this.longTermPreferredCache })
+  }
+
   /** 列出某个 provider 的所有账号（含状态信息） */
   async listAccounts(provider: string): Promise<ProviderAccountStatus[]> {
     const filtered = this.readAccounts().filter(a => a.provider === provider)
@@ -715,6 +773,12 @@ export class AccountPool {
     // —— 而 `account.create`（登录成功即 addAccount）与 `account.delete` 天然可并发。
     // 重新读之后到 `writeAccounts` 之间没有 `await`，因而这一段是原子的。
     await this.writeAccounts(this.readAccounts().filter(a => a.id !== id))
+    // 被删的号若正是该 provider 的「长期积分优先账号」，同步清掉：留着
+    // 陈旧 id 对选号无害（候选里找不到它就被忽略），但面板会显示一个
+    // 指向不存在账号的偏好，且下一次写入会被存在性校验拒绝。
+    if (this.longTermPreferredCache[entry.provider] === id) {
+      await this.setLongTermPreferred(entry.provider, undefined)
+    }
   }
 
   /**
