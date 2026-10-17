@@ -1196,9 +1196,12 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       // 开关按 provider 持久化（`permanent-locks.json`）。锁定后只剩长期积分
       // 的账号不参与选号（见 raccoon-balance-selector 的 rank 语义）。
       const locked = pool.permanentLocked(RACCOON.id)
+      // 用户指定的「长期积分优先账号」：只影响长期档内部顺序（见
+      // RaccoonRankOptions.longTermFirst）；每日档与档位判定不受它影响。
+      const longTermFirst = pool.longTermPreferred(RACCOON.id)
       let sawUsable = false
       for (let remaining = candidates; remaining.length > 0;) {
-        const picked = await raccoonBalanceSelector.select(remaining, { locked })
+        const picked = await raccoonBalanceSelector.select(remaining, { locked, longTermFirst })
         if (!picked.ok) {
           // 解锁态 rank 永远返回全部候选（即使余额全 0 —— 让上游去报余额
           // 不足），ok:false 只在锁定时出现；这里再防御一层，非锁定按既有
@@ -1314,7 +1317,9 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
         .map(account => ({ id: account.id, credentialRef: account.credentialRef }))
       if (candidates.length === 0) return undefined
       const locked = pool.permanentLocked(RACCOON.id)
-      const picked = await raccoonBalanceSelector.select(candidates, { locked })
+      // 换号同样尊重优先账号：被换到的候选若含指定号，它的长期积分先烧。
+      const longTermFirst = pool.longTermPreferred(RACCOON.id)
+      const picked = await raccoonBalanceSelector.select(candidates, { locked, longTermFirst })
       if (!picked.ok) return undefined
       const credential = await resolveRaccoonCredentialByRef(picked.account.credentialRef)
       if (credential === undefined) return undefined

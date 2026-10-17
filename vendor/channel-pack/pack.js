@@ -32629,6 +32629,72 @@ function createPermanentLockStore(ctx) {
   return new FileLockStore(join2(home, "channel-pack", PERMANENT_LOCKS_FILE), ctx.logger);
 }
 
+// vendor/channel-pack/src/long-term-preferred-store.ts
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+var LONG_TERM_PREFERRED_FILE = "long-term-preferred.json";
+function sanitizeLongTermPreferred(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const result = {};
+  for (const [provider, value] of Object.entries(raw)) {
+    if (typeof value === "string" && value.length > 0 && provider.length > 0) result[provider] = value;
+  }
+  return result;
+}
+var MemoryPreferredStore = class {
+  kind = "memory";
+  preferred = {};
+  written = false;
+  load() {
+    return { exists: this.written, preferred: { ...this.preferred } };
+  }
+  async save(preferred) {
+    this.preferred = { ...preferred };
+    this.written = true;
+  }
+};
+var FilePreferredStore = class {
+  constructor(path2, logger2) {
+    this.path = path2;
+    this.logger = logger2;
+  }
+  path;
+  logger;
+  kind = "file";
+  load() {
+    try {
+      if (!existsSync3(this.path)) return { exists: false, preferred: {} };
+      const parsed = JSON.parse(readFileSync3(this.path, "utf-8"));
+      return { exists: true, preferred: sanitizeLongTermPreferred(preferredFieldOf(parsed)) };
+    } catch (error) {
+      this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u6309\u624B\u52A8\u987A\u5E8F\u5904\u7406: ${String(error)}`);
+      return { exists: true, preferred: {} };
+    }
+  }
+  async save(preferred) {
+    mkdirSync3(join3(this.path, ".."), { recursive: true });
+    const tmp = `${this.path}.tmp`;
+    writeFileSync3(tmp, JSON.stringify({ schema: SCHEMA2, preferred }, null, 2), "utf-8");
+    renameSync3(tmp, this.path);
+  }
+};
+var SCHEMA2 = "dsh-codearts-auth/long-term-preferred/v1";
+function preferredFieldOf(parsed) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return parsed;
+  const record = parsed;
+  if (record.preferred !== void 0) return record.preferred;
+  if (record.schema === void 0) return record;
+  return {};
+}
+function createLongTermPreferredStore(ctx) {
+  const home = resolveChannelPackHome(ctx);
+  if (home === void 0) {
+    ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u957F\u671F\u79EF\u5206\u4F18\u5148\u8D26\u53F7\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
+    return new MemoryPreferredStore();
+  }
+  return new FilePreferredStore(join3(home, "channel-pack", LONG_TERM_PREFERRED_FILE), ctx.logger);
+}
+
 // vendor/channel-pack/src/account-pool.ts
 var EMPTY_MODEL_SET = /* @__PURE__ */ new Set();
 function allAccountsRateLimitedForModel(accounts, modelId, now = Date.now()) {
@@ -32646,6 +32712,7 @@ var AccountPool = class {
     this.ctx = ctx;
     this.store = createChannelPackStore(ctx);
     this.lockStore = createPermanentLockStore(ctx);
+    this.preferredStore = createLongTermPreferredStore(ctx);
     if (this.store.kind === "memory") {
       this.ctx.logger?.warn?.("[channel-pack] \u65E0\u53EF\u7528\u6301\u4E45\u5316\u540E\u7AEF\uFF0C\u8D26\u53F7\u5217\u8868\u4E0E\u6A21\u578B\u9ED1\u540D\u5355\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     }
@@ -32682,6 +32749,18 @@ var AccountPool = class {
    */
   permanentLockCache = {};
   /**
+   * 「长期积分优先账号」表的进程内副本（provider → 账号 id）。
+   *
+   * 语义：每日积分全部用尽、选号落到长期档时，该账号的长期积分先烧，
+   * 其余账号按手动顺序。缺键 = 跟随手动顺序。
+   *
+   * ⚠️ 与 {@link permanentLockCache} 同款理由放在**独立文档**
+   * （`long-term-preferred.json`）：state.json 是同机多 profile 共享的，
+   * 另一条工作区的旧代码全量重写时不带它不认识的键。丢失本键的后果
+   * 较轻（回到手动顺序，可重设），但独立成文与锁定表行为一致。
+   */
+  longTermPreferredCache = {};
+  /**
    * 「本机 OpenAI 网关」开关的进程内副本。
    *
    * 缺键语义是**启用**（与 `channel-pack-store.ts` 的 `sanitizeGatewayEnabled`
@@ -32710,6 +32789,8 @@ var AccountPool = class {
   storeChain = Promise.resolve();
   /** 锁定表的独立后端（权威落盘点）。 */
   lockStore;
+  /** 长期优先表的独立后端（权威落盘点）。 */
+  preferredStore;
   /** 首次访问时从后端载入账号列表、黑名单与锁定表。 */
   ensureLoaded() {
     if (this.loaded) return;
@@ -32722,6 +32803,7 @@ var AccountPool = class {
       this.providerOrderCache = state.providerOrder ?? [];
     }
     this.loadLocks(state);
+    this.longTermPreferredCache = this.preferredStore.load().preferred;
   }
   /**
    * 载入锁定表：独立文档是权威；它**不存在**时才从 state.json 的镜像字段迁移。
@@ -33123,6 +33205,42 @@ var AccountPool = class {
     this.ensureLoaded();
     return Object.keys(this.permanentLockCache).filter((p) => this.permanentLockCache[p] === true);
   }
+  /**
+   * 某 provider 的「长期积分优先账号」id；未设置时 `undefined`（跟随手动顺序）。
+   *
+   * 消费方是各双池渠道的余额选号器（当前 Raccoon，见
+   * `raccoon-balance-selector.ts` 的 `longTermFirst` 选项）：它只影响
+   * **长期档内部**的顺序，不改档位判定，也不影响每日档。
+   */
+  longTermPreferred(provider) {
+    this.ensureLoaded();
+    const accountId = this.longTermPreferredCache[provider];
+    return typeof accountId === "string" && accountId.length > 0 ? accountId : void 0;
+  }
+  /**
+   * 设置（或清除）某 provider 的长期积分优先账号。
+   *
+   * @param accountId `undefined` 删除该键（回到手动顺序）；非空字符串写入。
+   *   账号是否真实存在由 RPC 层校验（池内无法在同步写路径里反查凭据语义），
+   *   这里只保证键值形状合法。
+   */
+  async setLongTermPreferred(provider, accountId) {
+    if (provider.length === 0) return;
+    this.ensureLoaded();
+    const next = { ...this.longTermPreferredCache };
+    if (accountId === void 0 || accountId.length === 0) delete next[provider];
+    else next[provider] = accountId;
+    this.longTermPreferredCache = next;
+    await this.persistPreferred();
+  }
+  /** 落盘长期优先表：只写权威独立文档，无 state.json 镜像（无旧版前身）。 */
+  async persistPreferred() {
+    if (this.preferredStore.kind === "memory") {
+      this.ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u957F\u671F\u79EF\u5206\u4F18\u5148\u8D26\u53F7\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
+      return;
+    }
+    await this.preferredStore.save({ ...this.longTermPreferredCache });
+  }
   /** 列出某个 provider 的所有账号（含状态信息） */
   async listAccounts(provider) {
     const filtered = this.readAccounts().filter((a) => a.provider === provider);
@@ -33199,6 +33317,9 @@ var AccountPool = class {
     } catch {
     }
     await this.writeAccounts(this.readAccounts().filter((a) => a.id !== id));
+    if (this.longTermPreferredCache[entry.provider] === id) {
+      await this.setLongTermPreferred(entry.provider, void 0);
+    }
   }
   /**
    * 重排某 provider 下账号的顺序（Channel Pack 拖拽排序）。
@@ -33839,7 +33960,7 @@ function queueDelayMs(info) {
 }
 
 // vendor/channel-pack/src/models.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync4, writeFileSync as writeFileSync4 } from "node:fs";
 
 // vendor/channel-pack/src/sign.ts
 async function sha256Hex(data) {
@@ -34015,10 +34136,10 @@ function saveModelsCache(models) {
   if (!path2) return;
   const dir = path2.slice(0, path2.lastIndexOf("/"));
   try {
-    mkdirSync3(dir, { recursive: true });
+    mkdirSync4(dir, { recursive: true });
     const tmp = path2 + ".tmp";
-    writeFileSync3(tmp, JSON.stringify(models), "utf-8");
-    renameSync3(tmp, path2);
+    writeFileSync4(tmp, JSON.stringify(models), "utf-8");
+    renameSync4(tmp, path2);
   } catch {
   }
 }
@@ -34030,10 +34151,10 @@ function saveBenefitCache(ids) {
   if (!path2) return;
   const dir = path2.slice(0, path2.lastIndexOf("/"));
   try {
-    mkdirSync3(dir, { recursive: true });
+    mkdirSync4(dir, { recursive: true });
     const tmp = path2 + ".tmp";
-    writeFileSync3(tmp, JSON.stringify(ids), "utf-8");
-    renameSync3(tmp, path2);
+    writeFileSync4(tmp, JSON.stringify(ids), "utf-8");
+    renameSync4(tmp, path2);
   } catch {
   }
 }
@@ -34041,8 +34162,8 @@ function loadBenefitCache() {
   const path2 = benefitCachePath();
   if (!path2) return void 0;
   try {
-    if (!existsSync3(path2)) return void 0;
-    const text = readFileSync3(path2, "utf-8");
+    if (!existsSync4(path2)) return void 0;
+    const text = readFileSync4(path2, "utf-8");
     const ids = JSON.parse(text);
     if (!Array.isArray(ids) || ids.length === 0) return void 0;
     return ids.filter((id) => typeof id === "string");
@@ -34428,10 +34549,10 @@ function isProseTruncatedByStopString(text) {
 }
 
 // vendor/channel-pack/src/dead-model-store.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join3 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join4 } from "node:path";
 var DEAD_MODELS_FILE = "dead-models.json";
-var SCHEMA2 = "dsh-codearts-auth/dead-models/v1";
+var SCHEMA3 = "dsh-codearts-auth/dead-models/v1";
 var DEFAULT_TTL_DAYS = 30;
 var GONE_PATTERNS = [
   /model\s+not\s+found/i,
@@ -34543,18 +34664,18 @@ var FileDeadModelStore = class {
   kind = "file";
   load() {
     try {
-      if (!existsSync4(this.path)) return {};
-      return sanitize(JSON.parse(readFileSync4(this.path, "utf-8")));
+      if (!existsSync5(this.path)) return {};
+      return sanitize(JSON.parse(readFileSync5(this.path, "utf-8")));
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u6309\u65E0\u5931\u6548\u8BB0\u5F55\u5904\u7406: ${String(error)}`);
       return {};
     }
   }
   save(records) {
-    mkdirSync4(join3(this.path, ".."), { recursive: true });
+    mkdirSync5(join4(this.path, ".."), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    writeFileSync4(tmp, JSON.stringify({ schema: SCHEMA2, providers: records }, null, 2), "utf-8");
-    renameSync4(tmp, this.path);
+    writeFileSync5(tmp, JSON.stringify({ schema: SCHEMA3, providers: records }, null, 2), "utf-8");
+    renameSync5(tmp, this.path);
   }
 };
 var store;
@@ -34568,7 +34689,7 @@ function ensureStore() {
     logger?.warn("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     store = new MemoryDeadModelStore();
   } else {
-    store = new FileDeadModelStore(join3(home, "channel-pack", DEAD_MODELS_FILE), logger);
+    store = new FileDeadModelStore(join4(home, "channel-pack", DEAD_MODELS_FILE), logger);
   }
   return store;
 }
@@ -39933,7 +40054,7 @@ function withQoderNickname(credential, nickname) {
 }
 
 // vendor/channel-pack/src/qoder-wasm.ts
-import { readFileSync as readFileSync5 } from "node:fs";
+import { readFileSync as readFileSync6 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 var WASM_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "qoder-auth-wasm.wasm");
@@ -40019,7 +40140,7 @@ async function getGlue() {
   return gluePromise;
 }
 async function createGlue() {
-  const bytes = readFileSync5(WASM_PATH);
+  const bytes = readFileSync6(WASM_PATH);
   const module = await WebAssembly.compile(bytes);
   let exports = {};
   let cachedHeap = null;
@@ -52631,12 +52752,13 @@ var RaccoonBalanceSelector = class {
     };
     const locked = options.locked === true;
     const descending = options.longTermOrder === "descending";
+    const first = typeof options.longTermFirst === "string" ? options.longTermFirst : void 0;
     return candidates.map((account, index) => ({
       account,
       index,
       tier: tierOf(balances[index]),
       total: positiveNumber(balances[index].totalBalance)
-    })).filter((row) => !locked || row.tier === 0).sort((a, b) => a.tier - b.tier || (a.tier === 1 && descending ? b.total - a.total : 0) || a.index - b.index).map((row) => row.account);
+    })).filter((row) => !locked || row.tier === 0).sort((a, b) => a.tier - b.tier || (a.tier === 1 && first !== void 0 ? a.account.id === first ? -1 : b.account.id === first ? 1 : 0 : 0) || (a.tier === 1 && descending ? b.total - a.total : 0) || a.index - b.index).map((row) => row.account);
   }
   /**
    * 从候选中按余额优先选**一个**账号（`pickRaccoonAccount` 的选号入口）。
@@ -52939,10 +53061,10 @@ function zcodeProductById(id) {
 
 // vendor/channel-pack/src/zcode-captcha.ts
 import { spawn as spawn2, spawnSync } from "node:child_process";
-import { existsSync as existsSync5, mkdtempSync, rmSync, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync6, mkdtempSync, rmSync, writeFileSync as writeFileSync6 } from "node:fs";
 import { createServer as createServer6 } from "node:net";
 import { homedir as homedir2, tmpdir } from "node:os";
-import { basename, isAbsolute, join as join4, posix } from "node:path";
+import { basename, isAbsolute, join as join5, posix } from "node:path";
 var ZCODE_CAPTCHA_FALLBACK = {
   region: "cn",
   prefix: "no8xfe",
@@ -53009,21 +53131,21 @@ function windowsBrowserCandidates(env, home) {
      * 用户设了它们就说明默认路径不对。若排在 `~/scoop` 之后，会出现
      * 「旧默认路径恰好存在 → 用它，而用户实际在用的那个被忽略」。
      */
-    ...env.SCOOP !== void 0 && env.SCOOP.trim().length > 0 ? [join4(env.SCOOP.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
-    ...env.SCOOP_GLOBAL !== void 0 && env.SCOOP_GLOBAL.trim().length > 0 ? [join4(env.SCOOP_GLOBAL.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
+    ...env.SCOOP !== void 0 && env.SCOOP.trim().length > 0 ? [join5(env.SCOOP.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
+    ...env.SCOOP_GLOBAL !== void 0 && env.SCOOP_GLOBAL.trim().length > 0 ? [join5(env.SCOOP_GLOBAL.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
     // ② scoop 默认根目录（`~/scoop`）。实测可用。
-    join4(home, "scoop", "apps", "chromium", "current", "chrome.exe"),
+    join5(home, "scoop", "apps", "chromium", "current", "chrome.exe"),
     // ③ 系统 Chrome。
-    join4(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-    join4(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-    join4(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+    join5(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    join5(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    join5(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
     // ④ Chromium。
-    join4(localAppData, "Chromium", "Application", "chrome.exe"),
-    join4(programFiles, "Chromium", "Application", "chrome.exe"),
+    join5(localAppData, "Chromium", "Application", "chrome.exe"),
+    join5(programFiles, "Chromium", "Application", "chrome.exe"),
     // ⑤ Edge（Chromium 内核，系统普遍自带）。
-    join4(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-    join4(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-    join4(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")
+    join5(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    join5(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+    join5(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")
   ];
 }
 function macBrowserCandidates(home) {
@@ -53076,7 +53198,7 @@ function findBrowserExecutable() {
   for (const candidate of browserCandidates()) {
     try {
       if (candidate.length === 0 || !isAbsolute(candidate)) continue;
-      if (existsSync5(candidate)) return candidate;
+      if (existsSync6(candidate)) return candidate;
     } catch {
     }
   }
@@ -53350,10 +53472,10 @@ foreach ($h in $all) {
 }
 Write-Output "hidden=$n"
 `;
-    const dir = mkdtempSync(join4(tmpdir(), "zcode-hide-"));
-    const file = join4(dir, "hide.ps1");
+    const dir = mkdtempSync(join5(tmpdir(), "zcode-hide-"));
+    const file = join5(dir, "hide.ps1");
     dirCreated = dir;
-    writeFileSync5(file, script, "ascii");
+    writeFileSync6(file, script, "ascii");
     const child = spawn2("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
@@ -53511,7 +53633,7 @@ var ZcodeCaptchaBrowser = class {
       );
     }
     this.spawnFailure = void 0;
-    this.profileDir = mkdtempSync(join4(tmpdir(), "zcode-captcha-"));
+    this.profileDir = mkdtempSync(join5(tmpdir(), "zcode-captcha-"));
     this.port = this.options.debugPort ?? await pickFreePort();
     const hide = this.options.hideWindow !== false;
     this.child = spawn2(executable, [
@@ -56894,9 +57016,9 @@ function buildEnvironmentSection(options) {
 }
 function isGitRepo(cwd) {
   try {
-    const { existsSync: existsSync12 } = __require("node:fs");
-    const { join: join13 } = __require("node:path");
-    return existsSync12(join13(cwd, ".git"));
+    const { existsSync: existsSync13 } = __require("node:fs");
+    const { join: join14 } = __require("node:path");
+    return existsSync13(join14(cwd, ".git"));
   } catch {
     return false;
   }
@@ -59573,9 +59695,9 @@ function quotaRejectionHint(text) {
 
 // vendor/channel-pack/src/qoder-machine.ts
 import { execFileSync, spawn as spawn3 } from "node:child_process";
-import { existsSync as existsSync6, readFileSync as readFileSync6, readdirSync } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync7, readdirSync } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 var RUNTIME_INFO_TIMEOUT_MS = 2e4;
 var cached;
 function candidatePaths() {
@@ -59585,20 +59707,20 @@ function candidatePaths() {
   const appData = process.env.APPDATA;
   if (appData !== void 0 && appData.length > 0) {
     for (const dir of ["Qoder", "Qoder CN"]) {
-      paths.push(join5(appData, dir, "SharedClientCache", "cache", "machine_token.json"));
+      paths.push(join6(appData, dir, "SharedClientCache", "cache", "machine_token.json"));
     }
   }
   const home = homedir3();
   for (const dir of ["Qoder", "Qoder CN"]) {
-    paths.push(join5(home, "Library", "Application Support", dir, "SharedClientCache", "cache", "machine_token.json"));
-    paths.push(join5(home, ".config", dir, "SharedClientCache", "cache", "machine_token.json"));
+    paths.push(join6(home, "Library", "Application Support", dir, "SharedClientCache", "cache", "machine_token.json"));
+    paths.push(join6(home, ".config", dir, "SharedClientCache", "cache", "machine_token.json"));
   }
   return paths;
 }
 function parseFile(path2) {
   let raw;
   try {
-    raw = readFileSync6(path2, "utf8");
+    raw = readFileSync7(path2, "utf8");
   } catch {
     return void 0;
   }
@@ -59637,7 +59759,7 @@ var QODER_DATA_DIR_NAMES = [".qoder", ".qoder-cn"];
 function findRuntimeInfoExecutable(home, dataDirNames = QODER_DATA_DIR_NAMES) {
   const exeName = process.platform === "win32" ? "runtime-info.exe" : "runtime-info";
   for (const dirName of dataDirNames) {
-    const binDir = join5(home, dirName, ".bin");
+    const binDir = join6(home, dirName, ".bin");
     let entries;
     try {
       entries = readdirSync(binDir);
@@ -59646,8 +59768,8 @@ function findRuntimeInfoExecutable(home, dataDirNames = QODER_DATA_DIR_NAMES) {
     }
     const dir = entries.find((name2) => name2.startsWith("umid-"));
     if (dir === void 0) continue;
-    const exe = join5(binDir, dir, exeName);
-    if (existsSync6(exe)) return exe;
+    const exe = join6(binDir, dir, exeName);
+    if (existsSync7(exe)) return exe;
   }
   return void 0;
 }
@@ -59655,7 +59777,7 @@ function locateRuntimeInfo(override) {
   const fromEnv = process.env.QODER_RUNTIME_INFO;
   const candidate = override ?? (fromEnv !== void 0 && fromEnv.length > 0 ? fromEnv : void 0);
   if (candidate !== void 0) {
-    return existsSync6(candidate) ? candidate : void 0;
+    return existsSync7(candidate) ? candidate : void 0;
   }
   return findRuntimeInfoExecutable(homedir3());
 }
@@ -62598,8 +62720,8 @@ async function handleOpencodeRpc(ctx, pool, method, payload) {
 }
 
 // vendor/channel-pack/src/badge-preferences.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync5, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync8, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync6, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join7 } from "node:path";
 var BADGE_PREFERENCES_FILE = "ui-preferences.json";
 var BADGE_PREFERENCES = ["auto", "subscription", "credits"];
 var DEFAULT_BADGE_PREFERENCE = "auto";
@@ -62626,8 +62748,8 @@ var FilePreferenceStore = class {
   kind = "file";
   load() {
     try {
-      if (!existsSync7(this.path)) return DEFAULT_BADGE_PREFERENCE;
-      const parsed = JSON.parse(readFileSync7(this.path, "utf-8"));
+      if (!existsSync8(this.path)) return DEFAULT_BADGE_PREFERENCE;
+      const parsed = JSON.parse(readFileSync8(this.path, "utf-8"));
       return sanitizeBadgePreference(preferenceFieldOf(parsed));
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u7528\u91CF\u5FBD\u6807\u504F\u597D\u6309\u9ED8\u8BA4\u503C\u5904\u7406: ${String(error)}`);
@@ -62635,13 +62757,13 @@ var FilePreferenceStore = class {
     }
   }
   async save(preference) {
-    mkdirSync5(join6(this.path, ".."), { recursive: true });
+    mkdirSync6(join7(this.path, ".."), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    writeFileSync6(tmp, JSON.stringify({ schema: SCHEMA3, badgePreference: preference }, null, 2), "utf-8");
-    renameSync5(tmp, this.path);
+    writeFileSync7(tmp, JSON.stringify({ schema: SCHEMA4, badgePreference: preference }, null, 2), "utf-8");
+    renameSync6(tmp, this.path);
   }
 };
-var SCHEMA3 = "dsh-codearts-auth/ui-preferences/v1";
+var SCHEMA4 = "dsh-codearts-auth/ui-preferences/v1";
 function preferenceFieldOf(parsed) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return parsed;
   const record = parsed;
@@ -62653,7 +62775,7 @@ function createBadgePreferenceStore(ctx) {
     ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u7528\u91CF\u5FBD\u6807\u504F\u597D\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     return new MemoryPreferenceStore();
   }
-  return new FilePreferenceStore(join6(home, "channel-pack", BADGE_PREFERENCES_FILE), ctx.logger);
+  return new FilePreferenceStore(join7(home, "channel-pack", BADGE_PREFERENCES_FILE), ctx.logger);
 }
 
 // vendor/channel-pack/src/badge-subscription.ts
@@ -62835,10 +62957,10 @@ function isAllFailed(snapshot) {
 }
 
 // vendor/channel-pack/src/auto-checkin.ts
-import { existsSync as existsSync8, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync6, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync9, renameSync as renameSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join8 } from "node:path";
 var AUTO_CHECKIN_FILE = "auto-checkin.json";
-var SCHEMA4 = "dsh-codearts-auth/auto-checkin/v1";
+var SCHEMA5 = "dsh-codearts-auth/auto-checkin/v1";
 var DEFAULT_AUTO_CHECKIN = {
   enabled: true,
   lastDate: "",
@@ -62910,18 +63032,18 @@ var FileAutoCheckinStore = class {
   kind = "file";
   load() {
     try {
-      if (!existsSync8(this.path)) return { ...DEFAULT_AUTO_CHECKIN };
-      return sanitizeAutoCheckin(JSON.parse(readFileSync8(this.path, "utf-8")));
+      if (!existsSync9(this.path)) return { ...DEFAULT_AUTO_CHECKIN };
+      return sanitizeAutoCheckin(JSON.parse(readFileSync9(this.path, "utf-8")));
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u81EA\u52A8\u7B7E\u5230\u6309\u9ED8\u8BA4\u8BBE\u7F6E\uFF08\u5F00\u542F\uFF09\u5904\u7406: ${String(error)}`);
       return { ...DEFAULT_AUTO_CHECKIN };
     }
   }
   async save(doc) {
-    mkdirSync6(join7(this.path, ".."), { recursive: true });
+    mkdirSync7(join8(this.path, ".."), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    writeFileSync7(tmp, JSON.stringify({
-      schema: SCHEMA4,
+    writeFileSync8(tmp, JSON.stringify({
+      schema: SCHEMA5,
       enabled: doc.enabled,
       lastDate: doc.lastDate,
       lastResult: doc.lastResult,
@@ -62929,7 +63051,7 @@ var FileAutoCheckinStore = class {
       channels: doc.channels,
       dismissedRunAt: doc.dismissedRunAt
     }, null, 2), "utf-8");
-    renameSync6(tmp, this.path);
+    renameSync7(tmp, this.path);
   }
 };
 function createAutoCheckinStore(ctx) {
@@ -62938,7 +63060,7 @@ function createAutoCheckinStore(ctx) {
     ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u81EA\u52A8\u7B7E\u5230\u5F00\u5173\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     return new MemoryAutoCheckinStore();
   }
-  return new FileAutoCheckinStore(join7(home, "channel-pack", AUTO_CHECKIN_FILE), ctx.logger);
+  return new FileAutoCheckinStore(join8(home, "channel-pack", AUTO_CHECKIN_FILE), ctx.logger);
 }
 function emptyTotals2() {
   return { providers: 0, claimed: 0, totalCredit: 0, totalByUnit: { token: 0, credit: 0 }, alreadyClaimed: 0, inactive: 0, failed: 0, coversToday: 0, skipped: 0, errors: 0 };
@@ -63218,6 +63340,9 @@ var PERMANENT_LOCK_PROVIDERS = /* @__PURE__ */ new Set([
   LOOMY.id,
   CODEBUDDY.id,
   WORKBUDDY.id,
+  RACCOON.id
+]);
+var LONG_TERM_PREFERRED_PROVIDERS = /* @__PURE__ */ new Set([
   RACCOON.id
 ]);
 function computeClaimSummary(outcomes) {
@@ -64315,6 +64440,53 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           ctx.logger?.warn?.(`[channel-pack] \u5E7F\u64AD llm/adapters-updated \u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u5DF2\u4FDD\u5B58\u7684\u5F00\u5173\uFF09: ${String(error)}`);
         }
         return { ok: true, value: lockResponse() };
+      }
+      /**
+       * 「长期积分优先账号」：每日额度用尽后，先烧指定账号的长期积分，
+       * 其余账号按手动顺序。与 `credits.permanentLock` 同款读写约定：
+       * 载荷省略 `accountId` 时**只读**（面板初始化回显）。
+       *
+       * ⚠️ 写入会改变**选号结果**（长期档的烧钱顺序），故与锁定开关一样
+       * 广播 `llm/adapters-updated`；通知失败不反噬已落盘的设置。
+       *
+       * `accountId: null` 清除（回到手动顺序）；非空字符串必须是该
+       * provider 池内真实存在的账号 —— 指向不存在账号的偏好只会让面板
+       * 显示一个幽灵状态。
+       */
+      case "credits.longTermPreferred": {
+        const req = payload;
+        const provider = typeof req.provider === "string" ? req.provider.trim() : "";
+        if (!LONG_TERM_PREFERRED_PROVIDERS.has(provider)) {
+          return {
+            ok: false,
+            error: { code: "bad-request", message: `\u8BE5 provider \u4E0D\u652F\u6301\u957F\u671F\u79EF\u5206\u4F18\u5148\u8D26\u53F7\uFF1A${provider || "(\u7A7A)"}` }
+          };
+        }
+        const preferredResponse = () => ({
+          provider,
+          accountId: pool.longTermPreferred(provider) ?? null
+        });
+        if (req.accountId === void 0) {
+          return { ok: true, value: preferredResponse() };
+        }
+        if (req.accountId === null) {
+          await pool.setLongTermPreferred(provider, void 0);
+        } else {
+          if (typeof req.accountId !== "string" || req.accountId.trim().length === 0) {
+            return { ok: false, error: { code: "bad-request", message: "accountId \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u6216 null" } };
+          }
+          const accountId = req.accountId.trim();
+          if (!pool.listAccountsByProvider(provider).some((account) => account.id === accountId)) {
+            return { ok: false, error: { code: "bad-request", message: `\u8D26\u53F7\u4E0D\u5B58\u5728\uFF1A${accountId}` } };
+          }
+          await pool.setLongTermPreferred(provider, accountId);
+        }
+        try {
+          ctx.emit("llm/adapters-updated");
+        } catch (error) {
+          ctx.logger?.warn?.(`[channel-pack] \u5E7F\u64AD llm/adapters-updated \u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u5DF2\u4FDD\u5B58\u7684\u8BBE\u7F6E\uFF09: ${String(error)}`);
+        }
+        return { ok: true, value: preferredResponse() };
       }
       /**
        * 领取新手任务 / 一次性奖励（**Loomy** 的新手任务、**raccoon** 的登录奖励，一次性）。
@@ -65808,22 +65980,22 @@ function reply(rpcId, result) {
 import { createServer as createServer7 } from "node:http";
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { homedir as homedir4 } from "node:os";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // vendor/channel-pack/src/openai-gateway/auth.ts
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync9, renameSync as renameSync7, writeFileSync as writeFileSync8, existsSync as existsSync9 } from "node:fs";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync10, renameSync as renameSync8, writeFileSync as writeFileSync9, existsSync as existsSync10 } from "node:fs";
 import { randomBytes as randomBytes11 } from "node:crypto";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 var KEY_FILE = "api-key";
 var KEY_PATTERN2 = /^[A-Za-z0-9_-]{43}$/;
 function loadOrCreateApiKey(home, env = process.env) {
   const configured = env.DSH_OPENAI_GATEWAY_API_KEY?.trim();
   if (configured) return { value: configured, fromEnv: true, path: null };
-  const directory = join8(home, "openai-gateway");
-  const path2 = join8(directory, KEY_FILE);
+  const directory = join9(home, "openai-gateway");
+  const path2 = join9(directory, KEY_FILE);
   let stored;
   try {
-    stored = readFileSync9(path2, "utf8").trim();
+    stored = readFileSync10(path2, "utf8").trim();
   } catch {
   }
   if (stored) {
@@ -65833,14 +66005,14 @@ function loadOrCreateApiKey(home, env = process.env) {
     );
   }
   const key = randomBytes11(32).toString("base64url");
-  mkdirSync7(directory, { recursive: true });
+  mkdirSync8(directory, { recursive: true });
   const temporary = `${path2}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync8(temporary, key, { encoding: "utf8", mode: 384 });
+  writeFileSync9(temporary, key, { encoding: "utf8", mode: 384 });
   try {
-    renameSync7(temporary, path2);
+    renameSync8(temporary, path2);
   } catch (error) {
-    if (existsSync9(path2)) {
-      const existing = readFileSync9(path2, "utf8").trim();
+    if (existsSync10(path2)) {
+      const existing = readFileSync10(path2, "utf8").trim();
       if (KEY_PATTERN2.test(existing)) return { value: existing, fromEnv: false, path: path2 };
     }
     throw error;
@@ -67264,7 +67436,7 @@ function authorized(request2, key) {
   return typeof value === "string" && value === `Bearer ${key}`;
 }
 function getHome(options) {
-  return options.home ?? options.env?.DSH_HOME ?? process.env.DSH_HOME ?? join9(homedir4(), ".dsh");
+  return options.home ?? options.env?.DSH_HOME ?? process.env.DSH_HOME ?? join10(homedir4(), ".dsh");
 }
 function createOpenAiGateway(options) {
   const env = options.env ?? process.env;
@@ -67770,12 +67942,12 @@ function installLoopResume(ctx) {
 }
 
 // vendor/channel-pack/src/token-ledger-store.ts
-import { existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync10, renameSync as renameSync8, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join10 } from "node:path";
+import { existsSync as existsSync11, mkdirSync as mkdirSync9, readFileSync as readFileSync11, renameSync as renameSync9, writeFileSync as writeFileSync10 } from "node:fs";
+import { join as join11 } from "node:path";
 var TOKEN_LEDGER_FILE = "token-ledger.json";
 var TOKEN_LEDGER_DAYS = 90;
 var TOKEN_LEDGER_FLUSH_MS = 2e3;
-var SCHEMA5 = "dsh-codearts-auth/token-ledger/v1";
+var SCHEMA6 = "dsh-codearts-auth/token-ledger/v1";
 function pruneDays(days) {
   const cutoff = Date.now() + 8 * 60 * 60 * 1e3 - TOKEN_LEDGER_DAYS * 24 * 60 * 60 * 1e3;
   const pruned = /* @__PURE__ */ new Map();
@@ -67822,8 +67994,8 @@ var FileLedgerStore = class {
   readFile() {
     const out = /* @__PURE__ */ new Map();
     try {
-      if (!existsSync10(this.path)) return out;
-      const parsed = JSON.parse(readFileSync10(this.path, "utf-8"));
+      if (!existsSync11(this.path)) return out;
+      const parsed = JSON.parse(readFileSync11(this.path, "utf-8"));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return out;
       const record = parsed;
       if (typeof record.days !== "object" || record.days === null || Array.isArray(record.days)) return out;
@@ -67914,7 +68086,7 @@ var FileLedgerStore = class {
    */
   flush() {
     try {
-      mkdirSync8(join10(this.path, ".."), { recursive: true });
+      mkdirSync9(join11(this.path, ".."), { recursive: true });
       const merged = this.readFile();
       let hasDelta = false;
       for (const [day, buckets] of this.days) {
@@ -67942,8 +68114,8 @@ var FileLedgerStore = class {
         days[day] = Object.fromEntries(buckets);
       }
       const tmp = `${this.path}.tmp`;
-      writeFileSync9(tmp, JSON.stringify({ schema: SCHEMA5, days }, null, 2), "utf-8");
-      renameSync8(tmp, this.path);
+      writeFileSync10(tmp, JSON.stringify({ schema: SCHEMA6, days }, null, 2), "utf-8");
+      renameSync9(tmp, this.path);
       this.written = cloneDays(this.days);
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u5199\u5165 ${this.path} \u5931\u8D25\uFF08\u672C\u6B21\u7EDF\u8BA1\u4E0D\u5165\u76D8\uFF09: ${String(error)}`);
@@ -68003,7 +68175,7 @@ function createTokenLedgerStore(ctx) {
     ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0CToken \u7528\u91CF\u5386\u53F2\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     return new MemoryLedgerStore();
   }
-  return new FileLedgerStore(join10(home, "channel-pack", TOKEN_LEDGER_FILE), ctx.logger);
+  return new FileLedgerStore(join11(home, "channel-pack", TOKEN_LEDGER_FILE), ctx.logger);
 }
 
 // vendor/channel-pack/src/buddy-balance-selector.ts
@@ -70051,8 +70223,8 @@ var GeminiAuth = class extends Service11 {
 
 // vendor/channel-pack/src/gemini-sigstore.ts
 import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync9, readFileSync as readFileSync11, renameSync as renameSync9, writeFileSync as writeFileSync10 } from "node:fs";
-import { dirname as dirname2, join as join11 } from "node:path";
+import { existsSync as existsSync12, mkdirSync as mkdirSync10, readFileSync as readFileSync12, renameSync as renameSync10, writeFileSync as writeFileSync11 } from "node:fs";
+import { dirname as dirname2, join as join12 } from "node:path";
 var GEMINI_SIG_FILE = "gemini-sigs.json";
 var GEMINI_SIG_MAX_ENTRIES = 2e3;
 var SIG_KEY_BODY_LIMIT = 512;
@@ -70163,10 +70335,10 @@ var GeminiSigStore = class {
       2
     );
     try {
-      mkdirSync9(dirname2(this.path), { recursive: true });
+      mkdirSync10(dirname2(this.path), { recursive: true });
       const tmp = `${this.path}.tmp`;
-      writeFileSync10(tmp, payload, "utf-8");
-      renameSync9(tmp, this.path);
+      writeFileSync11(tmp, payload, "utf-8");
+      renameSync10(tmp, this.path);
     } catch (error) {
       this.logger?.warn(`[gemini] \u7B7E\u540D\u7F13\u5B58\u5199\u5165\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u63A8\u7406\uFF09: ${String(error)}`);
     }
@@ -70176,8 +70348,8 @@ var GeminiSigStore = class {
     const out = /* @__PURE__ */ new Map();
     if (this.path === void 0) return out;
     try {
-      if (!existsSync11(this.path)) return out;
-      const parsed = JSON.parse(readFileSync11(this.path, "utf-8"));
+      if (!existsSync12(this.path)) return out;
+      const parsed = JSON.parse(readFileSync12(this.path, "utf-8"));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return out;
       for (const [key, value] of Object.entries(parsed)) {
         if (typeof value !== "object" || value === null) continue;
@@ -70201,7 +70373,7 @@ function createGeminiSigStore(ctx) {
     ctx.logger?.warn?.("[gemini] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u7B7E\u540D\u7F13\u5B58\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D\uFF08\u547D\u4E2D\u7387\u4F1A\u5728\u91CD\u542F\u540E\u5F52\u96F6\uFF09");
     return new GeminiSigStore(void 0, ctx.logger);
   }
-  return new GeminiSigStore(join11(home, "channel-pack", GEMINI_SIG_FILE), ctx.logger);
+  return new GeminiSigStore(join12(home, "channel-pack", GEMINI_SIG_FILE), ctx.logger);
 }
 
 // vendor/channel-pack/src/opencode-adapter.ts
@@ -70429,9 +70601,9 @@ function buildOpencodePayloadWithToolMap(input) {
 
 // vendor/channel-pack/src/opencode-capability.ts
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { readFileSync as readFileSync12 } from "node:fs";
+import { readFileSync as readFileSync13 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 var MEASURED_IMAGE_OVERRIDES = {
   // 实测 2026-10-02：models.dev 标 `modalities.input: ["text"]`，
   // 但 1×1 PNG 的多模态请求真实返回 200（big-pickle 是最常用的免费模型）。
@@ -70491,8 +70663,8 @@ function normalizeEntry(id, raw) {
   };
 }
 function cacheFilePath() {
-  const home = process.env.DSH_HOME?.trim() || join12(homedir5(), ".dsh");
-  return join12(home, "cache", "opencode-capabilities.json");
+  const home = process.env.DSH_HOME?.trim() || join13(homedir5(), ".dsh");
+  return join13(home, "cache", "opencode-capabilities.json");
 }
 var memory = [];
 var cacheFileAt = 0;
@@ -70515,7 +70687,7 @@ function loadDiskCacheSync() {
   if (diskLoaded) return;
   diskLoaded = true;
   try {
-    const raw = readFileSync12(cacheFilePath(), "utf8");
+    const raw = readFileSync13(cacheFilePath(), "utf8");
     const parsed = JSON.parse(raw);
     if (parsed?.version === 3 && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
       memory = parsed.entries;
@@ -70527,7 +70699,7 @@ function loadDiskCacheSync() {
 async function writeDiskCache(entries) {
   try {
     const path2 = cacheFilePath();
-    await mkdir(join12(path2, ".."), { recursive: true });
+    await mkdir(join13(path2, ".."), { recursive: true });
     const payload = { version: 3, at: Date.now(), entries };
     await writeFile(path2, JSON.stringify(payload), "utf8");
   } catch {
@@ -71511,9 +71683,10 @@ function apply(ctx, config = {}) {
     }).map((a) => ({ id: a.id, credentialRef: a.credentialRef }));
     if (candidates.length > 0) {
       const locked = pool.permanentLocked(RACCOON.id);
+      const longTermFirst = pool.longTermPreferred(RACCOON.id);
       let sawUsable = false;
       for (let remaining = candidates; remaining.length > 0; ) {
-        const picked = await raccoonBalanceSelector.select(remaining, { locked });
+        const picked = await raccoonBalanceSelector.select(remaining, { locked, longTermFirst });
         if (!picked.ok) {
           if (!locked || sawUsable) break;
           if (picked.reason.kind === "unknown") {
@@ -71591,7 +71764,8 @@ function apply(ctx, config = {}) {
       }).map((account) => ({ id: account.id, credentialRef: account.credentialRef }));
       if (candidates.length === 0) return void 0;
       const locked = pool.permanentLocked(RACCOON.id);
-      const picked = await raccoonBalanceSelector.select(candidates, { locked });
+      const longTermFirst = pool.longTermPreferred(RACCOON.id);
+      const picked = await raccoonBalanceSelector.select(candidates, { locked, longTermFirst });
       if (!picked.ok) return void 0;
       const credential = await resolveRaccoonCredentialByRef(picked.account.credentialRef);
       if (credential === void 0) return void 0;

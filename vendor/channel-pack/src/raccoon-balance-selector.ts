@@ -134,12 +134,21 @@ interface CacheEntry {
  * ⚠️ 只影响**长期档**内部的顺序；每日档内永远是手动顺序（有每日额度时
  * 谁先谁后由拖拽决定，与余额多少无关 —— 每日额度人人一样多，按余额排
  * 没有意义）。查询失败的号永远排最后。
+ *
+ * ## `longTermFirst`（长期档的优先账号，用户手动指定）
+ *
+ * 每日额度用尽后，先烧**指定账号**的长期积分，其余账号按 `longTermOrder`
+ * （默认手动顺序）排列 —— 优先级高于 `longTermOrder`。只改档 1 内部顺序：
+ * 该号还有每日积分时照走每日档（用户指定的是「烧长期的顺序」，不是
+ * 「优先使用这个号」）；id 不在候选里（已删/停用）则自然失效，安全回退。
  */
 export interface RaccoonRankOptions {
   /** 是否锁定长期积分（锁定时只剩长期积分的账号不可用）。 */
   locked?: boolean
-  /** 长期档内的排序：手动顺序（默认）或按长期余额降序。 */
+  /** 长期档内的排序：手动顺序（默认）或按长期余额降序。低于 {@link longTermFirst}。 */
   longTermOrder?: 'manual' | 'descending'
+  /** 长期积分优先账号 id：排在长期档最前；不影响档位判定与每日档。 */
+  longTermFirst?: string
 }
 export class RaccoonBalanceSelector {
   private readonly cache = new Map<string, CacheEntry>()
@@ -232,6 +241,9 @@ export class RaccoonBalanceSelector {
     }
     const locked = options.locked === true
     const descending = options.longTermOrder === 'descending'
+    // 用户手动指定的优先账号（见 RaccoonRankOptions.longTermFirst）：
+    // 只在长期档内生效 —— 比较器只在双方都处于档 1 时给出倾向。
+    const first = typeof options.longTermFirst === 'string' ? options.longTermFirst : undefined
     return candidates
       .map((account, index) => ({
         account,
@@ -243,6 +255,12 @@ export class RaccoonBalanceSelector {
       // 无法确认，选中它可能照样烧长期积分（与 Loomy 锁定态同判）。
       .filter(row => !locked || row.tier === 0)
       .sort((a, b) => (a.tier - b.tier)
+        // 长期档 + 指定优先账号：该账号排在档 1 最前（优先于 descending ——
+        // 显式的用户意图强于任何自动排序）。不在候选里则两个比较项都不命中，
+        // 自然回退。
+        || (a.tier === 1 && first !== undefined
+          ? (a.account.id === first ? -1 : b.account.id === first ? 1 : 0)
+          : 0)
         // 长期档 + descending：按长期余额从多到少；并列回退手动顺序。
         || (a.tier === 1 && descending ? b.total - a.total : 0)
         || (a.index - b.index))
