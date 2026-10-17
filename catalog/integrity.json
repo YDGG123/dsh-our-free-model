@@ -139,8 +139,8 @@
     },
     {
       "path": "src/feed.js",
-      "size": 13444,
-      "sha256": "eba7a82e22534d91eae3291e3ac8176366bac5871591fd385b5665c2697474ff"
+      "size": 13366,
+      "sha256": "06cbe31d895d7f9dd6b39f9a4992b9d495ad50acd3fb772fec0799694d3c9519"
     },
     {
       "path": "src/forward.js",
@@ -344,8 +344,8 @@
     },
     {
       "path": "src/updater.js",
-      "size": 51581,
-      "sha256": "eac300a72117cda034e6361b6b4e5f4ed1344063ad158fec4ede1807e8a3e611"
+      "size": 51508,
+      "sha256": "f6a07014e1a2edc893265f64b9fd586fecd1a14e8af6a703f0558817a34670dc"
     },
     {
       "path": "src/upstream.js",

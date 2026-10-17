@@ -46,7 +46,6 @@ export const DEFAULT_FEED_SOURCES = [
   // return the same bytes; the cache-buster below keeps a proxy's edge from
   // serving a stale copy.
   `https://gh-proxy.com/https://raw.githubusercontent.com/${REPO}/main/feed/announcements.json`,
-  `https://raw.githubusercontent.com/${REPO}/master/feed/announcements.json`,
 ]
 
 /** jsDelivr's edge caches per full URL; a minute-stamp keeps every poll fresh. */

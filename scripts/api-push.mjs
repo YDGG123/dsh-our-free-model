@@ -94,7 +94,12 @@ async function api(method, endpoint, body) {
  */
 function commitsToPush(baseTree) {
   const all = git('rev-list', '--reverse', 'HEAD').split('\n').filter(Boolean)
-  return all.filter(sha => commitInfo(sha).tree !== baseTree)
+  // Stop as soon as we reach a commit whose tree matches the remote's tree:
+  // everything at or before it is already on the remote (the remote commit may
+  // be a different SHA for the same content, because this machine cannot fetch
+  // it and had to rebuild it from the API).
+  const cut = all.findIndex(sha => commitInfo(sha).tree === baseTree)
+  return cut === -1 ? all : all.slice(cut + 1)
 }
 
 /** Parent SHAs of a commit, in order. */
@@ -189,7 +194,15 @@ async function buildTree(commitSha, baseTree) {
 }
 
 async function main() {
-  const commits = commitsToPush()
+  // 先取远端树的 SHA 作为"已存在"的判据
+  let remoteTree
+  try {
+    const remoteCommit = await api('GET', `/git/commits/${remoteSha}`)
+    remoteTree = remoteCommit.tree.sha
+  } catch (error) {
+    throw new Error(`无法读取远端基线 ${remoteSha.slice(0, 7)}：${error.message}`)
+  }
+  const commits = commitsToPush(remoteTree)
   console.log(`api-push: 待推送 ${commits.length} 个提交 -> ${OWNER}/${REPO}@${branch}`)
   if (dryRun) {
     for (const sha of commits) console.log(`  ${sha.slice(0, 7)} ${git('log', '-1', '--format=%s', sha).trim()}`)

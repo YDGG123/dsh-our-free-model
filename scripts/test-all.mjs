@@ -59,7 +59,6 @@ const suites = [
   ['channel-login', 'channel-login-test.mjs', []],
   ['open-external', 'open-external-test.mjs', []],
   ['channel-image-pricing', 'channel-image-pricing-test.mjs', []],
->>>>>>> upstream-real
   ['forward-boot', 'forward-boot-test.mjs', []],
   ['standalone', 'standalone-test.mjs', []],
   ['desktop', 'desktop-test.mjs', []],
