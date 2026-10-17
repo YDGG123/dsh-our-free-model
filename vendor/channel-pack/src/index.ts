@@ -18,6 +18,7 @@ import { TraeAuth } from './trae-auth.js'
 import { ClineAuth } from './cline-auth.js'
 import { LoomyAuth } from './loomy-auth.js'
 import { RaccoonAuth } from './raccoon-auth.js'
+import { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
 import { LOOMY } from './loomy-product.js'
 import { LoomyBalanceSelector } from './loomy-balance-selector.js'
 import { RACCOON } from './raccoon-product.js'
@@ -75,6 +76,9 @@ import { primeOpencodeCapabilities, refreshOpencodeCapabilities } from './openco
 import { closeAllProxyDispatchers } from './opencode-proxy.js'
 import { createChannelFetch, type ChannelOutlet } from './channel-fetch.js'
 export { createChannelFetch, parseWindowsProxy, channelProxyBypassed } from './channel-fetch.js'
+// 供离线套件（scripts/raccoon-balance-test.mjs）直接注入依赖做单测：
+// 依赖（fetch/now/TTL）在构造参数里，正是为此设计的注入缝。
+export { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
 import { execFile } from 'node:child_process'
 
 /**
@@ -1131,6 +1135,121 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // 服务名由 RaccoonAuth 依 product.id 派生，注册为 ctx.raccoonAuth。
   // 不注册斜杠命令：入口在 Channel Pack 的 Raccoon 面板。
   const raccoon = new RaccoonAuth(ctx)
+
+  // 与 Loomy 同型的按凭据 ref 解析（选号器查余额与最终解析共用，两处不各写一遍）。
+  const resolveRaccoonCredentialByRef = async (refName: string): Promise<RaccoonCredential | undefined> => {
+    const resolved = await ctx.credentials.resolve(credentialRef(refName))
+    if (!resolved) return undefined
+    try {
+      return JSON.parse(resolved.value) as RaccoonCredential
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Raccoon 的**按余额优先选号器**（与 Loomy 同型，见 `raccoon-balance-selector.ts`）。
+   *
+   * ⚠️ **为什么需要它**：Raccoon 的每日积分（每天自动发放）耗尽后服务端
+   * 继续扣长期积分且不报错 —— 「耗尽」是静默降级而非错误，限流→换号
+   * 机制对此无效：手动顺序第一位的号会一直烧长期积分，第二个号的每日
+   * 额度原封不动地浪费。
+   *
+   * 策略：优先有每日积分的号 → 其次有长期积分（奖励/会员/充值）的号 →
+   * 都无/查不到排最后。档内保持手动拖拽顺序。
+   */
+  const raccoonBalanceSelector = new RaccoonBalanceSelector({
+    product: RACCOON,
+    resolveCredential: resolveRaccoonCredentialByRef,
+  })
+
+  /**
+   * 余额优先选一个 Raccoon 账号并解析其凭据。
+   *
+   * `resolveCredential`（发消息）与 `refresh`（401/403 续期）**必须共用同一
+   * 选号函数**：否则选号挑了 B 而续期刷新了 A（手动顺序第一位），用户会看到
+   * 「刚续期却一直认证失败」—— 既有接线的注释明确警告过这个错位。
+   *
+   * @param modelId 透传给限流过滤（空串 = 不过滤，与 `getAvailableAccount` 一致）。
+   * @param invalidate 选中后是否作废该号的余额缓存。发消息路径传 `true`
+   *   （下一次选号立即重查，每日→长期的边界只漏一个请求的量）；
+   *   refresh 路径传 `false`（保持与刚才那次选号同一份缓存排序，避免错位）。
+   */
+  const pickRaccoonAccount = async (
+    modelId: string,
+    invalidate: boolean,
+  ): Promise<{ pool: boolean; id: string; credentialRef: string; credential: RaccoonCredential } | undefined> => {
+    const candidates = pool
+      .listAccountsByProvider(RACCOON.id)
+      .filter(a => a.enabled)
+      .filter((a) => {
+        // 与 `getAvailableAccount` 的限流判据保持一致（空 modelId = 不过滤）。
+        if (modelId.length === 0) return true
+        if (!a.modelRateLimits) return true
+        const resetAt = a.modelRateLimits[modelId]
+        return resetAt === undefined || resetAt === 0 || Date.now() >= resetAt
+      })
+      .map(a => ({ id: a.id, credentialRef: a.credentialRef }))
+
+    if (candidates.length > 0) {
+      // 「锁定长期积分」：RACCOON 在 PERMANENT_LOCK_PROVIDERS 白名单里，
+      // 开关按 provider 持久化（`permanent-locks.json`）。锁定后只剩长期积分
+      // 的账号不参与选号（见 raccoon-balance-selector 的 rank 语义）。
+      const locked = pool.permanentLocked(RACCOON.id)
+      let sawUsable = false
+      for (let remaining = candidates; remaining.length > 0;) {
+        const picked = await raccoonBalanceSelector.select(remaining, { locked })
+        if (!picked.ok) {
+          // 解锁态 rank 永远返回全部候选（即使余额全 0 —— 让上游去报余额
+          // 不足），ok:false 只在锁定时出现；这里再防御一层，非锁定按既有
+          // 行为返回 undefined 落到单凭据兜底。
+          if (!locked || sawUsable) break
+          // ⚠️ **锁定时绝不可落到下面的单凭据兜底** —— 那会绕过锁定、照样
+          // 消耗长期积分，锁定形同虚设。抛明确错误（与 Loomy 同约定）。
+          //
+          // ⚠️ **必须区分「真的用尽」与「查不到」**（Loomy 2026-09-29 报障
+          // 的同型教训）：一次网络抖动不该被当成"额度用尽"，用户会去解锁、
+          // 白等一天，而号其实还有每日积分。
+          if (picked.reason.kind === 'unknown') {
+            throw new Error(
+              'Raccoon：无法确认是否有可用账号。已锁定长期积分，而部分账号的余额查询失败'
+              + `（${picked.reason.errors.slice(0, 2).join('；')}）。这些账号**可能仍有**每日积分 —— `
+              + '请重试，或在 Channel Pack 的 Raccoon 面板检查凭据是否失效。',
+            )
+          }
+          throw new Error(
+            'Raccoon：没有可用账号。已锁定长期积分，而所有账号的每日积分都已用尽。'
+            + '请在 Channel Pack 的 Raccoon 面板解锁长期积分，或等待明日额度刷新。',
+          )
+        }
+        sawUsable = true
+        // 排序只保证「有余额的在前」；凭据损坏/未配置时换下一个候选
+        // （与 `pickBuddyAccount` 的既有语义一致）。
+        const credential = await resolveRaccoonCredentialByRef(picked.account.credentialRef)
+        if (credential !== undefined) {
+          if (invalidate) raccoonBalanceSelector.invalidate(picked.account.id)
+          return { pool: true, id: picked.account.id, credentialRef: picked.account.credentialRef, credential }
+        }
+        remaining = remaining.filter(c => c.id !== picked.account.id)
+      }
+      return undefined
+    }
+
+    // 账号池为空 / 全部不可解析：回退到单凭据 ref（既有行为）。
+    const resolved = await ctx.credentials.resolve(credentialRef(RACCOON.defaultCredentialRef))
+    if (!resolved) return undefined
+    try {
+      return {
+        pool: false,
+        id: RACCOON.defaultCredentialRef,
+        credentialRef: RACCOON.defaultCredentialRef,
+        credential: JSON.parse(resolved.value) as RaccoonCredential,
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   const raccoonAdapter = registerRaccoonLlm(ctx, {
     credentialRef: credentialRef(RACCOON.defaultCredentialRef),
     resolveCredential: async (modelId?: string) => {
@@ -1139,15 +1258,17 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       // provider 实参用 RACCOON.id 而非字面量：写死字面量在改名/多产品场景下
       // 会静默查不到账号（本插件在 workbuddy 上踩过同类坑）。
       // ⚠️ `modelId` 透传：否则模型级限流标记被忽略（详见 buddy 处说明）。
-      const available = await pool.getAvailableAccount(RACCOON.id, modelId ?? '')
-      // `getAvailableAccount` 的凭据类型是 `CodeArtsCredential | BuddyCredential`
-      // 联合（历史遗留），与 `RaccoonCredential` 无充分重叠，故经 `unknown` 转换。
-      // 运行时安全性由 provider 过滤保证：查询用 `RACCOON.id`，取到的必是 raccoon 凭据。
-      if (available) {
+      // ⚠️ **按余额优先选号**（每日积分先用完，再落长期积分）—— 与
+      // `getAvailableAccount` 的纯手动顺序不同，详见 `pickRaccoonAccount`。
+      const picked = await pickRaccoonAccount(modelId ?? '', true)
+      if (picked) {
         // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
-        reportLedgerAccount(RACCOON.id, available.entry.id)
-        return available.credential as unknown as RaccoonCredential
+        reportLedgerAccount(RACCOON.id, picked.id)
+        return picked.credential
       }
+      // 上游新增：候选全被限流时给出明确错误，而不是静默返回 undefined。
+      // 放在余额选号**之后** —— 余额选号返回 undefined 只可能是凭据都坏了，
+      // 此时若恰好也全被限流，这条错误比"没有可用凭据"更准确。
       throwIfAllAccountsRateLimited(RACCOON, modelId)
       const resolved = await ctx.credentials.resolve(credentialRef(RACCOON.defaultCredentialRef))
       if (!resolved) return undefined
@@ -1158,20 +1279,48 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       }
     },
     refresh: async (accountId?: string) => {
-      const entry = accountId === undefined ? undefined
-        : pool.listAccountsByProvider(RACCOON.id).find(account => account.id === accountId)
-      if (accountId !== undefined && entry === undefined) throw new Error('raccoon: account no longer exists')
-      if (entry) await raccoon.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-      else await raccoon.refresh()
-      const resolved = await ctx.credentials.resolve(credentialRef(entry?.credentialRef ?? RACCOON.defaultCredentialRef))
+      // 上游把 refresh 改成「按 accountId 精确续期并回传新凭据」，比按选号
+      // 重挑更稳：重挑可能选中另一个号，于是续期了 A、请求用的是 B。
+      // ⚠️ 与余额选号的关系：accountId 由适配器给出（它记得本次请求用的是
+      // 哪个号），这里**优先按它精确续期**；只有没给 accountId 时才回到
+      // `pickRaccoonAccount`，保持本 fork 的余额优先语义。
+      if (accountId === undefined) {
+        const picked = await pickRaccoonAccount('', false)
+        if (picked && picked.pool) {
+          await raccoon.refreshAccountCredential(picked.credentialRef, pool, picked.id)
+          return picked.credential
+        }
+        await raccoon.refresh()
+        return undefined
+      }
+      const entry = pool.listAccountsByProvider(RACCOON.id).find(account => account.id === accountId)
+      if (entry === undefined) throw new Error('raccoon: account no longer exists')
+      await raccoon.refreshAccountCredential(entry.credentialRef, pool, entry.id)
+      const resolved = await ctx.credentials.resolve(credentialRef(entry.credentialRef))
       if (!resolved) throw new Error('raccoon: credential no longer exists')
       return JSON.parse(resolved.value) as RaccoonCredential
     },
     nextAccount: async (modelId, tried) => {
-      const next = await pool.getAvailableAccount(RACCOON.id, modelId, tried)
-      if (!next) return undefined
-      reportLedgerAccount(RACCOON.id, next.entry.id)
-      return { accountId: next.entry.id, credential: next.credential as unknown as RaccoonCredential }
+      // 换号同样走余额优先：排除本轮已试过的号后重新选，而不是退回手动顺序。
+      const candidates = pool
+        .listAccountsByProvider(RACCOON.id)
+        .filter(account => account.enabled && !tried.has(account.id))
+        .filter((account) => {
+          if (modelId.length === 0) return true
+          if (!account.modelRateLimits) return true
+          const resetAt = account.modelRateLimits[modelId]
+          return resetAt === undefined || resetAt === 0 || Date.now() >= resetAt
+        })
+        .map(account => ({ id: account.id, credentialRef: account.credentialRef }))
+      if (candidates.length === 0) return undefined
+      const locked = pool.permanentLocked(RACCOON.id)
+      const picked = await raccoonBalanceSelector.select(candidates, { locked })
+      if (!picked.ok) return undefined
+      const credential = await resolveRaccoonCredentialByRef(picked.account.credentialRef)
+      if (credential === undefined) return undefined
+      raccoonBalanceSelector.invalidate(picked.account.id)
+      reportLedgerAccount(RACCOON.id, picked.account.id)
+      return { accountId: picked.account.id, credential }
     },
     // 远端模型目录：委托给 RaccoonAuth.fetchModels（它负责 Bearer 头与
     // visible 过滤 + raccoonDisplayName 生成含倍率的展示名）。

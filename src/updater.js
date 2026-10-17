@@ -29,7 +29,34 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
-const REPO = 'Ebony-Vinyl/dsh-our-free-model'
+/**
+ * The repository this build takes its updates from.
+ *
+ * ⚠️ **This is a fork, not the upstream project.** The upstream plugin checks
+ * `Ebony-Vinyl/dsh-our-free-model`; this build deliberately does not. Two
+ * independent reasons, either of which alone would be sufficient:
+ *
+ * 1. **The upstream release would overwrite the fork's own code.** An upgrade
+ *    replaces the shipped files wholesale, so applying upstream's 2.5.x would
+ *    silently delete the custom features (Raccoon balance selection, the live
+ *    star counts) that this fork exists to carry.
+ * 2. **The signature would not verify anyway.** This build pins its own
+ *    Ed25519 key below; upstream signs with a key whose private half the fork
+ *    does not (and must not) hold. Pointing at upstream therefore yields a
+ *    manifest this plugin rejects — an upgrade path that always fails, with a
+ *    confusing error, instead of one that never runs.
+ *
+ * Override at run time with `OFM_REPO` (e.g. a staging fork or a local mirror)
+ * without editing code. The default is the fork's own repository.
+ */
+const REPO = process.env.OFM_REPO ?? 'YDGG123/dsh-our-free-model'
+
+/**
+ * A GitHub raw proxy. On networks where `raw.githubusercontent.com` and
+ * `cdn.jsdelivr.net` are slow or intermittently unreachable (measured
+ * 2026-10-17 from a mainland-CN link: raw took 16.6 s and frequently timed out
+ * against the 15 s budget, jsDelivr answered in ~11 s but also dropped runs),
+ * this proxy answered the same bytes in ~1.3 s. It is a *transport* for the
 
 /**
  * A GitHub raw proxy. On networks where `raw.githubusercontent.com` and
@@ -73,8 +100,21 @@ export const DEFAULT_MANIFEST_SOURCES = [
  * The sha256 per file pins content, but those hashes travel inside the manifest
  * itself — whoever forges the manifest forges the hashes. This key is the step
  * the forger cannot take.
+ *
+ * ⚠️ **Fork trust root.** This is the fork's own key, generated for
+ * `YDGG123/dsh-our-free-model`; it is *not* upstream's. The private half lives
+ * only in the fork's GitHub Actions secret `RELEASE_MANIFEST_PRIVATE_KEY`
+ * (consumed by `.github/workflows/prepare-release.yml`), never in the tree.
+ * Consequences that are easy to get wrong:
+ *
+ * - A manifest signed by upstream's key does **not** verify here, and vice
+ *   versa. That is intended: the two release channels are separate.
+ * - Losing the private key means this fork can no longer publish an *installable*
+ *   upgrade. Rotating it is possible (replace this constant in a new build and
+ *   ship that build by hand), but it cannot be rotated *through the updater* —
+ *   the old build only trusts the old key.
  */
-export const PINNED_MANIFEST_PUBLIC_KEY = 'MCowBQYDK2VwAyEAeLdSVwYFyazc2PIBC0oLsvo4LghGEQz9iXIl3CqRuXI='
+export const PINNED_MANIFEST_PUBLIC_KEY = 'MCowBQYDK2VwAyEAdGHv5VxedVXfF0Hx8xqNKhVcq5KPObL/YzAU3lv3fEg='
 
 /** The manifest fields a signature covers, in canonical (sorted-key) JSON. */
 const SIGNED_FIELDS = ['version', 'base', 'publishedAt', 'notes', 'files', 'minSupported']
