@@ -541,6 +541,16 @@ export interface CreditsEndpointDeps<
   /** 单账号异常时的告警出口（不参与控制流）。 */
   warn?: (message: string) => void
   /**
+   * 每日积分消耗账本的采样钩子（可选）。
+   *
+   * 每查到一份**有效**的 `CreditBalance` 就调用一次：packages 的池名 → 剩余
+   * 由 `credit-usage-ledger` 与上次基线求差。首次见到账号只建基线。
+   * 回调**不得抛错**（内部已吞）；本钩子只在面板/看板查余额的路径上触发，
+   * 采样频率与用户打开面板的频率一致 —— 与选号路径的采样（每请求一次）
+   * 互补，两边都走同一个账本，重复采样无害（差值合并，总量守恒）。
+   */
+  onBalanceSample?: (accountId: string, balances: Record<string, number>) => void
+  /**
    * 领取前是否先查一次签到状态（默认 `true`）。
    *
    * CodeBuddy 系拆成「查状态 + 领取」两个独立端点，先查可以省掉一次无效的
@@ -757,6 +767,17 @@ export async function collectCreditBalances<TCredential = BuddyCredential, TProd
       deps.warn?.(`[channel-pack] credits.balances 账号 ${entry.id} 失败: ${String(caught)}`)
       error = caught instanceof Error ? caught.message : String(caught)
       balance = null
+    }
+    // 积分消耗账本采样：只在「拿到了真实余额」时调用。池名 → 剩余的映射
+    // 就是 packages 本身；回调内部吞异常，这里不再包一层。
+    if (balance !== null && deps.onBalanceSample !== undefined) {
+      const balances: Record<string, number> = {}
+      for (const pkg of balance.packages) {
+        if (pkg.active === true && typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)) {
+          balances[pkg.name] = pkg.remaining
+        }
+      }
+      if (Object.keys(balances).length > 0) deps.onBalanceSample(entry.id, balances)
     }
     results.push({
       accountId: entry.id,
@@ -3054,6 +3075,7 @@ function registerChannelPackEndpoints(
           // 误导性的「余额查询失败」。
           const values = await collectCreditBalances<CodeArtsCredential, undefined>(accounts, undefined, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample('codearts', accountId, balances),
             fetchBalanceDetailed: async (credential) => {
               // 用带原因的版本：`fetchCodeArtsAccountInfo` 只回 null，会把
               // 「AK 限流」「签名失败」「凭据过期」压成同一句笼统文案，
@@ -3082,6 +3104,7 @@ function registerChannelPackEndpoints(
         if (req.provider === LOBSTERAI.id) {
           const values = await collectCreditBalances(accounts, LOBSTERAI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample('lobsterai', accountId, balances),
             fetchBalance: (credential, product) => fetchLobsteraiCreditBalance(credential, product),
             warn: (msg) => ctx.logger?.warn?.(msg),
           })
@@ -3124,6 +3147,17 @@ function registerChannelPackEndpoints(
               continue
             }
             const balance = await fetchQoderCreditBalance(credential, product)
+            // 积分消耗账本采样（与 collectCreditBalances 的钩子同款：只在拿到
+            // 真实余额时调用，内部吞异常）。
+            if (balance !== null) {
+              const balances: Record<string, number> = {}
+              for (const pkg of balance.packages) {
+                if (pkg.active === true && typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)) {
+                  balances[pkg.name] = pkg.remaining
+                }
+              }
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(QODER.id, account.id, balances)
+            }
             values.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -3199,6 +3233,7 @@ function registerChannelPackEndpoints(
         if (req.provider === TRAE.id) {
           const values = await collectCreditBalances(accounts, TRAE, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample('trae', accountId, balances),
             fetchBalance: (credential, product) => fetchTraeCreditBalance(credential as TraeCredential, product),
             warn: (msg) => ctx.logger?.warn?.(msg),
           })
@@ -3227,6 +3262,7 @@ function registerChannelPackEndpoints(
           //（本机实测 `total_count: 0` 且 `details` 缺失正是「真的为 0」）。
           const values = await collectCreditBalances<MinimaxCredential, undefined>(accounts, undefined, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample('minimax', accountId, balances),
             fetchBalance: (credential) => fetchMinimaxCreditBalance(credential),
             warn: (msg) => ctx.logger?.warn?.(msg),
           })
@@ -3255,6 +3291,7 @@ function registerChannelPackEndpoints(
           // 档位取不到时 `extra` 缺席，面板不渲染那一行（**不是错误**）。
           const values = await collectCreditBalances<GeminiCredential, typeof GEMINI>(accounts, GEMINI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample('gemini', accountId, balances),
             fetchBalanceDetailed: async (credential) => {
               const { balance, error, tier } = await fetchGeminiCreditBalance(credential, GEMINI, { force: req.force === true })
               const extra: RpcCreditsBalanceExtra | undefined = tier === undefined
@@ -3299,6 +3336,15 @@ function registerChannelPackEndpoints(
               continue
             }
             const result = await fetchClineCreditBalance(credential, CLINE)
+            if (result.balance !== null) {
+              const balances: Record<string, number> = {}
+              for (const pkg of result.balance.packages) {
+                if (pkg.active === true && typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)) {
+                  balances[pkg.name] = pkg.remaining
+                }
+              }
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(CLINE.id, account.id, balances)
+            }
             values.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -3427,6 +3473,7 @@ function registerChannelPackEndpoints(
               })
               continue
             }
+            const balance_sample = buildZcodeBalance(result)
             values.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -3449,8 +3496,20 @@ function registerChannelPackEndpoints(
                * 且用户要看的恰恰是「GLM-5.3 与 GLM-5.3-Flash 各自剩多少」，
                * 前端需要按模型逐行渲染、缺桶的模型显示占位。
                */
-              balance: buildZcodeBalance(result),
+              balance: balance_sample,
             })
+            // 积分消耗账本采样。⚠️ ZCode 的量纲是 **token 额度**不是积分 ——
+            // 仍如实按桶名记账（差值=token 数），面板「按积分池拆分」里看到
+            // 的是各模型的 token 池。混排由展示层负责说明。
+            if (balance_sample !== null) {
+              const balances: Record<string, number> = {}
+              for (const pkg of balance_sample.packages) {
+                if (pkg.active === true && typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)) {
+                  balances[pkg.name] = pkg.remaining
+                }
+              }
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(ZCODE.id, account.id, balances)
+            }
           }
           return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
         }
@@ -3460,6 +3519,7 @@ function registerChannelPackEndpoints(
         }
         const values = await collectCreditBalances(accounts, product, {
           resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample(product.id, accountId, balances),
           warn: (msg) => ctx.logger?.warn?.(msg),
         })
         // ⚠️ 只有 buddy 系会走到这里（`productById` 只认 CodeBuddy / WorkBuddy），
