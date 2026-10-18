@@ -434,6 +434,7 @@ window.__ModuleLoader__.load({
         'chan.confirm.delete': '移除账号 {name}？该账号的凭据会一并删除。',
         'chan.rpc.unavailable': '宿主未提供 connection 服务，渠道操作暂不可用。',
         'nav.tab.ledger': '数据看板',
+        'nav.tab.credits': '积分消耗',
         'nav.tab.logs': '运行日志',
         'nav.tab.gateway': '网关设置',
         'nav.tab.upgrade': '插件升级',
@@ -1135,6 +1136,7 @@ window.__ModuleLoader__.load({
         'chan.confirm.delete': 'Remove account {name}? Its credential is deleted with it.',
         'chan.rpc.unavailable': 'This host exposes no connection service, so channel actions are unavailable.',
         'nav.tab.ledger': 'Dashboard',
+        'nav.tab.credits': 'Credit spend',
         'nav.tab.logs': 'Request log',
         'nav.tab.gateway': 'Gateway',
         'nav.tab.upgrade': 'Plugin upgrade',
@@ -4902,40 +4904,49 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 每日积分消耗区块（积分维度看板）。
+     * 「积分消耗」页：独立 tab，展示本 fork 记账的每日积分详情。
      *
      * 结构：渠道切换 → 今日 KPI（已用/补给）→ 按账号明细（仅单渠道）→
-     * 最近 N 天历史表。
-     *
-     * 数据全部来自 `credits.usage`（本机按余额差值采样后落盘），因此
-     * **没有数据是常态**，用明确空态文案而不是显示 0 —— 0 会被读成
-     * 「今天没花钱」。
+     * 最近 30 天历史表。数据全部来自 `credits.usage`（本机按余额差值采样
+     * 后落盘，跨重启保留），因此**没有数据是常态**（刚装上/刚重启且还没
+     * 发过消息），用明确空态文案而不是显示 0 —— 0 会被读成「今天没花钱」。
      */
-    function CreditUsageSection(props) {
+    function CreditPage(props) {
       const { t } = props
       const [provider, setProvider] = useState('')
       const credit = useCreditUsage({ ...props, provider })
-      if (credit.status === 'unavailable' || credit.status === 'loading') return null
+      if (credit.status === 'unavailable') {
+        return h('div', { className: 'ofm_page' },
+          h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') }),
+          h('div', { className: 'ofm_callout' }, h('div', null, t('chan.rpc.unavailable'))))
+      }
+      if (credit.status === 'loading') {
+        return h('div', { className: 'ofm_page' },
+          h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') }),
+          h('div', { className: 'ofm_chanwrap' }, [0, 1].map(i => h('div', { className: 'ofm_skel', key: i, style: { minHeight: 120 } }))))
+      }
       if (credit.status === 'error') {
-        return h(Section, { title: t('dash.credit.title'), hint: t('dash.credit.hint') },
-          h('p', { className: 'ofm_balanceerror', role: 'alert' },
-            t('chan.credits.failed').replace('{reason}', credit.error)))
+        return h('div', { className: 'ofm_page' },
+          h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') }),
+          h('div', { className: 'ofm_callout' }, h('div', null,
+            t('chan.credits.failed').replace('{reason}', credit.error))))
       }
       const data = credit.data
       const today = data?.today ?? { spent: 0, gained: 0, accounts: 0 }
       const samples = Number(data?.samples ?? 0)
-      // 单渠道视图：按账号明细（多渠道时账号 id 会跨渠道相撞，汇总无意义）。
+      // 单渠道视图才显示按账号明细：多渠道时账号 id 会跨渠道相撞。
       const accounts = provider === '' ? [] : (data?.accounts ?? [])
       const days = data?.days ?? []
       const hasData = Number(today.spent ?? 0) > 0 || days.length > 0 || accounts.length > 0
-      return h(Section, { title: t('dash.credit.title'), hint: t('dash.credit.hint') },
-        h('div', { className: 'ofm_seg', role: 'tablist' },
-          [['', t('dash.credit.allChannels')], ...CREDIT_USAGE_PROVIDERS.map(id => [id, id])].map(([id, label]) => h('button', {
-            key: id || 'all', type: 'button', 'aria-pressed': provider === id ? 'true' : 'false',
-            onClick: () => setProvider(id),
-          }, label))),
-        !hasData
-          ? h('p', { className: 'ofm_note' }, t('dash.credit.noSample'))
+      return h('div', { className: 'ofm_page' },
+        h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') },
+          h('div', { className: 'ofm_seg', role: 'tablist' },
+            [['', t('dash.credit.allChannels')], ...CREDIT_USAGE_PROVIDERS.map(id => [id, id])].map(([id, label]) => h('button', {
+              key: id || 'all', type: 'button', 'aria-pressed': provider === id ? 'true' : 'false',
+              onClick: () => setProvider(id),
+            }, label))),
+          h(Button, { onClick: () => void credit.reload() }, t('dash.refresh'))),
+        !hasData ? h('p', { className: 'ofm_note' }, t('dash.credit.noSample'))
           : h(Fragment, null,
             h('div', { className: 'ofm_kpis' },
               h(KpiCard, {
@@ -4967,7 +4978,6 @@ window.__ModuleLoader__.load({
                   .map(([pool, value]) => `${pool} ${fmtInt(value)}`).join(' · ') || '—'))))))))
     }
 
-
     /** KPI cards: one reading per card, exactly like the gateway consoles. */
     function KpiCard(props) {
       const { label, value, sub, tone } = props
@@ -4980,8 +4990,6 @@ window.__ModuleLoader__.load({
     function LedgerPage(props) {
       const { t, ctx } = props
       const ledger = useLedger(props)
-      // 积分维度与 token 维度并行取数：任一失败都不影响另一个。
-      const credit = useCreditUsage(props)
       const [scope, setScope] = useState('today')
       const loaded = ledger.status === 'ready'
       // 今日 = the pack's live snapshot (its in-memory day tree); 全部 = the
@@ -5029,7 +5037,6 @@ window.__ModuleLoader__.load({
         // 上游只给剩余量，消耗由本机按余额差值采样（见 credit-usage-ledger.ts）。
         // 与 token 看板并列显示：两个维度回答的是不同问题（用了多少模型 vs
         // 扣了多少积分）。
-        loaded ? h(CreditUsageSection, { t, credit }) : null,
         loaded ? h(Section, { title: t('dash.recentTitle'), hint: t('dash.recentHint') },
           entries.length === 0 ? h('p', { className: 'ofm_note' }, t('dash.empty'))
             : h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
@@ -6361,6 +6368,7 @@ window.__ModuleLoader__.load({
         ['saver', t('nav.tab.saver'), null],
         ['routing', t('nav.tab.routing'), data.catalog.filter(m => m.channel === 'combo').length],
         ['ledger', t('nav.tab.ledger'), null],
+        ['credits', t('nav.tab.credits'), null],
         ['logs', t('nav.tab.logs'), null],
         ['gateway', t('nav.tab.gateway'), null],
         ['upgrade', t('nav.tab.upgrade'), null],
@@ -6392,7 +6400,9 @@ window.__ModuleLoader__.load({
               ? h(RoutingPage, { t })
               : tab === 'ledger'
                 ? h(LedgerPage, { t, ctx })
-                : tab === 'logs'
+                : tab === 'credits'
+                  ? h(CreditPage, { t, ctx })
+                  : tab === 'logs'
                   ? h(LogsPage, { t, ctx })
                   : tab === 'gateway'
                     ? h(GatewayPage, { t, ctx })
