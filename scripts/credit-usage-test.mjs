@@ -438,5 +438,36 @@ check('flush 失败只记日志，不影响调用方（记账绝不能反噬选�
   assert.equal(ledger.snapshot('raccoon').today.spent, 100, '内存账本仍可用')
 })
 
+
+check('allSnapshot：遍历实际有数据的渠道并按日合并，无手工清单', () => {
+  const store = fakeStore() // 空盘
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  // 两个渠道各记一笔差值；第三个渠道（loomy）完全无数据 → 不应出现。
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 200 })
+  ledger.record('workbuddy', 'b1', 'B', { '永久积分': 900 })
+  ledger.record('workbuddy', 'b1', 'B', { '永久积分': 400 })
+  const all = ledger.allSnapshot(30)
+  const ids = all.providers.map(entry => entry.provider).sort()
+  assert.deepEqual(ids, ['raccoon', 'workbuddy'], '只有记账过的渠道出现')
+  assert.equal(all.today.spent, 600, '跨渠道按日合并(workbuddy 500 + raccoon 100)')
+  assert.equal(all.samples, 2, '采样数 = 产生差值的 record 次数(首轮建基线不计)')
+  assert.equal(all.days.length, 1, '同一天合一行')
+  assert.equal(all.days[0].accounts, 2, '当日账号数合计')
+})
+
+check('allSnapshot：与磁盘历史合并（重启后仍跨渠道）', () => {
+  const store = fakeStore(withDays('loomy', [{ day: '2026-10-16', spent: 700, gained: 0, accounts: 1 }]))
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), store)
+  // 磁盘里只有 loomy(16 日)；内存里记 raccoon(17 日)。
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 150 })
+  const all = ledger.allSnapshot(30)
+  assert.deepEqual(all.providers.map(e => e.provider).sort(), ['loomy', 'raccoon'], '磁盘渠道也出现')
+  const byDay = new Map(all.days.map(row => [row.day, row.spent]))
+  assert.equal(byDay.get('2026-10-16'), 700, '盘上历史日桶')
+  assert.equal(byDay.get('2026-10-17'), 150, '内存今日桶')
+})
+
 console.log(`credit-usage: ${failures === 0 ? 'all ok' : `${failures} failure(s)`}`)
 process.exitCode = failures > 0 ? 1 : 0
