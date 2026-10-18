@@ -7210,10 +7210,10 @@ var require_simd = __commonJS({
     );
     var textEncoder = new TextEncoder();
     var textDecoder = new TextDecoder();
-    function log(logger2, raw) {
+    function log(logger3, raw) {
       const len = Number(BigInt.asUintN(32, raw));
       const ptr = Number(raw >> 32n);
-      logger2(textDecoder.decode(new Uint8Array(this.memory.buffer, ptr, len)));
+      logger3(textDecoder.decode(new Uint8Array(this.memory.buffer, ptr, len)));
     }
     function alloc(len) {
       return this.alloc(len) >>> 0;
@@ -7799,17 +7799,17 @@ var require_simd = __commonJS({
     }
     function setup(env = {}) {
       let { logger: logOption, ...instanceEnvironment } = env;
-      let logger2 = noop;
+      let logger3 = noop;
       const context = {};
       if (logOption) {
         if (typeof logOption !== "function") {
           logOption = console.log;
         }
-        logger2 = log.bind(context, logOption);
+        logger3 = log.bind(context, logOption);
       }
       const instance = new WebAssembly.Instance(wasmModule, {
         env: {
-          logger: logger2,
+          logger: logger3,
           on_error: noop,
           on_finish: noop,
           on_message_start: noop,
@@ -8142,10 +8142,10 @@ var require_no_simd = __commonJS({
     );
     var textEncoder = new TextEncoder();
     var textDecoder = new TextDecoder();
-    function log(logger2, raw) {
+    function log(logger3, raw) {
       const len = Number(BigInt.asUintN(32, raw));
       const ptr = Number(raw >> 32n);
-      logger2(textDecoder.decode(new Uint8Array(this.memory.buffer, ptr, len)));
+      logger3(textDecoder.decode(new Uint8Array(this.memory.buffer, ptr, len)));
     }
     function alloc(len) {
       return this.alloc(len) >>> 0;
@@ -8731,17 +8731,17 @@ var require_no_simd = __commonJS({
     }
     function setup(env = {}) {
       let { logger: logOption, ...instanceEnvironment } = env;
-      let logger2 = noop;
+      let logger3 = noop;
       const context = {};
       if (logOption) {
         if (typeof logOption !== "function") {
           logOption = console.log;
         }
-        logger2 = log.bind(context, logOption);
+        logger3 = log.bind(context, logOption);
       }
       const instance = new WebAssembly.Instance(wasmModule, {
         env: {
-          logger: logger2,
+          logger: logger3,
           on_error: noop,
           on_finish: noop,
           on_message_start: noop,
@@ -32461,10 +32461,10 @@ function accountFromCredentialRef(ref) {
   };
 }
 var FileStore = class {
-  constructor(home, path2, logger2) {
+  constructor(home, path2, logger3) {
     this.home = home;
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
   }
   home;
   path;
@@ -32588,9 +32588,9 @@ var MemoryLockStore = class {
   }
 };
 var FileLockStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
   }
   path;
   logger;
@@ -32654,9 +32654,9 @@ var MemoryPreferredStore = class {
   }
 };
 var FilePreferredStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
   }
   path;
   logger;
@@ -34655,9 +34655,9 @@ var MemoryDeadModelStore = class {
   }
 };
 var FileDeadModelStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
   }
   path;
   logger;
@@ -34680,21 +34680,21 @@ var FileDeadModelStore = class {
 };
 var store;
 var cache;
-var logger;
+var logger2;
 var injectedCtx;
 function ensureStore() {
   if (store !== void 0) return store;
   const home = resolveChannelPackHome(injectedCtx ?? {});
   if (home === void 0) {
-    logger?.warn("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
+    logger2?.warn("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     store = new MemoryDeadModelStore();
   } else {
-    store = new FileDeadModelStore(join4(home, "channel-pack", DEAD_MODELS_FILE), logger);
+    store = new FileDeadModelStore(join4(home, "channel-pack", DEAD_MODELS_FILE), logger2);
   }
   return store;
 }
 function configureDeadModelStore(ctx) {
-  logger = ctx.logger;
+  logger2 = ctx.logger;
   injectedCtx = ctx;
   if (cache !== void 0 && Object.keys(cache).length > 0 && tryPersist()) {
     store = void 0;
@@ -34707,11 +34707,11 @@ function tryPersist(prunedCount = 0) {
   try {
     ensureStore().save(cache ?? {});
     if (prunedCount > 0) {
-      logger?.warn(`[channel-pack] \u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u6E05\u7406 ${prunedCount} \u6761\uFF08\u8D85\u8FC7 TTL\uFF09`);
+      logger2?.warn(`[channel-pack] \u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u6E05\u7406 ${prunedCount} \u6761\uFF08\u8D85\u8FC7 TTL\uFF09`);
     }
     return true;
   } catch (error) {
-    logger?.warn(`[channel-pack] \u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u5199\u5165\u5931\u8D25: ${String(error)}`);
+    logger2?.warn(`[channel-pack] \u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u5199\u5165\u5931\u8D25: ${String(error)}`);
     return false;
   }
 }
@@ -34753,7 +34753,7 @@ function recordDeadModel(provider, modelId, reason) {
     ...reason === void 0 ? {} : { reason }
   };
   persist();
-  logger?.warn(
+  logger2?.warn(
     `[channel-pack] \u6A21\u578B ${provider}/${modelId} \u5DF2\u88AB\u5224\u4E3A\u5931\u6548\uFF08${reason ?? "model not found"}\uFF09\uFF0C\u6B64\u540E\u4E0D\u518D\u5217\u5165\u6A21\u578B\u5217\u8868`
   );
   return true;
@@ -34778,7 +34778,7 @@ function clearDeadModels(provider, modelId) {
   }
   if (removed > 0) {
     persist();
-    logger?.warn(
+    logger2?.warn(
       `[channel-pack] \u5DF2\u6062\u590D ${removed} \u4E2A\u5931\u6548\u6A21\u578B\uFF08${provider}${modelId === void 0 ? "" : `/${modelId}`}\uFF09\uFF0C\u5B83\u4EEC\u5C06\u91CD\u65B0\u51FA\u73B0\u5728\u6A21\u578B\u5217\u8868\u4E2D`
     );
   }
@@ -52826,10 +52826,22 @@ function utc8DayKey2(ts) {
   return `${shifted.getUTCFullYear()}-${month}-${day}`;
 }
 var CreditUsageLedger = class {
-  constructor(now = Date.now) {
+  constructor(now = Date.now, persistence, flushDebounceMs = 3e4) {
     this.now = now;
+    this.persistence = persistence;
+    this.flushDebounceMs = flushDebounceMs;
+    if (persistence !== void 0) {
+      try {
+        const loaded = persistence.load();
+        if (loaded !== void 0 && loaded !== null) this.persisted = loaded;
+      } catch (error) {
+        this.log(`load failed (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
   }
   now;
+  persistence;
+  flushDebounceMs;
   /** provider → accountId → 各池上次已知余额。 */
   baselines = /* @__PURE__ */ new Map();
   /** 原始采样（用于最近明细）；超出上限时最老的先丢（按日汇总已保留）。 */
@@ -52838,6 +52850,12 @@ var CreditUsageLedger = class {
   days = /* @__PURE__ */ new Map();
   /** provider → 日键 → accountId → 明细。 */
   accountDays = /* @__PURE__ */ new Map();
+  /** 已落盘的文档（增量 flush 的基线；内存态与磁盘态的差只来自本轮）。 */
+  persisted = { providers: {} };
+  /** 节流：落盘定时器。 */
+  flushTimer;
+  /** 日志出口（默认静默；宿主注入）。 */
+  onLog;
   /**
    * 用**刚读到的余额**更新基线并记一笔。
    *
@@ -52918,12 +52936,28 @@ var CreditUsageLedger = class {
     const keys = [...perProvider.keys()].sort();
     for (const key of keys.slice(0, keys.length - MAX_DAYS)) perProvider.delete(key);
   }
-  /** 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。 */
+  /**
+   * 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。
+   *
+   * 「最近 N 天」是**内存与磁盘的并集**：历史日桶已 flush 到盘上，今日的数字
+   * 还在内存里。只看一边都会漏（只看磁盘＝今天全是 0；只看内存＝重启后历史
+   * 全丢）。合并规则：同一天取**较大值**（内存 ≥ 磁盘，两者同源）。
+   */
   snapshot(provider, days = 30) {
     const today = utc8DayKey2(this.now());
-    const perProvider = this.days.get(provider) ?? /* @__PURE__ */ new Map();
-    const sorted = [...perProvider.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
-    const todayRow = perProvider.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 };
+    const merged = /* @__PURE__ */ new Map();
+    for (const row of this.persisted.providers[provider]?.days ?? []) merged.set(row.day, { ...row });
+    for (const row of (this.days.get(provider) ?? /* @__PURE__ */ new Map()).values()) {
+      const existing = merged.get(row.day);
+      merged.set(row.day, existing === void 0 ? { ...row } : {
+        day: row.day,
+        spent: Math.max(existing.spent, row.spent),
+        gained: Math.max(existing.gained, row.gained),
+        accounts: Math.max(existing.accounts, row.accounts)
+      });
+    }
+    const sorted = [...merged.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
+    const todayRow = merged.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 };
     const accounts = [...this.accountDays.get(provider)?.get(today)?.values() ?? []].sort((a, b) => b.spent - a.spent);
     return {
       provider,
@@ -52932,6 +52966,59 @@ var CreditUsageLedger = class {
       accounts,
       samples: this.samples.filter((sample) => sample.provider === provider).length
     };
+  }
+  /** 立即落盘。失败只记日志：记账绝不能反噬选号路径。 */
+  async flush() {
+    if (this.persistence === void 0) return;
+    if (this.flushTimer !== void 0) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = void 0;
+    }
+    try {
+      const daysByProvider = /* @__PURE__ */ new Map();
+      for (const [provider, entry] of Object.entries(this.persisted.providers)) {
+        const map = /* @__PURE__ */ new Map();
+        for (const row of entry.days) map.set(row.day, { ...row });
+        daysByProvider.set(provider, map);
+      }
+      for (const [provider, perDay] of this.days) {
+        const map = daysByProvider.get(provider) ?? /* @__PURE__ */ new Map();
+        for (const row of perDay.values()) {
+          const existing = map.get(row.day);
+          map.set(row.day, existing === void 0 ? { ...row } : {
+            day: row.day,
+            spent: Math.max(existing.spent, row.spent),
+            gained: Math.max(existing.gained, row.gained),
+            accounts: Math.max(existing.accounts, row.accounts)
+          });
+        }
+        daysByProvider.set(provider, map);
+      }
+      const providers = {};
+      for (const [provider, map] of daysByProvider) {
+        providers[provider] = { days: [...map.values()].sort((a, b) => a.day < b.day ? 1 : -1) };
+      }
+      this.persisted = { providers };
+      await this.persistence.save(this.persisted);
+    } catch (error) {
+      this.log(`flush failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  /** 节流落盘（防抖窗口内的多次记账只写一次盘）。 */
+  scheduleFlush() {
+    if (this.persistence === void 0 || this.flushTimer !== void 0) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = void 0;
+      void this.flush();
+    }, this.flushDebounceMs);
+    this.flushTimer.unref?.();
+  }
+  /** 安装日志出口（宿主侧调用）。 */
+  setLogger(logger3) {
+    this.onLog = logger3;
+  }
+  log(message2) {
+    this.onLog?.(message2);
   }
   /** 清空某 provider 的全部记账（测试与「重置统计」用）。 */
   reset(provider) {
@@ -52950,6 +53037,93 @@ var CreditUsageLedger = class {
     }
   }
 };
+
+// vendor/channel-pack/src/credit-usage-store.ts
+import { existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join5 } from "node:path";
+var CREDIT_USAGE_FILE = "credit-usage.json";
+var CREDIT_USAGE_DAYS = 90;
+var SCHEMA4 = "dsh-codearts-auth/credit-usage/v1";
+function emptyCreditUsageDocument() {
+  return { schema: SCHEMA4, providers: {} };
+}
+function sanitizeCreditUsageDocument(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return emptyCreditUsageDocument();
+  const record = raw;
+  const providers = record.providers;
+  if (typeof providers !== "object" || providers === null || Array.isArray(providers)) {
+    return emptyCreditUsageDocument();
+  }
+  const result = emptyCreditUsageDocument();
+  for (const [provider, value] of Object.entries(providers)) {
+    if (typeof value !== "object" || value === null || !Array.isArray(value.days)) continue;
+    const days = [];
+    for (const day of value.days) {
+      if (day === null || typeof day !== "object" || Array.isArray(day)) continue;
+      const row = day;
+      if (typeof row.day !== "string" || row.day.length === 0) continue;
+      days.push({
+        day: row.day,
+        spent: Number.isFinite(Number(row.spent)) ? Math.max(0, Math.round(Number(row.spent))) : 0,
+        gained: Number.isFinite(Number(row.gained)) ? Math.max(0, Math.round(Number(row.gained))) : 0,
+        accounts: Number.isFinite(Number(row.accounts)) ? Math.max(0, Math.round(Number(row.accounts))) : 0
+      });
+    }
+    if (days.length > 0) result.providers[provider] = { days };
+  }
+  pruneOldDays(result);
+  return result;
+}
+function pruneOldDays(document, days = CREDIT_USAGE_DAYS) {
+  for (const entry of Object.values(document.providers)) {
+    if (entry.days.length <= days) continue;
+    entry.days.sort((a, b) => a.day < b.day ? 1 : -1);
+    entry.days.length = Math.min(entry.days.length, days);
+  }
+}
+var MemoryUsageStore = class {
+  kind = "memory";
+  document = emptyCreditUsageDocument();
+  load() {
+    return JSON.parse(JSON.stringify(this.document));
+  }
+  async save(document) {
+    this.document = JSON.parse(JSON.stringify(document));
+  }
+};
+var FileUsageStore = class {
+  constructor(path2, logger3) {
+    this.path = path2;
+    this.logger = logger3;
+  }
+  path;
+  logger;
+  kind = "file";
+  load() {
+    try {
+      if (!existsSync6(this.path)) return emptyCreditUsageDocument();
+      return sanitizeCreditUsageDocument(JSON.parse(readFileSync7(this.path, "utf8")));
+    } catch (error) {
+      this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u6309\u7A7A\u8D26\u672C\u5904\u7406: ${String(error)}`);
+      return emptyCreditUsageDocument();
+    }
+  }
+  async save(document) {
+    pruneOldDays(document);
+    mkdirSync6(join5(this.path, ".."), { recursive: true });
+    const tmp = `${this.path}.${process.pid}.tmp`;
+    writeFileSync6(tmp, JSON.stringify(document, null, 2), "utf-8");
+    renameSync6(tmp, this.path);
+  }
+};
+function createCreditUsageStore(ctx) {
+  const home = resolveChannelPackHome(ctx);
+  if (home === void 0) {
+    ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u79EF\u5206\u6D88\u8017\u8BB0\u5F55\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
+    return new MemoryUsageStore();
+  }
+  return new FileUsageStore(join5(home, "channel-pack", CREDIT_USAGE_FILE), ctx.logger);
+}
 
 // vendor/channel-pack/src/loomy-balance-rank.ts
 var LOOMY_BALANCE_TIER = Object.freeze({
@@ -53036,6 +53210,15 @@ var LoomyBalanceSelector = class {
     );
     if (detail === null) {
       return { id: account.id, ok: false, error: "\u4F59\u989D\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" };
+    }
+    if (this.deps.onBalanceSample !== void 0) {
+      try {
+        this.deps.onBalanceSample(account.id, {
+          "\u6BCF\u65E5\u8D60\u9001": detail.daily,
+          "\u6C38\u4E45\u79EF\u5206": detail.permanent
+        });
+      } catch {
+      }
     }
     return {
       id: account.id,
@@ -53206,10 +53389,10 @@ function zcodeProductById(id) {
 
 // vendor/channel-pack/src/zcode-captcha.ts
 import { spawn as spawn2, spawnSync } from "node:child_process";
-import { existsSync as existsSync6, mkdtempSync, rmSync, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync7, mkdtempSync, rmSync, writeFileSync as writeFileSync7 } from "node:fs";
 import { createServer as createServer6 } from "node:net";
 import { homedir as homedir2, tmpdir } from "node:os";
-import { basename, isAbsolute, join as join5, posix } from "node:path";
+import { basename, isAbsolute, join as join6, posix } from "node:path";
 var ZCODE_CAPTCHA_FALLBACK = {
   region: "cn",
   prefix: "no8xfe",
@@ -53276,21 +53459,21 @@ function windowsBrowserCandidates(env, home) {
      * 用户设了它们就说明默认路径不对。若排在 `~/scoop` 之后，会出现
      * 「旧默认路径恰好存在 → 用它，而用户实际在用的那个被忽略」。
      */
-    ...env.SCOOP !== void 0 && env.SCOOP.trim().length > 0 ? [join5(env.SCOOP.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
-    ...env.SCOOP_GLOBAL !== void 0 && env.SCOOP_GLOBAL.trim().length > 0 ? [join5(env.SCOOP_GLOBAL.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
+    ...env.SCOOP !== void 0 && env.SCOOP.trim().length > 0 ? [join6(env.SCOOP.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
+    ...env.SCOOP_GLOBAL !== void 0 && env.SCOOP_GLOBAL.trim().length > 0 ? [join6(env.SCOOP_GLOBAL.trim(), "apps", "chromium", "current", "chrome.exe")] : [],
     // ② scoop 默认根目录（`~/scoop`）。实测可用。
-    join5(home, "scoop", "apps", "chromium", "current", "chrome.exe"),
+    join6(home, "scoop", "apps", "chromium", "current", "chrome.exe"),
     // ③ 系统 Chrome。
-    join5(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-    join5(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-    join5(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+    join6(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    join6(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    join6(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
     // ④ Chromium。
-    join5(localAppData, "Chromium", "Application", "chrome.exe"),
-    join5(programFiles, "Chromium", "Application", "chrome.exe"),
+    join6(localAppData, "Chromium", "Application", "chrome.exe"),
+    join6(programFiles, "Chromium", "Application", "chrome.exe"),
     // ⑤ Edge（Chromium 内核，系统普遍自带）。
-    join5(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-    join5(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-    join5(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")
+    join6(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    join6(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+    join6(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")
   ];
 }
 function macBrowserCandidates(home) {
@@ -53343,7 +53526,7 @@ function findBrowserExecutable() {
   for (const candidate of browserCandidates()) {
     try {
       if (candidate.length === 0 || !isAbsolute(candidate)) continue;
-      if (existsSync6(candidate)) return candidate;
+      if (existsSync7(candidate)) return candidate;
     } catch {
     }
   }
@@ -53617,10 +53800,10 @@ foreach ($h in $all) {
 }
 Write-Output "hidden=$n"
 `;
-    const dir = mkdtempSync(join5(tmpdir(), "zcode-hide-"));
-    const file = join5(dir, "hide.ps1");
+    const dir = mkdtempSync(join6(tmpdir(), "zcode-hide-"));
+    const file = join6(dir, "hide.ps1");
     dirCreated = dir;
-    writeFileSync6(file, script, "ascii");
+    writeFileSync7(file, script, "ascii");
     const child = spawn2("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
@@ -53778,7 +53961,7 @@ var ZcodeCaptchaBrowser = class {
       );
     }
     this.spawnFailure = void 0;
-    this.profileDir = mkdtempSync(join5(tmpdir(), "zcode-captcha-"));
+    this.profileDir = mkdtempSync(join6(tmpdir(), "zcode-captcha-"));
     this.port = this.options.debugPort ?? await pickFreePort();
     const hide = this.options.hideWindow !== false;
     this.child = spawn2(executable, [
@@ -57161,9 +57344,9 @@ function buildEnvironmentSection(options) {
 }
 function isGitRepo(cwd) {
   try {
-    const { existsSync: existsSync13 } = __require("node:fs");
-    const { join: join14 } = __require("node:path");
-    return existsSync13(join14(cwd, ".git"));
+    const { existsSync: existsSync14 } = __require("node:fs");
+    const { join: join15 } = __require("node:path");
+    return existsSync14(join15(cwd, ".git"));
   } catch {
     return false;
   }
@@ -59840,9 +60023,9 @@ function quotaRejectionHint(text) {
 
 // vendor/channel-pack/src/qoder-machine.ts
 import { execFileSync, spawn as spawn3 } from "node:child_process";
-import { existsSync as existsSync7, readFileSync as readFileSync7, readdirSync } from "node:fs";
+import { existsSync as existsSync8, readFileSync as readFileSync8, readdirSync } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var RUNTIME_INFO_TIMEOUT_MS = 2e4;
 var cached;
 function candidatePaths() {
@@ -59852,20 +60035,20 @@ function candidatePaths() {
   const appData = process.env.APPDATA;
   if (appData !== void 0 && appData.length > 0) {
     for (const dir of ["Qoder", "Qoder CN"]) {
-      paths.push(join6(appData, dir, "SharedClientCache", "cache", "machine_token.json"));
+      paths.push(join7(appData, dir, "SharedClientCache", "cache", "machine_token.json"));
     }
   }
   const home = homedir3();
   for (const dir of ["Qoder", "Qoder CN"]) {
-    paths.push(join6(home, "Library", "Application Support", dir, "SharedClientCache", "cache", "machine_token.json"));
-    paths.push(join6(home, ".config", dir, "SharedClientCache", "cache", "machine_token.json"));
+    paths.push(join7(home, "Library", "Application Support", dir, "SharedClientCache", "cache", "machine_token.json"));
+    paths.push(join7(home, ".config", dir, "SharedClientCache", "cache", "machine_token.json"));
   }
   return paths;
 }
 function parseFile(path2) {
   let raw;
   try {
-    raw = readFileSync7(path2, "utf8");
+    raw = readFileSync8(path2, "utf8");
   } catch {
     return void 0;
   }
@@ -59904,7 +60087,7 @@ var QODER_DATA_DIR_NAMES = [".qoder", ".qoder-cn"];
 function findRuntimeInfoExecutable(home, dataDirNames = QODER_DATA_DIR_NAMES) {
   const exeName = process.platform === "win32" ? "runtime-info.exe" : "runtime-info";
   for (const dirName of dataDirNames) {
-    const binDir = join6(home, dirName, ".bin");
+    const binDir = join7(home, dirName, ".bin");
     let entries;
     try {
       entries = readdirSync(binDir);
@@ -59913,8 +60096,8 @@ function findRuntimeInfoExecutable(home, dataDirNames = QODER_DATA_DIR_NAMES) {
     }
     const dir = entries.find((name2) => name2.startsWith("umid-"));
     if (dir === void 0) continue;
-    const exe = join6(binDir, dir, exeName);
-    if (existsSync7(exe)) return exe;
+    const exe = join7(binDir, dir, exeName);
+    if (existsSync8(exe)) return exe;
   }
   return void 0;
 }
@@ -59922,7 +60105,7 @@ function locateRuntimeInfo(override) {
   const fromEnv = process.env.QODER_RUNTIME_INFO;
   const candidate = override ?? (fromEnv !== void 0 && fromEnv.length > 0 ? fromEnv : void 0);
   if (candidate !== void 0) {
-    return existsSync7(candidate) ? candidate : void 0;
+    return existsSync8(candidate) ? candidate : void 0;
   }
   return findRuntimeInfoExecutable(homedir3());
 }
@@ -62865,8 +63048,8 @@ async function handleOpencodeRpc(ctx, pool, method, payload) {
 }
 
 // vendor/channel-pack/src/badge-preferences.ts
-import { existsSync as existsSync8, mkdirSync as mkdirSync6, readFileSync as readFileSync8, renameSync as renameSync6, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync9, renameSync as renameSync7, writeFileSync as writeFileSync8 } from "node:fs";
+import { join as join8 } from "node:path";
 var BADGE_PREFERENCES_FILE = "ui-preferences.json";
 var BADGE_PREFERENCES = ["auto", "subscription", "credits"];
 var DEFAULT_BADGE_PREFERENCE = "auto";
@@ -62884,17 +63067,17 @@ var MemoryPreferenceStore = class {
   }
 };
 var FilePreferenceStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
   }
   path;
   logger;
   kind = "file";
   load() {
     try {
-      if (!existsSync8(this.path)) return DEFAULT_BADGE_PREFERENCE;
-      const parsed = JSON.parse(readFileSync8(this.path, "utf-8"));
+      if (!existsSync9(this.path)) return DEFAULT_BADGE_PREFERENCE;
+      const parsed = JSON.parse(readFileSync9(this.path, "utf-8"));
       return sanitizeBadgePreference(preferenceFieldOf(parsed));
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u7528\u91CF\u5FBD\u6807\u504F\u597D\u6309\u9ED8\u8BA4\u503C\u5904\u7406: ${String(error)}`);
@@ -62902,13 +63085,13 @@ var FilePreferenceStore = class {
     }
   }
   async save(preference) {
-    mkdirSync6(join7(this.path, ".."), { recursive: true });
+    mkdirSync7(join8(this.path, ".."), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    writeFileSync7(tmp, JSON.stringify({ schema: SCHEMA4, badgePreference: preference }, null, 2), "utf-8");
-    renameSync6(tmp, this.path);
+    writeFileSync8(tmp, JSON.stringify({ schema: SCHEMA5, badgePreference: preference }, null, 2), "utf-8");
+    renameSync7(tmp, this.path);
   }
 };
-var SCHEMA4 = "dsh-codearts-auth/ui-preferences/v1";
+var SCHEMA5 = "dsh-codearts-auth/ui-preferences/v1";
 function preferenceFieldOf(parsed) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return parsed;
   const record = parsed;
@@ -62920,7 +63103,7 @@ function createBadgePreferenceStore(ctx) {
     ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u7528\u91CF\u5FBD\u6807\u504F\u597D\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     return new MemoryPreferenceStore();
   }
-  return new FilePreferenceStore(join7(home, "channel-pack", BADGE_PREFERENCES_FILE), ctx.logger);
+  return new FilePreferenceStore(join8(home, "channel-pack", BADGE_PREFERENCES_FILE), ctx.logger);
 }
 
 // vendor/channel-pack/src/badge-subscription.ts
@@ -63102,10 +63285,10 @@ function isAllFailed(snapshot) {
 }
 
 // vendor/channel-pack/src/auto-checkin.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync9, renameSync as renameSync7, writeFileSync as writeFileSync8 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync10, renameSync as renameSync8, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join9 } from "node:path";
 var AUTO_CHECKIN_FILE = "auto-checkin.json";
-var SCHEMA5 = "dsh-codearts-auth/auto-checkin/v1";
+var SCHEMA6 = "dsh-codearts-auth/auto-checkin/v1";
 var DEFAULT_AUTO_CHECKIN = {
   enabled: true,
   lastDate: "",
@@ -63168,27 +63351,27 @@ var MemoryAutoCheckinStore = class {
   }
 };
 var FileAutoCheckinStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
   }
   path;
   logger;
   kind = "file";
   load() {
     try {
-      if (!existsSync9(this.path)) return { ...DEFAULT_AUTO_CHECKIN };
-      return sanitizeAutoCheckin(JSON.parse(readFileSync9(this.path, "utf-8")));
+      if (!existsSync10(this.path)) return { ...DEFAULT_AUTO_CHECKIN };
+      return sanitizeAutoCheckin(JSON.parse(readFileSync10(this.path, "utf-8")));
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u8BFB\u53D6 ${this.path} \u5931\u8D25\uFF0C\u81EA\u52A8\u7B7E\u5230\u6309\u9ED8\u8BA4\u8BBE\u7F6E\uFF08\u5F00\u542F\uFF09\u5904\u7406: ${String(error)}`);
       return { ...DEFAULT_AUTO_CHECKIN };
     }
   }
   async save(doc) {
-    mkdirSync7(join8(this.path, ".."), { recursive: true });
+    mkdirSync8(join9(this.path, ".."), { recursive: true });
     const tmp = `${this.path}.tmp`;
-    writeFileSync8(tmp, JSON.stringify({
-      schema: SCHEMA5,
+    writeFileSync9(tmp, JSON.stringify({
+      schema: SCHEMA6,
       enabled: doc.enabled,
       lastDate: doc.lastDate,
       lastResult: doc.lastResult,
@@ -63196,7 +63379,7 @@ var FileAutoCheckinStore = class {
       channels: doc.channels,
       dismissedRunAt: doc.dismissedRunAt
     }, null, 2), "utf-8");
-    renameSync7(tmp, this.path);
+    renameSync8(tmp, this.path);
   }
 };
 function createAutoCheckinStore(ctx) {
@@ -63205,7 +63388,7 @@ function createAutoCheckinStore(ctx) {
     ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u81EA\u52A8\u7B7E\u5230\u5F00\u5173\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     return new MemoryAutoCheckinStore();
   }
-  return new FileAutoCheckinStore(join8(home, "channel-pack", AUTO_CHECKIN_FILE), ctx.logger);
+  return new FileAutoCheckinStore(join9(home, "channel-pack", AUTO_CHECKIN_FILE), ctx.logger);
 }
 function emptyTotals2() {
   return { providers: 0, claimed: 0, totalCredit: 0, totalByUnit: { token: 0, credit: 0 }, alreadyClaimed: 0, inactive: 0, failed: 0, coversToday: 0, skipped: 0, errors: 0 };
@@ -65039,15 +65222,38 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
       case "credits.usage": {
         const req = payload;
         const provider = typeof req.provider === "string" ? req.provider.trim() : "";
-        if (provider.length === 0) {
-          return { ok: false, error: { code: "bad-request", message: "provider \u5FC5\u586B" } };
-        }
         const days = typeof req.days === "number" && Number.isFinite(req.days) && req.days > 0 ? Math.min(365, Math.trunc(req.days)) : 30;
         if (config.creditUsage === void 0) {
           const today = new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
+          const empty = { provider, today: { day: today, spent: 0, gained: 0, accounts: 0 }, days: [], accounts: [], samples: 0 };
+          return { ok: true, value: provider === "" ? { providers: [], ...empty } : empty };
+        }
+        if (provider === "") {
+          const ids = [...LONG_TERM_PREFERRED_PROVIDERS, LOOMY.id, CODEBUDDY.id, WORKBUDDY.id, RACCOON.id].filter((id, index, all) => all.indexOf(id) === index);
+          const providers = ids.map((id) => config.creditUsage.snapshot(id, days2));
+          const byDay = /* @__PURE__ */ new Map();
+          for (const entry of providers) {
+            for (const row of entry.days) {
+              const existing = byDay.get(row.day);
+              byDay.set(row.day, existing === void 0 ? { ...row } : {
+                day: row.day,
+                spent: existing.spent + row.spent,
+                gained: existing.gained + row.gained,
+                accounts: existing.accounts + row.accounts
+              });
+            }
+          }
+          const todayKey = new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
+          const days2 = [...byDay.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
           return {
             ok: true,
-            value: { provider, today: { day: today, spent: 0, gained: 0, accounts: 0 }, days: [], accounts: [], samples: 0 }
+            value: {
+              providers,
+              today: byDay.get(todayKey) ?? { day: todayKey, spent: 0, gained: 0, accounts: 0 },
+              days: days2,
+              accounts: [],
+              samples: providers.reduce((sum, entry) => sum + entry.samples, 0)
+            }
           };
         }
         return { ok: true, value: config.creditUsage.snapshot(provider, days) };
@@ -66158,22 +66364,22 @@ function reply(rpcId, result) {
 import { createServer as createServer7 } from "node:http";
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { homedir as homedir4 } from "node:os";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 
 // vendor/channel-pack/src/openai-gateway/auth.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync10, renameSync as renameSync8, writeFileSync as writeFileSync9, existsSync as existsSync10 } from "node:fs";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync11, renameSync as renameSync9, writeFileSync as writeFileSync10, existsSync as existsSync11 } from "node:fs";
 import { randomBytes as randomBytes11 } from "node:crypto";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 var KEY_FILE = "api-key";
 var KEY_PATTERN2 = /^[A-Za-z0-9_-]{43}$/;
 function loadOrCreateApiKey(home, env = process.env) {
   const configured = env.DSH_OPENAI_GATEWAY_API_KEY?.trim();
   if (configured) return { value: configured, fromEnv: true, path: null };
-  const directory = join9(home, "openai-gateway");
-  const path2 = join9(directory, KEY_FILE);
+  const directory = join10(home, "openai-gateway");
+  const path2 = join10(directory, KEY_FILE);
   let stored;
   try {
-    stored = readFileSync10(path2, "utf8").trim();
+    stored = readFileSync11(path2, "utf8").trim();
   } catch {
   }
   if (stored) {
@@ -66183,14 +66389,14 @@ function loadOrCreateApiKey(home, env = process.env) {
     );
   }
   const key = randomBytes11(32).toString("base64url");
-  mkdirSync8(directory, { recursive: true });
+  mkdirSync9(directory, { recursive: true });
   const temporary = `${path2}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync9(temporary, key, { encoding: "utf8", mode: 384 });
+  writeFileSync10(temporary, key, { encoding: "utf8", mode: 384 });
   try {
-    renameSync8(temporary, path2);
+    renameSync9(temporary, path2);
   } catch (error) {
-    if (existsSync10(path2)) {
-      const existing = readFileSync10(path2, "utf8").trim();
+    if (existsSync11(path2)) {
+      const existing = readFileSync11(path2, "utf8").trim();
       if (KEY_PATTERN2.test(existing)) return { value: existing, fromEnv: false, path: path2 };
     }
     throw error;
@@ -67614,33 +67820,33 @@ function authorized(request2, key) {
   return typeof value === "string" && value === `Bearer ${key}`;
 }
 function getHome(options) {
-  return options.home ?? options.env?.DSH_HOME ?? process.env.DSH_HOME ?? join10(homedir4(), ".dsh");
+  return options.home ?? options.env?.DSH_HOME ?? process.env.DSH_HOME ?? join11(homedir4(), ".dsh");
 }
 function createOpenAiGateway(options) {
   const env = options.env ?? process.env;
   const config = resolveGatewayConfig(env);
   const apiKey = loadOrCreateApiKey(getHome(options), env);
   const key = apiKey.value;
-  const logger2 = options.logger ?? defaultLogger;
+  const logger3 = options.logger ?? defaultLogger;
   let server;
   let boundPort = config.port;
   const active = /* @__PURE__ */ new Set();
   const describe2 = (error) => error instanceof Error ? error.message : String(error);
   const handleModels = async (response) => {
     const groups = await collectGatewayModels(options.llm, (provider, error) => {
-      logger2.warn(`[openai-gateway] ${provider} \u6A21\u578B\u76EE\u5F55\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u4ECE /v1/models \u8DF3\u8FC7\uFF1A${describe2(error)}`);
+      logger3.warn(`[openai-gateway] ${provider} \u6A21\u578B\u76EE\u5F55\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u4ECE /v1/models \u8DF3\u8FC7\uFF1A${describe2(error)}`);
     });
     const effortViews = await collectGatewayEffortViews(options.llm, groups, (provider, error) => {
-      logger2.warn(`[openai-gateway] ${provider}\uFF1A${describe2(error)}`);
+      logger3.warn(`[openai-gateway] ${provider}\uFF1A${describe2(error)}`);
     });
     jsonResponse(response, 200, { object: "list", data: toOpenAiModels(groups, effortViews) });
   };
   const handleReasoningEfforts = async (response) => {
     const groups = await collectGatewayModels(options.llm, (provider, error) => {
-      logger2.warn(`[openai-gateway] ${provider} \u6A21\u578B\u76EE\u5F55\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u4ECE /v1/reasoning-efforts \u8DF3\u8FC7\uFF1A${describe2(error)}`);
+      logger3.warn(`[openai-gateway] ${provider} \u6A21\u578B\u76EE\u5F55\u8BFB\u53D6\u5931\u8D25\uFF0C\u5DF2\u4ECE /v1/reasoning-efforts \u8DF3\u8FC7\uFF1A${describe2(error)}`);
     });
     const effortViews = await collectGatewayEffortViews(options.llm, groups, (provider, error) => {
-      logger2.warn(`[openai-gateway] ${provider}\uFF1A${describe2(error)}`);
+      logger3.warn(`[openai-gateway] ${provider}\uFF1A${describe2(error)}`);
     });
     jsonResponse(response, 200, {
       object: "list",
@@ -67726,12 +67932,12 @@ function createOpenAiGateway(options) {
   const logEffortNotice = (route, notice) => {
     const target = `${route.provider}/${route.model}`;
     if (notice.outcome === "translated") {
-      logger2.info(
+      logger3.info(
         `[openai-gateway] ${target}\uFF1A\u601D\u8003\u6863\u4F4D ${notice.requested} \u4E0D\u662F\u8BE5\u6A21\u578B\u58F0\u660E\u7684 id\uFF0C\u5DF2\u6309\u5F3A\u5EA6\u5C31\u8FD1\u4E0B\u53D1 ${notice.applied}`
       );
       return;
     }
-    logger2.warn(
+    logger3.warn(
       `[openai-gateway] ${target}\uFF1A\u601D\u8003\u6863\u4F4D ${notice.requested} \u65E0\u6CD5\u8868\u8FBE\uFF08\u8BE5\u6A21\u578B\u6CA1\u6709\u8FD9\u4E00\u65CF\u7684\u6863\u4F4D\uFF09\uFF0C\u672C\u6B21\u4E0D\u4E0B\u53D1\u8BE5\u53C2\u6570\u3001\u6309\u6A21\u578B\u9ED8\u8BA4\u8D70`
     );
   };
@@ -67786,7 +67992,7 @@ function createOpenAiGateway(options) {
         bridge: options.attachments,
         limits: options.imageLimits
       }, (dropped) => {
-        logger2.warn(
+        logger3.warn(
           `[openai-gateway] /v1/responses\uFF1A\u5DE5\u5177\u7C7B\u578B ${dropped.type}${dropped.name === void 0 ? "" : `\uFF08${dropped.name}\uFF09`} \u65E0\u6CD5\u7528 DSH \u7684 ToolSchema \u8868\u8FBE\uFF0C\u5DF2\u4ECE\u672C\u6B21\u8BF7\u6C42\u4E22\u5F03`
         );
       });
@@ -67860,10 +68066,10 @@ function createOpenAiGateway(options) {
         current.once("listening", onListening);
         current.listen(config.port, config.host);
       }).catch((error) => {
-        logger2.error(`[openai-gateway] \u542F\u52A8\u5931\u8D25 ${config.host}:${config.port}\uFF1A${error instanceof Error ? error.message : String(error)}`);
+        logger3.error(`[openai-gateway] \u542F\u52A8\u5931\u8D25 ${config.host}:${config.port}\uFF1A${error instanceof Error ? error.message : String(error)}`);
         throw error;
       });
-      logger2.info(`[openai-gateway] \u5DF2\u76D1\u542C http://${config.host}:${boundPort}/v1`);
+      logger3.info(`[openai-gateway] \u5DF2\u76D1\u542C http://${config.host}:${boundPort}/v1`);
     },
     async close() {
       for (const controller of active) controller.abort();
@@ -67874,7 +68080,7 @@ function createOpenAiGateway(options) {
         current.close(() => resolve2());
         current.closeAllConnections?.();
       });
-      logger2.info("[openai-gateway] \u5DF2\u5173\u95ED");
+      logger3.info("[openai-gateway] \u5DF2\u5173\u95ED");
     },
     address() {
       return { host: config.host, port: boundPort };
@@ -67890,7 +68096,7 @@ function makeGatewayAttachmentBridge(ctx) {
   return { saveImage: (input) => attachments.saveImage(input) };
 }
 function mountOpenAiGateway(ctx, pool) {
-  const logger2 = {
+  const logger3 = {
     info: (message2) => ctx.logger?.info?.(message2),
     warn: (message2) => ctx.logger?.warn?.(message2),
     error: (message2) => ctx.logger?.error?.(message2)
@@ -67907,22 +68113,22 @@ function mountOpenAiGateway(ctx, pool) {
           // 提供文本能力，收到图片时明确报「未装载附件服务」而非静默丢图。
           attachments: makeGatewayAttachmentBridge(ctx),
           home: resolveChannelPackHome(ctx),
-          logger: logger2
+          logger: logger3
         });
       } catch (error) {
-        logger2.error(`[openai-gateway] \u521D\u59CB\u5316\u5931\u8D25\uFF0C\u672C\u673A\u7F51\u5173\u672A\u542F\u52A8\uFF1A${describe2(error)}`);
+        logger3.error(`[openai-gateway] \u521D\u59CB\u5316\u5931\u8D25\uFF0C\u672C\u673A\u7F51\u5173\u672A\u542F\u52A8\uFF1A${describe2(error)}`);
         return void 0;
       }
     });
   } catch (error) {
-    logger2.error(`[openai-gateway] \u521D\u59CB\u5316\u5931\u8D25\uFF0C\u672C\u673A\u7F51\u5173\u672A\u542F\u52A8\uFF1A${describe2(error)}`);
+    logger3.error(`[openai-gateway] \u521D\u59CB\u5316\u5931\u8D25\uFF0C\u672C\u673A\u7F51\u5173\u672A\u542F\u52A8\uFF1A${describe2(error)}`);
     return;
   }
   if (!isGatewayEnabled(process.env)) {
-    logger2.info("[openai-gateway] DSH_OPENAI_GATEWAY_ENABLED \u5DF2\u505C\u7528\u672C\u673A\u7F51\u5173");
+    logger3.info("[openai-gateway] DSH_OPENAI_GATEWAY_ENABLED \u5DF2\u505C\u7528\u672C\u673A\u7F51\u5173");
   }
   void applyGatewayDesiredState().catch((error) => {
-    logger2.error(`[openai-gateway] \u542F\u52A8\u5F02\u5E38\uFF1A${describe2(error)}`);
+    logger3.error(`[openai-gateway] \u542F\u52A8\u5F02\u5E38\uFF1A${describe2(error)}`);
   });
   ctx.effect(() => () => {
     void disposeGatewayRuntime();
@@ -68120,12 +68326,12 @@ function installLoopResume(ctx) {
 }
 
 // vendor/channel-pack/src/token-ledger-store.ts
-import { existsSync as existsSync11, mkdirSync as mkdirSync9, readFileSync as readFileSync11, renameSync as renameSync9, writeFileSync as writeFileSync10 } from "node:fs";
-import { join as join11 } from "node:path";
+import { existsSync as existsSync12, mkdirSync as mkdirSync10, readFileSync as readFileSync12, renameSync as renameSync10, writeFileSync as writeFileSync11 } from "node:fs";
+import { join as join12 } from "node:path";
 var TOKEN_LEDGER_FILE = "token-ledger.json";
 var TOKEN_LEDGER_DAYS = 90;
 var TOKEN_LEDGER_FLUSH_MS = 2e3;
-var SCHEMA6 = "dsh-codearts-auth/token-ledger/v1";
+var SCHEMA7 = "dsh-codearts-auth/token-ledger/v1";
 function pruneDays(days) {
   const cutoff = Date.now() + 8 * 60 * 60 * 1e3 - TOKEN_LEDGER_DAYS * 24 * 60 * 60 * 1e3;
   const pruned = /* @__PURE__ */ new Map();
@@ -68148,9 +68354,9 @@ var MemoryLedgerStore = class {
   }
 };
 var FileLedgerStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
     this.days = this.readFile();
     this.written = cloneDays(this.days);
   }
@@ -68172,8 +68378,8 @@ var FileLedgerStore = class {
   readFile() {
     const out = /* @__PURE__ */ new Map();
     try {
-      if (!existsSync11(this.path)) return out;
-      const parsed = JSON.parse(readFileSync11(this.path, "utf-8"));
+      if (!existsSync12(this.path)) return out;
+      const parsed = JSON.parse(readFileSync12(this.path, "utf-8"));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return out;
       const record = parsed;
       if (typeof record.days !== "object" || record.days === null || Array.isArray(record.days)) return out;
@@ -68264,7 +68470,7 @@ var FileLedgerStore = class {
    */
   flush() {
     try {
-      mkdirSync9(join11(this.path, ".."), { recursive: true });
+      mkdirSync10(join12(this.path, ".."), { recursive: true });
       const merged = this.readFile();
       let hasDelta = false;
       for (const [day, buckets] of this.days) {
@@ -68292,8 +68498,8 @@ var FileLedgerStore = class {
         days[day] = Object.fromEntries(buckets);
       }
       const tmp = `${this.path}.tmp`;
-      writeFileSync10(tmp, JSON.stringify({ schema: SCHEMA6, days }, null, 2), "utf-8");
-      renameSync9(tmp, this.path);
+      writeFileSync11(tmp, JSON.stringify({ schema: SCHEMA7, days }, null, 2), "utf-8");
+      renameSync10(tmp, this.path);
       this.written = cloneDays(this.days);
     } catch (error) {
       this.logger?.warn(`[channel-pack] \u5199\u5165 ${this.path} \u5931\u8D25\uFF08\u672C\u6B21\u7EDF\u8BA1\u4E0D\u5165\u76D8\uFF09: ${String(error)}`);
@@ -68353,7 +68559,7 @@ function createTokenLedgerStore(ctx) {
     ctx.logger?.warn?.("[channel-pack] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0CToken \u7528\u91CF\u5386\u53F2\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D");
     return new MemoryLedgerStore();
   }
-  return new FileLedgerStore(join11(home, "channel-pack", TOKEN_LEDGER_FILE), ctx.logger);
+  return new FileLedgerStore(join12(home, "channel-pack", TOKEN_LEDGER_FILE), ctx.logger);
 }
 
 // vendor/channel-pack/src/buddy-balance-selector.ts
@@ -68407,7 +68613,17 @@ var BuddyBalanceSelector = class {
     }
     const source = await this.fetchSource(account);
     this.cache.set(account.id, { at: now, source });
-    return this.classify(account.id, source, now);
+    const entry = this.classify(account.id, source, now);
+    if (entry.ok && this.deps.onBalanceSample !== void 0) {
+      try {
+        this.deps.onBalanceSample(account.id, {
+          "\u4E34\u65F6\u79EF\u5206": entry.expiringBalance ?? 0,
+          "\u6C38\u4E45\u79EF\u5206": entry.permanentBalance ?? 0
+        });
+      } catch {
+      }
+    }
+    return entry;
   }
   /**
    * 把原料按**当前时刻**分成两桶并定档。
@@ -70401,8 +70617,8 @@ var GeminiAuth = class extends Service11 {
 
 // vendor/channel-pack/src/gemini-sigstore.ts
 import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync12, mkdirSync as mkdirSync10, readFileSync as readFileSync12, renameSync as renameSync10, writeFileSync as writeFileSync11 } from "node:fs";
-import { dirname as dirname2, join as join12 } from "node:path";
+import { existsSync as existsSync13, mkdirSync as mkdirSync11, readFileSync as readFileSync13, renameSync as renameSync11, writeFileSync as writeFileSync12 } from "node:fs";
+import { dirname as dirname2, join as join13 } from "node:path";
 var GEMINI_SIG_FILE = "gemini-sigs.json";
 var GEMINI_SIG_MAX_ENTRIES = 2e3;
 var SIG_KEY_BODY_LIMIT = 512;
@@ -70417,9 +70633,9 @@ function trimGeminiSignature(signature) {
   return signature.trim();
 }
 var GeminiSigStore = class {
-  constructor(path2, logger2) {
+  constructor(path2, logger3) {
     this.path = path2;
-    this.logger = logger2;
+    this.logger = logger3;
     this.entries = this.load();
   }
   path;
@@ -70513,10 +70729,10 @@ var GeminiSigStore = class {
       2
     );
     try {
-      mkdirSync10(dirname2(this.path), { recursive: true });
+      mkdirSync11(dirname2(this.path), { recursive: true });
       const tmp = `${this.path}.tmp`;
-      writeFileSync11(tmp, payload, "utf-8");
-      renameSync10(tmp, this.path);
+      writeFileSync12(tmp, payload, "utf-8");
+      renameSync11(tmp, this.path);
     } catch (error) {
       this.logger?.warn(`[gemini] \u7B7E\u540D\u7F13\u5B58\u5199\u5165\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u63A8\u7406\uFF09: ${String(error)}`);
     }
@@ -70526,8 +70742,8 @@ var GeminiSigStore = class {
     const out = /* @__PURE__ */ new Map();
     if (this.path === void 0) return out;
     try {
-      if (!existsSync12(this.path)) return out;
-      const parsed = JSON.parse(readFileSync12(this.path, "utf-8"));
+      if (!existsSync13(this.path)) return out;
+      const parsed = JSON.parse(readFileSync13(this.path, "utf-8"));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return out;
       for (const [key, value] of Object.entries(parsed)) {
         if (typeof value !== "object" || value === null) continue;
@@ -70551,7 +70767,7 @@ function createGeminiSigStore(ctx) {
     ctx.logger?.warn?.("[gemini] \u65E0\u6CD5\u5B9A\u4F4D DSH home\uFF0C\u7B7E\u540D\u7F13\u5B58\u4EC5\u5B58\u5728\u4E8E\u5185\u5B58\u4E2D\uFF08\u547D\u4E2D\u7387\u4F1A\u5728\u91CD\u542F\u540E\u5F52\u96F6\uFF09");
     return new GeminiSigStore(void 0, ctx.logger);
   }
-  return new GeminiSigStore(join12(home, "channel-pack", GEMINI_SIG_FILE), ctx.logger);
+  return new GeminiSigStore(join13(home, "channel-pack", GEMINI_SIG_FILE), ctx.logger);
 }
 
 // vendor/channel-pack/src/opencode-adapter.ts
@@ -70779,9 +70995,9 @@ function buildOpencodePayloadWithToolMap(input) {
 
 // vendor/channel-pack/src/opencode-capability.ts
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { readFileSync as readFileSync13 } from "node:fs";
+import { readFileSync as readFileSync14 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 var MEASURED_IMAGE_OVERRIDES = {
   // 实测 2026-10-02：models.dev 标 `modalities.input: ["text"]`，
   // 但 1×1 PNG 的多模态请求真实返回 200（big-pickle 是最常用的免费模型）。
@@ -70841,8 +71057,8 @@ function normalizeEntry(id, raw) {
   };
 }
 function cacheFilePath() {
-  const home = process.env.DSH_HOME?.trim() || join13(homedir5(), ".dsh");
-  return join13(home, "cache", "opencode-capabilities.json");
+  const home = process.env.DSH_HOME?.trim() || join14(homedir5(), ".dsh");
+  return join14(home, "cache", "opencode-capabilities.json");
 }
 var memory = [];
 var cacheFileAt = 0;
@@ -70865,7 +71081,7 @@ function loadDiskCacheSync() {
   if (diskLoaded) return;
   diskLoaded = true;
   try {
-    const raw = readFileSync13(cacheFilePath(), "utf8");
+    const raw = readFileSync14(cacheFilePath(), "utf8");
     const parsed = JSON.parse(raw);
     if (parsed?.version === 3 && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
       memory = parsed.entries;
@@ -70877,7 +71093,7 @@ function loadDiskCacheSync() {
 async function writeDiskCache(entries) {
   try {
     const path2 = cacheFilePath();
-    await mkdir(join13(path2, ".."), { recursive: true });
+    await mkdir(join14(path2, ".."), { recursive: true });
     const payload = { version: 3, at: Date.now(), entries };
     await writeFile(path2, JSON.stringify(payload), "utf8");
   } catch {
@@ -71429,13 +71645,29 @@ function apply(ctx, config = {}) {
       return void 0;
     }
   };
+  const creditUsageStore = createCreditUsageStore(ctx);
+  const creditUsage = new CreditUsageLedger(void 0, creditUsageStore, 3e4);
+  creditUsage.setLogger((message2) => logger.warn?.(`our-free-model: ${message2}`));
+  const recordCreditUsage = (provider) => (accountId, balances) => {
+    const nickname = pool.listAccountsByProvider(provider).find((account) => account.id === accountId)?.nickname;
+    try {
+      creditUsage.record(provider, accountId, nickname, balances);
+      creditUsage.scheduleFlush();
+    } catch {
+    }
+  };
+  process.once("beforeExit", () => {
+    void creditUsage.flush();
+  });
   const buddyBalanceSelector = new BuddyBalanceSelector({
     product: CODEBUDDY,
-    resolveCredential: resolveBuddyCredentialByRef
+    resolveCredential: resolveBuddyCredentialByRef,
+    onBalanceSample: recordCreditUsage(CODEBUDDY.id)
   });
   const workbuddyBalanceSelector = new BuddyBalanceSelector({
     product: WORKBUDDY,
-    resolveCredential: resolveBuddyCredentialByRef
+    resolveCredential: resolveBuddyCredentialByRef,
+    onBalanceSample: recordCreditUsage(WORKBUDDY.id)
   });
   const pickBuddyCredential = async (options) => {
     const tried = /* @__PURE__ */ new Set();
@@ -71745,7 +71977,8 @@ function apply(ctx, config = {}) {
   };
   const loomyBalanceSelector = new LoomyBalanceSelector({
     product: LOOMY,
-    resolveCredential: resolveLoomyCredentialByRef
+    resolveCredential: resolveLoomyCredentialByRef,
+    onBalanceSample: recordCreditUsage(LOOMY.id)
   });
   const loomyAdapter = registerLoomyLlm(ctx, {
     credentialRef: credentialRef16(LOOMY.defaultCredentialRef),
@@ -71848,16 +72081,11 @@ function apply(ctx, config = {}) {
       return void 0;
     }
   };
-  const creditUsage = new CreditUsageLedger();
   const raccoonBalanceSelector = new RaccoonBalanceSelector({
     product: RACCOON,
     resolveCredential: resolveRaccoonCredentialByRef,
-    // 采样点：每次真实读到余额后记一笔差值。昵称在记账时取一次快照，
-    // 账号改名后历史仍显示当时的名字。
-    onBalanceSample: (accountId, balances) => {
-      const nickname = pool.listAccountsByProvider(RACCOON.id).find((account) => account.id === accountId)?.nickname;
-      creditUsage.record(RACCOON.id, accountId, nickname, balances);
-    }
+    // 采样点：每次真实读到余额后记一笔差值（公共入口负责落盘节流）。
+    onBalanceSample: recordCreditUsage(RACCOON.id)
   });
   const pickRaccoonAccount = async (modelId, invalidate) => {
     const candidates = pool.listAccountsByProvider(RACCOON.id).filter((a) => a.enabled).filter((a) => {

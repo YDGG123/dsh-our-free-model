@@ -20,6 +20,7 @@ import { LoomyAuth } from './loomy-auth.js'
 import { RaccoonAuth } from './raccoon-auth.js'
 import { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
 import { CreditUsageLedger } from './credit-usage-ledger.js'
+import { createCreditUsageStore } from './credit-usage-store.js'
 import { LOOMY } from './loomy-product.js'
 import { LoomyBalanceSelector } from './loomy-balance-selector.js'
 import { RACCOON } from './raccoon-product.js'
@@ -409,13 +410,49 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
    * 判据出处见 `buddy-balance-rank.ts`（为什么是 15 天、为什么用 DeductionEndTime
    * 而不是 CycleEndTime / ExpiredTime，都有实测对照）。
    */
+  /**
+   * 每日积分消耗账本（按 UTC+8 日聚合，跨重启保留）。
+   *
+   * ⚠️ **为什么需要它**：数据看板原本只有 token 维度，用户看不到「今天用了
+   * 多少积分」。上游不提供消耗量（`used` 恒为 0，扣费公式无公开依据），
+   * 唯一可信的事实是**余额差值** —— 由各选号器每次真实查询余额后回调采样
+   * 得到（见 `credit-usage-ledger.ts` 文件头的完整推理）。
+   *
+   * ⚠️ **采样面**：Raccoon / Loomy / CodeBuddy / WorkBuddy 四家（双池渠道）。
+   * 每家的池由它自己的 `fetchXxxCredit` 决定，采样的是**它自己的余额字段**，
+   * 记到同一个账本里按 provider 分桶 —— 所以「按积分池拆分」里会出现
+   * 「每日赠送」「永久积分」「每日积分」「奖励积分」等不同池名，这是正常的。
+   */
+  const creditUsageStore = createCreditUsageStore(ctx)
+  const creditUsage = new CreditUsageLedger(undefined, creditUsageStore, 30_000)
+  creditUsage.setLogger(message => logger.warn?.(`our-free-model: ${message}`))
+  /**
+   * 记账的公共入口：按 provider + 账号采一次样，并安排节流落盘。
+   *
+   * 单独一个函数（而不是每个选号器各写一份）的理由：四个提供方共用同一账本，
+   * 落盘节流与异常吞噬只该有一处实现。
+   */
+  const recordCreditUsage = (provider: string) => (accountId: string, balances: Record<string, number>) => {
+    const nickname = pool.listAccountsByProvider(provider).find(account => account.id === accountId)?.nickname
+    try {
+      creditUsage.record(provider, accountId, nickname, balances)
+      creditUsage.scheduleFlush()
+    } catch { /* 记账是尽力而为，绝不影响选号 */ }
+  }
+  // 进程退出前尽量落盘（防抖窗口内最多丢 30 秒的计数）。
+  process.once('beforeExit', () => { void creditUsage.flush() })
+
+  // 池名是 buddy 系自己算的（`临时积分` / `永久积分`，见 buddy-balance-selector），
+  // 采样这两格合成余额即可做差值记账。
   const buddyBalanceSelector = new BuddyBalanceSelector({
     product: CODEBUDDY,
     resolveCredential: resolveBuddyCredentialByRef,
+    onBalanceSample: recordCreditUsage(CODEBUDDY.id),
   })
   const workbuddyBalanceSelector = new BuddyBalanceSelector({
     product: WORKBUDDY,
     resolveCredential: resolveBuddyCredentialByRef,
+    onBalanceSample: recordCreditUsage(WORKBUDDY.id),
   })
 
   /**
@@ -997,6 +1034,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   const loomyBalanceSelector = new LoomyBalanceSelector({
     product: LOOMY,
     resolveCredential: resolveLoomyCredentialByRef,
+    onBalanceSample: recordCreditUsage(LOOMY.id),
   })
 
   const loomyAdapter = registerLoomyLlm(ctx, {
@@ -1162,25 +1200,12 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
    * 策略：优先有每日积分的号 → 其次有长期积分（奖励/会员/充值）的号 →
    * 都无/查不到排最后。档内保持手动拖拽顺序。
    */
-  /**
-   * 每日积分消耗账本（进程内，按 UTC+8 日聚合）。
-   *
-   * ⚠️ **为什么需要它**：数据看板原本只有 token 维度，用户看不到「今天用了
-   * 多少积分」。上游不提供消耗量（`used` 恒为 0，扣费公式无公开依据），
-   * 唯一可信的事实是**余额差值** —— 由选号器每次真实查询余额后回调采样
-   * 得到（见 `credit-usage-ledger.ts` 文件头的完整推理）。
-   */
-  const creditUsage = new CreditUsageLedger()
 
   const raccoonBalanceSelector = new RaccoonBalanceSelector({
     product: RACCOON,
     resolveCredential: resolveRaccoonCredentialByRef,
-    // 采样点：每次真实读到余额后记一笔差值。昵称在记账时取一次快照，
-    // 账号改名后历史仍显示当时的名字。
-    onBalanceSample: (accountId, balances) => {
-      const nickname = pool.listAccountsByProvider(RACCOON.id).find(account => account.id === accountId)?.nickname
-      creditUsage.record(RACCOON.id, accountId, nickname, balances)
-    },
+    // 采样点：每次真实读到余额后记一笔差值（公共入口负责落盘节流）。
+    onBalanceSample: recordCreditUsage(RACCOON.id),
   })
 
   /**

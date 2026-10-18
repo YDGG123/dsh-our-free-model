@@ -365,5 +365,78 @@ await (async () => {
   globalThis.fetch = saved
 })()
 
+
+// ── 跨重启持久化 ─────────────────────────────────────────────────────────────
+// 用一个假的后端（内存）验证「内存↔磁盘」合并的三个方向：
+// ①构造时读盘 → 历史进快照 ②snapshot 取并集 ③增量 flush 不丢历史。
+const fakeStore = seed => {
+  let document = seed ?? { providers: {} }
+  return {
+    loads: 0,
+    saves: 0,
+    load() { this.loads += 1; return JSON.parse(JSON.stringify(document)) },
+    async save(next) { this.saves += 1; document = JSON.parse(JSON.stringify(next)) },
+  }
+}
+const withDays = (provider, rows) => ({ providers: { [provider]: { days: rows } } })
+
+check('构造时从磁盘读历史：快照能读到重启前的日桶', () => {
+  const store = fakeStore(withDays('raccoon', [{ day: '2026-10-16', spent: 500, gained: 0, accounts: 2 }]))
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), store)
+  const snapshot = ledger.snapshot('raccoon')
+  const byDay = new Map(snapshot.days.map(row => [row.day, row.spent]))
+  assert.equal(byDay.get('2026-10-16'), 500, '昨天的消耗在重启后仍然可读')
+  assert.equal(store.loads, 1, '只在构造时读一次盘')
+})
+
+check('snapshot 取内存与磁盘的并集（今天在内存、历史在盘上）', () => {
+  const store = fakeStore(withDays('raccoon', [{ day: '2026-10-16', spent: 500, gained: 0, accounts: 1 }]))
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), store)
+  // 今天（10-17）记一笔 100。
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 200 })
+  const snapshot = ledger.snapshot('raccoon')
+  const byDay = new Map(snapshot.days.map(row => [row.day, row.spent]))
+  assert.equal(byDay.get('2026-10-16'), 500)
+  assert.equal(byDay.get('2026-10-17'), 100)
+  assert.equal(snapshot.days.length, 2, '两天都在最近列表里')
+})
+
+check('同一天内存 ≥ 磁盘时取内存值（内存是同源的更新读数）', () => {
+  const store = fakeStore(withDays('raccoon', [{ day: '2026-10-17', spent: 80, gained: 0, accounts: 1 }]))
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), store)
+  // 内存里这一天已经累计到 150（磁盘是早先 flush 的 80）。
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 150 })
+  const snapshot = ledger.snapshot('raccoon')
+  assert.equal(snapshot.today.spent, 150, '并集取较大值，不重复累加')
+})
+
+check('flush 是增量合并：不丢盘上已有的历史日桶', async () => {
+  const store = fakeStore(withDays('raccoon', [{ day: '2026-10-16', spent: 500, gained: 0, accounts: 1 }]))
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), store)
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 100 })
+  await ledger.flush()
+  assert.equal(store.saves, 1)
+  const written = await store.load()
+  const byDay = new Map(written.providers.raccoon.days.map(row => [row.day, row.spent]))
+  assert.equal(byDay.get('2026-10-16'), 500, '昨天的桶必须还在（合并写不是覆盖写）')
+  assert.equal(byDay.get('2026-10-17'), 200)
+})
+
+check('flush 失败只记日志，不影响调用方（记账绝不能反噬选号）', async () => {
+  const failing = {
+    load: () => ({ providers: {} }),
+    save: async () => { throw new Error('disk full') },
+  }
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), failing)
+  ledger.setLogger(message => { assert.match(message, /flush failed/) })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
+  ledger.record('raccoon', 'a1', 'A', { '每日积分': 200 })
+  await ledger.flush() // 不抛错
+  assert.equal(ledger.snapshot('raccoon').today.spent, 100, '内存账本仍可用')
+})
+
 console.log(`credit-usage: ${failures === 0 ? 'all ok' : `${failures} failure(s)`}`)
 process.exitCode = failures > 0 ? 1 : 0

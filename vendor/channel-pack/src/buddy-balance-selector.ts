@@ -120,6 +120,15 @@ export interface BuddySelectionDeps {
   errorTtlMs?: number
   /** 「临时积分」窗口覆盖（测试用）。 */
   windowMs?: number
+  /**
+   * 余额采样回调（每日积分消耗账本的数据源）。
+   *
+   * 在**每次真实查询余额之后**调用（缓存命中不调用）。buddy 的池是合成的
+   * （`expiring` / `permanent`，见 `splitBuddyCreditsByExpiry`），故入参只有
+   * 这**两格合成余额**而不是上游原始包名 —— 记账与差值的数学不变，只是
+   * 粒度更粗（无法再按上游包名拆）。回调**不得抛错**（记账是尽力而为）。
+   */
+  onBalanceSample?: (accountId: string, balances: Record<string, number>) => void
 }
 
 /**
@@ -197,7 +206,18 @@ export class BuddyBalanceSelector {
 
     const source = await this.fetchSource(account)
     this.cache.set(account.id, { at: now, source })
-    return this.classify(account.id, source, now)
+    const entry = this.classify(account.id, source, now)
+    // 每日积分消耗账本：只在**真实查了原料**（而非缓存命中）之后采样 ——
+    // 缓存命中没有新读数，重复采样会把同一段差值记两遍。
+    if (entry.ok && this.deps.onBalanceSample !== undefined) {
+      try {
+        this.deps.onBalanceSample(account.id, {
+          '临时积分': entry.expiringBalance ?? 0,
+          '永久积分': entry.permanentBalance ?? 0,
+        })
+      } catch { /* 记账是尽力而为 */ }
+    }
+    return entry
   }
 
   /**
