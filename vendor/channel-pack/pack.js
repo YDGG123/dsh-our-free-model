@@ -53013,6 +53013,19 @@ var CreditUsageLedger = class {
     }, this.flushDebounceMs);
     this.flushTimer.unref?.();
   }
+  /**
+   * 采样入口（供 RPC 层直接使用；不需要构造新的闭包）。
+   *
+   * 与 {@link record} 的差别：本方法自带异常吞噬（记账是尽力而为），
+   * 并在记账后安排节流落盘 —— 调用方无需关心这两件事。
+   */
+  sample(provider, accountId, balances) {
+    try {
+      this.record(provider, accountId, void 0, balances);
+      this.scheduleFlush();
+    } catch {
+    }
+  }
   /** 安装日志出口（宿主侧调用）。 */
   setLogger(logger3) {
     this.onLog = logger3;
@@ -63819,6 +63832,15 @@ async function collectCreditBalances(accounts, product, deps) {
       error = caught instanceof Error ? caught.message : String(caught);
       balance = null;
     }
+    if (balance !== null && deps.onBalanceSample !== void 0) {
+      const balances = {};
+      for (const pkg of balance.packages) {
+        if (pkg.active === true && typeof pkg.remaining === "number" && Number.isFinite(pkg.remaining)) {
+          balances[pkg.name] = pkg.remaining;
+        }
+      }
+      if (Object.keys(balances).length > 0) deps.onBalanceSample(entry.id, balances);
+    }
     results.push({
       accountId: entry.id,
       nickname: entry.nickname,
@@ -65264,6 +65286,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider === "codearts") {
           const values2 = await collectCreditBalances(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample("codearts", accountId, balances),
             fetchBalanceDetailed: async (credential) => {
               const result = await fetchCodeArtsAccountInfoDetailed(credential);
               if (!result.ok) return { balance: null, error: `\u8D26\u6237\u4FE1\u606F\u67E5\u8BE2\u5931\u8D25\uFF1A${result.message}` };
@@ -65284,6 +65307,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider === LOBSTERAI.id) {
           const values2 = await collectCreditBalances(accounts, LOBSTERAI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample("lobsterai", accountId, balances),
             fetchBalance: (credential, product2) => fetchLobsteraiCreditBalance(credential, product2),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
@@ -65322,6 +65346,15 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               continue;
             }
             const balance = await fetchQoderCreditBalance(credential, product2);
+            if (balance !== null) {
+              const balances = {};
+              for (const pkg of balance.packages) {
+                if (pkg.active === true && typeof pkg.remaining === "number" && Number.isFinite(pkg.remaining)) {
+                  balances[pkg.name] = pkg.remaining;
+                }
+              }
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(QODER.id, account.id, balances);
+            }
             values2.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -65366,6 +65399,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider === TRAE.id) {
           const values2 = await collectCreditBalances(accounts, TRAE, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample("trae", accountId, balances),
             fetchBalance: (credential, product2) => fetchTraeCreditBalance(credential, product2),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
@@ -65380,6 +65414,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider === MINIMAX.id) {
           const values2 = await collectCreditBalances(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample("minimax", accountId, balances),
             fetchBalance: (credential) => fetchMinimaxCreditBalance(credential),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
@@ -65388,6 +65423,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider === GEMINI.id) {
           const values2 = await collectCreditBalances(accounts, GEMINI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
+            onBalanceSample: (accountId, balances) => config.creditUsage?.sample("gemini", accountId, balances),
             fetchBalanceDetailed: async (credential) => {
               const { balance, error, tier } = await fetchGeminiCreditBalance(credential, GEMINI, { force: req.force === true });
               const extra = tier === void 0 ? void 0 : { accountTier: { label: tier.label, title: `${tier.name}\uFF08${tier.id}\uFF09` } };
@@ -65427,6 +65463,15 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               continue;
             }
             const result = await fetchClineCreditBalance(credential, CLINE);
+            if (result.balance !== null) {
+              const balances = {};
+              for (const pkg of result.balance.packages) {
+                if (pkg.active === true && typeof pkg.remaining === "number" && Number.isFinite(pkg.remaining)) {
+                  balances[pkg.name] = pkg.remaining;
+                }
+              }
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(CLINE.id, account.id, balances);
+            }
             values2.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -65556,6 +65601,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               });
               continue;
             }
+            const balance_sample = buildZcodeBalance(result);
             values2.push({
               accountId: account.id,
               nickname: account.nickname,
@@ -65578,8 +65624,17 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
                * 且用户要看的恰恰是「GLM-5.3 与 GLM-5.3-Flash 各自剩多少」，
                * 前端需要按模型逐行渲染、缺桶的模型显示占位。
                */
-              balance: buildZcodeBalance(result)
+              balance: balance_sample
             });
+            if (balance_sample !== null) {
+              const balances = {};
+              for (const pkg of balance_sample.packages) {
+                if (pkg.active === true && typeof pkg.remaining === "number" && Number.isFinite(pkg.remaining)) {
+                  balances[pkg.name] = pkg.remaining;
+                }
+              }
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(ZCODE.id, account.id, balances);
+            }
           }
           return { ok: true, value: { accounts: values2 } };
         }
@@ -65589,6 +65644,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         const values = await collectCreditBalances(accounts, product, {
           resolve: (ref) => ctx.credentials.resolve(ref),
+          onBalanceSample: (accountId, balances) => config.creditUsage?.sample(product.id, accountId, balances),
           warn: (msg) => ctx.logger?.warn?.(msg)
         });
         return {

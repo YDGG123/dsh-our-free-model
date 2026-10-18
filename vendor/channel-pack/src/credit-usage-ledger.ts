@@ -292,6 +292,19 @@ export class CreditUsageLedger {
     this.flushTimer.unref?.()
   }
 
+  /**
+   * 采样入口（供 RPC 层直接使用；不需要构造新的闭包）。
+   *
+   * 与 {@link record} 的差别：本方法自带异常吞噬（记账是尽力而为），
+   * 并在记账后安排节流落盘 —— 调用方无需关心这两件事。
+   */
+  sample(provider: string, accountId: string, balances: Record<string, number>): void {
+    try {
+      this.record(provider, accountId, undefined, balances)
+      this.scheduleFlush()
+    } catch { /* 尽力而为 */ }
+  }
+
   /** 安装日志出口（宿主侧调用）。 */
   setLogger(logger: (message: string) => void): void {
     this.onLog = logger
