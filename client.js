@@ -1546,6 +1546,13 @@ window.__ModuleLoader__.load({
 .ofm_seg button{border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11.5px;font-weight:550;padding:3px 11px;border-radius:8px;cursor:pointer;transition:color .16s ease,background .16s ease,box-shadow .16s ease}
 .ofm_seg button:hover{color:var(--dsw-alias-label-primary)}
 .ofm_seg button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);box-shadow:0 1px 3px rgb(0 0 0 / 12%),inset 0 1px 0 rgb(255 255 255 / 6%)}
+
+/* ══ 积分消耗：服务商卡片切换（与数据看板 KPI 卡同视觉）══════════════ */
+.ofm_creditsel{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
+.ofm_creditsel .ofm_kpi{position:relative;cursor:pointer;padding:12px 14px 12px 18px;text-align:left;font:inherit;border:1px solid var(--dsw-alias-border-l2)}
+.ofm_creditsel .ofm_kpi[data-on="true"]{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 70%,var(--dsw-alias-border-l2));box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-state-business-primary) 60%,transparent),0 10px 28px rgb(0 0 0 / 11%)}
+.ofm_creditbar{position:absolute;left:0;top:11px;bottom:11px;width:3.5px;border-radius:3px}
+.ofm_creditsel .ofm_kpivalue{font-size:20px}
 .ofm_svg{display:block;width:100%;height:auto;overflow:visible}
 /* ══ 筛选 chips ════════════════════════════════════════════════════════ */
 .ofm_chips{display:flex;gap:6px;flex-wrap:wrap}
@@ -4922,7 +4929,11 @@ window.__ModuleLoader__.load({
     function CreditPage(props) {
       const { t } = props
       const [provider, setProvider] = useState('')
-      const credit = useCreditUsage({ ...props, provider })
+      // ⚠️ 始终请求**全渠道**（provider=''）：卡片切换器需要每个渠道各自的
+      // 今日已用，而 allSnapshot 一次返回全部渠道的逐渠道快照。单渠道视图
+      // 的明细（accounts/days）从返回的 providers 里按当前选中筛出 ——
+      // 一次请求同时喂饱卡片网格与详情区，切渠道零等待。
+      const credit = useCreditUsage({ ...props, provider: '' })
       if (credit.status === 'unavailable') {
         return h('div', { className: 'ofm_page' },
           h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') }),
@@ -4940,24 +4951,49 @@ window.__ModuleLoader__.load({
             t('chan.credits.failed').replace('{reason}', credit.error))))
       }
       const data = credit.data
-      const today = data?.today ?? { spent: 0, gained: 0, accounts: 0 }
-      const samples = Number(data?.samples ?? 0)
+      const providers = data?.providers ?? []
+      // 当前选中渠道的快照（全渠道视图下为 undefined → 用汇总）。
+      const current = provider === '' ? null : (providers.find(entry => entry.provider === provider) ?? null)
+      const view = current ?? data ?? {}
+      const today = view.today ?? data?.today ?? { spent: 0, gained: 0, accounts: 0 }
+      const samples = Number(view.samples ?? data?.samples ?? 0)
       // 单渠道视图才显示按账号明细：多渠道时账号 id 会跨渠道相撞。
-      const accounts = provider === '' ? [] : (data?.accounts ?? [])
+      const accounts = provider === '' ? [] : (view.accounts ?? [])
       // Heatmap / TrendChart 期望 token 账本的行形态 {day, total, models[]}；
       // 积分维度映射为 total = spent（models 留空，热力图 hover 只显示日与数）。
-      const heatDays = (data?.days ?? []).map(row => ({ day: row.day, total: Number(row.spent ?? 0), models: [] }))
+      const heatDays = (view.days ?? data?.days ?? []).map(row => ({ day: row.day, total: Number(row.spent ?? 0), models: [] }))
       const hasData = Number(today.spent ?? 0) > 0 || heatDays.some(row => row.total > 0)
       const last30 = heatDays.reduce((sum, row) => sum + row.total, 0)
       const activeChannel = provider === '' ? null : CHANNEL_PROVIDERS.find(c => c.id === provider)
       return h('div', { className: 'ofm_page' },
         h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') },
-          h('div', { className: 'ofm_seg', role: 'tablist' },
-            [['', t('dash.credit.allChannels')], ...CHANNEL_PROVIDERS.map(c => [c.id, c.name])].map(([id, label]) => h('button', {
-              key: id || 'all', type: 'button', 'aria-pressed': provider === id ? 'true' : 'false',
-              onClick: () => setProvider(id),
-            }, label))),
           h(Button, { onClick: () => void credit.reload() }, t('dash.refresh'))),
+        // 服务商卡片切换器：与数据看板 KPI 卡同一视觉语言（玻璃态圆角卡 +
+        // hover 上浮 + accent 色条），每张卡直接显示该渠道今日已用，点击切换。
+        // 「全部渠道」是首张卡（合计值）；某渠道无数据时卡面显示 0（它仍然
+        // 可点 —— 切过去看该渠道的空态说明，而不是把入口藏起来）。
+        h('div', { className: 'ofm_creditsel', role: 'tablist' },
+          h('button', {
+            key: 'all', type: 'button', role: 'tab',
+            className: 'ofm_kpi ofm_glass', 'data-on': provider === '' ? 'true' : 'false',
+            'aria-pressed': provider === '' ? 'true' : 'false',
+            onClick: () => setProvider(''),
+          },
+            h('span', { className: 'ofm_kpilabel' }, t('dash.credit.allChannels')),
+            h('b', { className: 'ofm_kpivalue' }, fmtInt((data?.today?.spent ?? 0)))),
+          CHANNEL_PROVIDERS.map(c => {
+            const spent = providers.find(entry => entry.provider === c.id)?.today?.spent ?? 0
+            const on = provider === c.id
+            return h('button', {
+              key: c.id, type: 'button', role: 'tab',
+              className: 'ofm_kpi ofm_glass', 'data-on': on ? 'true' : 'false',
+              'aria-pressed': on ? 'true' : 'false',
+              onClick: () => setProvider(c.id),
+            },
+              h('i', { className: 'ofm_creditbar', style: { background: c.accent } }),
+              h('span', { className: 'ofm_kpilabel' }, c.name),
+              h('b', { className: 'ofm_kpivalue' }, fmtInt(spent)))
+          })),
         !hasData ? h('p', { className: 'ofm_note' }, t('dash.credit.noSample'))
           : h(Fragment, null,
             h('div', { className: 'ofm_kpis' },
@@ -4966,13 +5002,13 @@ window.__ModuleLoader__.load({
               h(KpiCard, { label: t('dash.credit.last30'), value: fmtInt(last30), sub: activeChannel === null ? undefined : activeChannel.name }),
               h(KpiCard, { label: t('dash.credit.samples'), value: fmtInt(samples), sub: provider === '' ? undefined : (activeChannel?.note ?? undefined) })),
             samples === 0 ? null : h(Panel, { title: t('dash.credit.heatTitle') }, h(Heatmap, { days: heatDays, t }))),
-        days.length === 0 ? null : h(Section, { title: t('dash.credit.historyTitle'), hint: t('dash.credit.hint') },
+        heatDays.length === 0 ? null : h(Section, { title: t('dash.credit.historyTitle'), hint: t('dash.credit.hint') },
           h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
             h('thead', null, h('tr', null,
               h('th', { key: 'day' }, t('dash.credit.dayCol')),
               h('th', { key: 'spent' }, t('dash.credit.today')),
               h('th', { key: 'gained' }, t('dash.credit.gained')))),
-            h('tbody', null, days.slice(0, 30).map(row => h('tr', { key: row.day },
+            h('tbody', null, heatDays.slice(0, 30).map(row => h('tr', { key: row.day },
               h('td', { key: 'day' }, row.day),
               h('td', { key: 'spent' }, fmtInt(row.spent)),
               h('td', { key: 'gained' }, fmtInt(row.gained)))))))),
