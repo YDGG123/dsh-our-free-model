@@ -4388,15 +4388,25 @@ window.__ModuleLoader__.load({
         } finally { setLockBusy(false) }
       }
 
-      // 「长期积分优先账号」：每日用尽后先烧指定号的长期积分。undefined=查询中，
-      // null=不支持/失败（隐藏按钮，与 lock 的降级同策），string=当前优先账号 id。
+      // 「长期积分优先账号」：每日用尽后先烧指定号的长期积分。
+      //
+      // ⚠️ 三个状态必须分开（真实缺陷，用户报障 2026-10-18）：`accountId: null`
+      // 是**合法且常见**的「尚未设置」，不是失败 —— 早先把「查询失败」也写成
+      // null，于是正常未设置时按钮被当成故障隐藏，功能等于不存在。
+      //   undefined = 查询中（先不渲染，避免闪烁）
+      //   null      = 查询失败/后端不支持 → 隐藏按钮（降级，与 lock 同策）
+      //   string    = 已设置该账号
+      //   ''        = 查询成功但未设置 → 按钮显示为「可设置」状态
       const [preferred, setPreferred] = useState(undefined)
       const [preferredBusy, setPreferredBusy] = useState(false)
       useEffect(() => {
         if (!creditCapability?.preferred) return undefined
         let alive = true
         rpc('credits.longTermPreferred', { provider: channel.id }, 15_000)
-          .then(value => { if (alive) setPreferred(typeof value?.accountId === 'string' ? value.accountId : null) })
+          .then(value => {
+            if (!alive) return
+            setPreferred(typeof value?.accountId === 'string' && value.accountId.length > 0 ? value.accountId : '')
+          })
           .catch(() => { if (alive) setPreferred(null) })
         return () => { alive = false }
       }, [creditCapability?.preferred, rpc, channel.id])
@@ -4405,7 +4415,7 @@ window.__ModuleLoader__.load({
         setPreferredBusy(true); setNotice('')
         try {
           const value = await rpc('credits.longTermPreferred', { provider: channel.id, accountId }, 15_000)
-          setPreferred(typeof value?.accountId === 'string' ? value.accountId : null)
+          setPreferred(typeof value?.accountId === 'string' && value.accountId.length > 0 ? value.accountId : '')
         } catch (error) {
           setNotice(t('chan.preferred.failed').replace('{reason}', String(error?.message ?? error)))
         } finally { setPreferredBusy(false) }
@@ -4510,7 +4520,7 @@ window.__ModuleLoader__.load({
                       `${balanceLabel} ${reading}`)
                   })(),
                   h('span', { className: 'ofm_acctacts' },
-                    creditCapability?.preferred && preferred !== null ? h('button', {
+                    creditCapability?.preferred && preferred !== undefined && preferred !== null ? h('button', {
                       type: 'button', className: 'ofm_minibtn preferred', disabled: preferredBusy || busy !== '' || !rpc,
                       'aria-pressed': preferred === row.id ? 'true' : 'false',
                       'aria-busy': preferredBusy ? 'true' : undefined,
