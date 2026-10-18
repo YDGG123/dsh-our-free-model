@@ -444,6 +444,7 @@ window.__ModuleLoader__.load({
         'dash.credit.today': '今日已用',
         'dash.credit.allChannels': '全部渠道',
         'dash.credit.dayCol': '日期',
+        'dash.credit.byAccount': '个账号',
         'dash.credit.gained': '今日补给',
         'dash.credit.hint': '按余额差值记录真实扣费；上游不提供消耗量，故由本机采样',
         'dash.credit.byPool': '按积分池',
@@ -549,6 +550,11 @@ window.__ModuleLoader__.load({
         'chan.preferred.label': '长期优先',
         'chan.preferred.hint': '每日积分用尽后，先消耗此账号的长期积分；再次点击恢复手动顺序',
         'chan.preferred.failed': '设置长期优先失败：{reason}',
+        'dash.credit.last30': '近 30 天合计',
+        'dash.credit.heatTitle': '每日消耗热力图',
+        'dash.credit.historyTitle': '每日消耗明细',
+        'dash.credit.byAccountTitle': '按账号明细',
+        'dash.credit.byAccountHint': '每日积分用尽后，指定账号的长期积分先烧（见渠道卡片的「长期优先」按钮）',
         'chan.claim.failed': '领取失败：{reason}',
         'chan.auto.title': '每日自动签到',
         'chan.auto.running': '签到进行中…',
@@ -1146,6 +1152,7 @@ window.__ModuleLoader__.load({
         'dash.credit.today': 'Used today',
         'dash.credit.allChannels': 'All channels',
         'dash.credit.dayCol': 'Day',
+        'dash.credit.byAccount': 'accounts',
         'dash.credit.gained': 'Granted today',
         'dash.credit.hint': 'Real charges recorded as balance deltas; the upstream reports no spend, so it is sampled locally',
         'dash.credit.byPool': 'By credit pool',
@@ -1251,6 +1258,11 @@ window.__ModuleLoader__.load({
         'chan.preferred.label': 'Long-term first',
         'chan.preferred.hint': 'Once daily credits run out, the preferred account\'s long-term credits burn first; click again to restore manual order',
         'chan.preferred.failed': 'Failed to set the preferred account: {reason}',
+        'dash.credit.last30': 'Last 30 days total',
+        'dash.credit.heatTitle': 'Daily spend heatmap',
+        'dash.credit.historyTitle': 'Daily spend history',
+        'dash.credit.byAccountTitle': 'Spend by account',
+        'dash.credit.byAccountHint': 'Once daily credits run out, the preferred account\'s long-term credits burn first (see the "Long-term first" button on channel cards)',
         'chan.claim.failed': 'Claim failed: {reason}',
         'chan.auto.title': 'Daily auto check-in',
         'chan.auto.running': 'Check-in running…',
@@ -4899,10 +4911,13 @@ window.__ModuleLoader__.load({
     /**
      * 「积分消耗」页：独立 tab，展示本 fork 记账的每日积分详情。
      *
-     * 结构：渠道切换 → 今日 KPI（已用/补给）→ 按账号明细（仅单渠道）→
-     * 最近 30 天历史表。数据全部来自 `credits.usage`（本机按余额差值采样
-     * 后落盘，跨重启保留），因此**没有数据是常态**（刚装上/刚重启且还没
-     * 发过消息），用明确空态文案而不是显示 0 —— 0 会被读成「今天没花钱」。
+     * UI 与数据看板统一：KPI 卡网格（今日已用/补给/近 30 天合计/采样数）、
+     * 每日消耗热力图、每日趋势折线、Section 表格（历史 + 按账号明细）。
+     * 复用看板的 Heatmap / TrendChart / Section / KpiCard —— 积分维度与
+     * token 维度同一个视觉语言。
+     *
+     * 数据来自 `credits.usage`（本机按余额差值采样后落盘，跨重启保留），
+     * **没有数据是常态**（刚装上/还没发消息），空态文案明确说明而不是显示 0。
      */
     function CreditPage(props) {
       const { t } = props
@@ -4929,8 +4944,12 @@ window.__ModuleLoader__.load({
       const samples = Number(data?.samples ?? 0)
       // 单渠道视图才显示按账号明细：多渠道时账号 id 会跨渠道相撞。
       const accounts = provider === '' ? [] : (data?.accounts ?? [])
-      const days = data?.days ?? []
-      const hasData = Number(today.spent ?? 0) > 0 || days.length > 0 || accounts.length > 0
+      // Heatmap / TrendChart 期望 token 账本的行形态 {day, total, models[]}；
+      // 积分维度映射为 total = spent（models 留空，热力图 hover 只显示日与数）。
+      const heatDays = (data?.days ?? []).map(row => ({ day: row.day, total: Number(row.spent ?? 0), models: [] }))
+      const hasData = Number(today.spent ?? 0) > 0 || heatDays.some(row => row.total > 0)
+      const last30 = heatDays.reduce((sum, row) => sum + row.total, 0)
+      const activeChannel = provider === '' ? null : CHANNEL_PROVIDERS.find(c => c.id === provider)
       return h('div', { className: 'ofm_page' },
         h(PageHero, { title: t('dash.credit.title'), sub: t('dash.credit.hint') },
           h('div', { className: 'ofm_seg', role: 'tablist' },
@@ -4942,33 +4961,32 @@ window.__ModuleLoader__.load({
         !hasData ? h('p', { className: 'ofm_note' }, t('dash.credit.noSample'))
           : h(Fragment, null,
             h('div', { className: 'ofm_kpis' },
-              h(KpiCard, {
-                label: t('dash.credit.today'),
-                value: fmtInt(today.spent),
-                sub: samples > 0 ? t('dash.credit.samples').replace('{n}', String(samples)) : undefined,
-              }),
-              Number(today.gained ?? 0) > 0
-                ? h(KpiCard, { label: t('dash.credit.gained'), value: fmtInt(today.gained), sub: '—' })
-                : null),
-            days.length === 0 ? null : h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
-              h('thead', null, h('tr', null,
-                h('th', { key: 'day' }, t('dash.credit.dayCol')),
-                h('th', { key: 'spent' }, t('dash.credit.today')),
-                h('th', { key: 'gained' }, t('dash.credit.gained')))),
-              h('tbody', null, days.slice(0, 30).map(row => h('tr', { key: row.day },
-                h('td', { key: 'day' }, row.day),
-                h('td', { key: 'spent' }, fmtInt(row.spent)),
-                h('td', { key: 'gained' }, fmtInt(row.gained))))))),
-            accounts.length === 0 ? null : h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
-              h('thead', null, h('tr', null,
-                h('th', { key: 'name' }, t('chan.titleSingle')),
-                h('th', { key: 'spent' }, t('dash.credit.today')),
-                h('th', { key: 'pools' }, t('dash.credit.byPool')))),
-              h('tbody', null, accounts.map(row => h('tr', { key: row.accountId },
-                h('td', { key: 'name' }, row.nickname ?? row.accountId),
-                h('td', { key: 'spent' }, fmtInt(row.spent)),
-                h('td', { key: 'pools' }, Object.entries(row.pools ?? {})
-                  .map(([pool, value]) => `${pool} ${fmtInt(value)}`).join(' · ') || '—'))))))))
+              h(KpiCard, { label: t('dash.credit.today'), value: fmtInt(today.spent), sub: today.accounts > 0 ? `${today.accounts} ${t('dash.credit.byAccount')}` : undefined }),
+              Number(today.gained ?? 0) > 0 ? h(KpiCard, { label: t('dash.credit.gained'), value: fmtInt(today.gained), sub: '—' }) : null,
+              h(KpiCard, { label: t('dash.credit.last30'), value: fmtInt(last30), sub: activeChannel === null ? undefined : activeChannel.name }),
+              h(KpiCard, { label: t('dash.credit.samples'), value: fmtInt(samples), sub: provider === '' ? undefined : (activeChannel?.note ?? undefined) })),
+            samples === 0 ? null : h(Panel, { title: t('dash.credit.heatTitle') }, h(Heatmap, { days: heatDays, t }))),
+        days.length === 0 ? null : h(Section, { title: t('dash.credit.historyTitle'), hint: t('dash.credit.hint') },
+          h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
+            h('thead', null, h('tr', null,
+              h('th', { key: 'day' }, t('dash.credit.dayCol')),
+              h('th', { key: 'spent' }, t('dash.credit.today')),
+              h('th', { key: 'gained' }, t('dash.credit.gained')))),
+            h('tbody', null, days.slice(0, 30).map(row => h('tr', { key: row.day },
+              h('td', { key: 'day' }, row.day),
+              h('td', { key: 'spent' }, fmtInt(row.spent)),
+              h('td', { key: 'gained' }, fmtInt(row.gained)))))))),
+        accounts.length === 0 ? null : h(Section, { title: t('dash.credit.byAccountTitle'), hint: t('dash.credit.byAccountHint') },
+          h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
+            h('thead', null, h('tr', null,
+              h('th', { key: 'name' }, t('chan.titleSingle')),
+              h('th', { key: 'spent' }, t('dash.credit.today')),
+              h('th', { key: 'pools' }, t('dash.credit.byPool')))),
+            h('tbody', null, accounts.map(row => h('tr', { key: row.accountId },
+              h('td', { key: 'name' }, row.nickname ?? row.accountId),
+              h('td', { key: 'spent' }, fmtInt(row.spent)),
+              h('td', { key: 'pools' }, Object.entries(row.pools ?? {})
+                .map(([pool, value]) => `${pool} ${fmtInt(value)}`).join(' · ') || '—'))))))))
     }
 
     /** KPI cards: one reading per card, exactly like the gateway consoles. */
