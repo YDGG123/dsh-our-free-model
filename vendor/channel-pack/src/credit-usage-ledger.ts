@@ -218,6 +218,50 @@ export class CreditUsageLedger {
   }
 
   /**
+   * 全渠道概览：遍历账本里**实际有数据的 provider**（内存 ∪ 磁盘），
+   * 逐个取快照并按日汇总。
+   *
+   * ⚠️ 不维护一份手工的 provider 清单 —— 那会和记账面漂移（新增/停用渠道
+   * 时忘改这里，tab 就会出现「点了全 0」的死入口）。「有数据才出现」
+   * 的语义由数据本身保证。
+   *
+   * @returns providers 按名字排序的各渠道快照；days 是全部渠道按日合并的
+   *   总消耗；samples 是全部渠道的采样总数。
+   */
+  allSnapshot(days = 30): {
+    providers: CreditUsageSnapshot[]
+    today: CreditUsageDay
+    days: CreditUsageDay[]
+    samples: number
+  } {
+    const today = utc8DayKey(this.now())
+    const providerIds = new Set<string>([
+      ...this.days.keys(),
+      ...Object.keys(this.persisted.providers),
+    ])
+    const providers = [...providerIds].sort().map(id => this.snapshot(id, days))
+    const byDay = new Map<string, CreditUsageDay>()
+    for (const entry of providers) {
+      for (const row of entry.days) {
+        const existing = byDay.get(row.day)
+        byDay.set(row.day, existing === undefined ? { ...row } : {
+          day: row.day,
+          spent: existing.spent + row.spent,
+          gained: existing.gained + row.gained,
+          accounts: existing.accounts + row.accounts,
+        })
+      }
+    }
+    const allDays = [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
+    return {
+      providers,
+      today: byDay.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 },
+      days: allDays.slice(0, Math.max(1, Math.trunc(days))),
+      samples: providers.reduce((sum, entry) => sum + entry.samples, 0),
+    }
+  }
+
+  /**
    * 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。
    *
    * 「最近 N 天」是**内存与磁盘的并集**：历史日桶已 flush 到盘上，今日的数字
