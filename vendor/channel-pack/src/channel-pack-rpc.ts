@@ -3027,13 +3027,16 @@ function registerChannelPackEndpoints(
             }
           }
           const todayKey = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
-          const days = [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
+          // ⚠️ 不能叫 `days`：case 块顶层已声明 `days`（请求参数），同名会被
+          // esbuild 的重命名搅出 TDZ 冲突（实测「Cannot access 'days2' before
+          // initialization」—— 变量遮蔽 + 压缩重命名叠加的坑）。
+          const mergedDays = [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
           return {
             ok: true,
             value: {
               providers,
               today: byDay.get(todayKey) ?? { day: todayKey, spent: 0, gained: 0, accounts: 0 },
-              days,
+              days: mergedDays,
               accounts: [],
               samples: providers.reduce((sum, entry) => sum + entry.samples, 0),
             },

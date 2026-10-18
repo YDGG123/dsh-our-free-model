@@ -65230,7 +65230,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         if (provider === "") {
           const ids = [...LONG_TERM_PREFERRED_PROVIDERS, LOOMY.id, CODEBUDDY.id, WORKBUDDY.id, RACCOON.id].filter((id, index, all) => all.indexOf(id) === index);
-          const providers = ids.map((id) => config.creditUsage.snapshot(id, days2));
+          const providers = ids.map((id) => config.creditUsage.snapshot(id, days));
           const byDay = /* @__PURE__ */ new Map();
           for (const entry of providers) {
             for (const row of entry.days) {
@@ -65244,13 +65244,13 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             }
           }
           const todayKey = new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
-          const days2 = [...byDay.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
+          const mergedDays = [...byDay.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
           return {
             ok: true,
             value: {
               providers,
               today: byDay.get(todayKey) ?? { day: todayKey, spent: 0, gained: 0, accounts: 0 },
-              days: days2,
+              days: mergedDays,
               accounts: [],
               samples: providers.reduce((sum, entry) => sum + entry.samples, 0)
             }
