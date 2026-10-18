@@ -52719,6 +52719,16 @@ var RaccoonBalanceSelector = class {
       return { id: account.id, ok: false, error: "\u4F59\u989D\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" };
     }
     const daily = detail.packages.find((p) => p.name === RACCOON_DAILY_PACKAGE_NAME)?.remaining;
+    if (this.deps.onBalanceSample !== void 0) {
+      try {
+        const balances = {};
+        for (const pkg of detail.packages) {
+          if (typeof pkg.remaining === "number" && Number.isFinite(pkg.remaining)) balances[pkg.name] = pkg.remaining;
+        }
+        this.deps.onBalanceSample(account.id, balances);
+      } catch {
+      }
+    }
     return {
       id: account.id,
       ok: true,
@@ -52805,6 +52815,141 @@ function positiveNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
+
+// vendor/channel-pack/src/credit-usage-ledger.ts
+var MAX_SAMPLES = 2e3;
+var MAX_DAYS = 90;
+function utc8DayKey2(ts) {
+  const shifted = new Date(ts + 8 * 60 * 60 * 1e3);
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${shifted.getUTCFullYear()}-${month}-${day}`;
+}
+var CreditUsageLedger = class {
+  constructor(now = Date.now) {
+    this.now = now;
+  }
+  now;
+  /** provider → accountId → 各池上次已知余额。 */
+  baselines = /* @__PURE__ */ new Map();
+  /** 原始采样（用于最近明细）；超出上限时最老的先丢（按日汇总已保留）。 */
+  samples = [];
+  /** provider → 日键 → 汇总。 */
+  days = /* @__PURE__ */ new Map();
+  /** provider → 日键 → accountId → 明细。 */
+  accountDays = /* @__PURE__ */ new Map();
+  /**
+   * 用**刚读到的余额**更新基线并记一笔。
+   *
+   * @param provider provider id
+   * @param accountId 账号池条目 id
+   * @param nickname 账号昵称（写进当日明细，便于展示）
+   * @param balances 本次读到的「池名 → 剩余」。首次见到该账号时只建基线、不记账
+   *   （没有上一次可比，无法知道消耗）；之后每次与基线求差。
+   * @returns 本次记下的采样（首次建基线或余额未变时返回空数组）
+   */
+  record(provider, accountId, nickname, balances) {
+    const ts = this.now();
+    const day = utc8DayKey2(ts);
+    let perProvider = this.baselines.get(provider);
+    if (perProvider === void 0) {
+      perProvider = /* @__PURE__ */ new Map();
+      this.baselines.set(provider, perProvider);
+    }
+    const previous = perProvider.get(accountId);
+    perProvider.set(accountId, { ...balances });
+    if (previous === void 0) return [];
+    const written = [];
+    for (const [pool, current] of Object.entries(balances)) {
+      const before = previous[pool];
+      if (before === void 0) continue;
+      const delta = before - current;
+      if (delta === 0) continue;
+      const sample = {
+        ts,
+        provider,
+        accountId,
+        pool,
+        spent: delta > 0 ? delta : 0,
+        gained: delta < 0 ? -delta : 0
+      };
+      this.pushSample(sample);
+      this.accumulate(sample, day, nickname);
+      written.push(sample);
+    }
+    return written;
+  }
+  pushSample(sample) {
+    this.samples.push(sample);
+    if (this.samples.length > MAX_SAMPLES) this.samples.splice(0, this.samples.length - MAX_SAMPLES);
+  }
+  accumulate(sample, day, nickname) {
+    let perProvider = this.days.get(sample.provider);
+    if (perProvider === void 0) {
+      perProvider = /* @__PURE__ */ new Map();
+      this.days.set(sample.provider, perProvider);
+    }
+    const row = perProvider.get(day) ?? { day, spent: 0, gained: 0, accounts: 0 };
+    row.spent += sample.spent;
+    row.gained += sample.gained;
+    perProvider.set(day, row);
+    this.pruneDays(perProvider);
+    let perDay = this.accountDays.get(sample.provider);
+    if (perDay === void 0) {
+      perDay = /* @__PURE__ */ new Map();
+      this.accountDays.set(sample.provider, perDay);
+    }
+    let accounts = perDay.get(day);
+    if (accounts === void 0) {
+      accounts = /* @__PURE__ */ new Map();
+      perDay.set(day, accounts);
+    }
+    const account = accounts.get(sample.accountId) ?? { accountId: sample.accountId, nickname, spent: 0, gained: 0, pools: {} };
+    account.spent += sample.spent;
+    account.gained += sample.gained;
+    if (nickname !== void 0 && nickname.length > 0) account.nickname = nickname;
+    if (sample.spent > 0) account.pools[sample.pool] = (account.pools[sample.pool] ?? 0) + sample.spent;
+    accounts.set(sample.accountId, account);
+    row.accounts = accounts.size;
+  }
+  /** 只保留最近 {@link MAX_DAYS} 天（日键可字典序比较）。 */
+  pruneDays(perProvider) {
+    if (perProvider.size <= MAX_DAYS) return;
+    const keys = [...perProvider.keys()].sort();
+    for (const key of keys.slice(0, keys.length - MAX_DAYS)) perProvider.delete(key);
+  }
+  /** 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。 */
+  snapshot(provider, days = 30) {
+    const today = utc8DayKey2(this.now());
+    const perProvider = this.days.get(provider) ?? /* @__PURE__ */ new Map();
+    const sorted = [...perProvider.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
+    const todayRow = perProvider.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 };
+    const accounts = [...this.accountDays.get(provider)?.get(today)?.values() ?? []].sort((a, b) => b.spent - a.spent);
+    return {
+      provider,
+      today: todayRow,
+      days: sorted.slice(0, Math.max(1, Math.trunc(days))),
+      accounts,
+      samples: this.samples.filter((sample) => sample.provider === provider).length
+    };
+  }
+  /** 清空某 provider 的全部记账（测试与「重置统计」用）。 */
+  reset(provider) {
+    if (provider === void 0) {
+      this.baselines.clear();
+      this.days.clear();
+      this.accountDays.clear();
+      this.samples.length = 0;
+      return;
+    }
+    this.baselines.delete(provider);
+    this.days.delete(provider);
+    this.accountDays.delete(provider);
+    for (let index = this.samples.length - 1; index >= 0; index -= 1) {
+      if (this.samples[index].provider === provider) this.samples.splice(index, 1);
+    }
+  }
+};
 
 // vendor/channel-pack/src/loomy-balance-rank.ts
 var LOOMY_BALANCE_TIER = Object.freeze({
@@ -64874,6 +65019,39 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
       // 独立于 account.list 的原因：余额要为每个账号发一次网络请求，而
       // account.list 是打开面板就会调的轻量操作。混在一起会让账号列表被
       // 网络耗时拖慢，且一次查询失败会让整份列表都取不到。
+      /**
+       * 每日积分消耗（数据看板的积分维度）。
+       *
+       * ⚠️ 数据来自**本插件自己的记账**（`credit-usage-ledger.ts`）：上游只给
+       * 剩余量、`used` 恒为 0、扣费公式无公开依据，所以消耗只能由相邻两次
+       * 余额读数的差值得到。含义与精度：
+       *
+       * - `spent` 是**真实扣费**（差值），不是按 token 推算的估计；
+       * - 采样发生在每次真实查询余额之后，缓存命中会跨过多笔请求，那一段
+       *   消耗合并成一条 —— 金额准确、时间粒度粗（宁可粗，不要假）；
+       * - 首次见到某账号只建基线、不记账（没有上一次可比）；
+       * - 服务重启后内存账本清空，重新从基线开始（历史按日落盘由
+       *   `creditUsage` 的持有方决定，当前为进程内）。
+       *
+       * 未注入账本时返回空快照而不是报错：面板据此显示「暂无数据」，
+       * 比一个「未知故障」有用。
+       */
+      case "credits.usage": {
+        const req = payload;
+        const provider = typeof req.provider === "string" ? req.provider.trim() : "";
+        if (provider.length === 0) {
+          return { ok: false, error: { code: "bad-request", message: "provider \u5FC5\u586B" } };
+        }
+        const days = typeof req.days === "number" && Number.isFinite(req.days) && req.days > 0 ? Math.min(365, Math.trunc(req.days)) : 30;
+        if (config.creditUsage === void 0) {
+          const today = new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
+          return {
+            ok: true,
+            value: { provider, today: { day: today, spent: 0, gained: 0, accounts: 0 }, days: [], accounts: [], samples: 0 }
+          };
+        }
+        return { ok: true, value: config.creditUsage.snapshot(provider, days) };
+      }
       case "credits.balances": {
         const req = payload;
         const accounts = await pool.listAccounts(req.provider);
@@ -71670,9 +71848,16 @@ function apply(ctx, config = {}) {
       return void 0;
     }
   };
+  const creditUsage = new CreditUsageLedger();
   const raccoonBalanceSelector = new RaccoonBalanceSelector({
     product: RACCOON,
-    resolveCredential: resolveRaccoonCredentialByRef
+    resolveCredential: resolveRaccoonCredentialByRef,
+    // 采样点：每次真实读到余额后记一笔差值。昵称在记账时取一次快照，
+    // 账号改名后历史仍显示当时的名字。
+    onBalanceSample: (accountId, balances) => {
+      const nickname = pool.listAccountsByProvider(RACCOON.id).find((account) => account.id === accountId)?.nickname;
+      creditUsage.record(RACCOON.id, accountId, nickname, balances);
+    }
   });
   const pickRaccoonAccount = async (modelId, invalidate) => {
     const candidates = pool.listAccountsByProvider(RACCOON.id).filter((a) => a.enabled).filter((a) => {
@@ -72233,13 +72418,14 @@ function apply(ctx, config = {}) {
     void geminiSigStore.flush().catch(() => {
     });
   });
-  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config);
+  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, { ...config, creditUsage });
   mountOpenAiGateway(ctx, pool);
   installLoopResume(ctx);
   ctx.provide("accountPool", pool);
 }
 export {
   Config,
+  CreditUsageLedger,
   RaccoonBalanceSelector,
   apply,
   channelProxyBypassed,
@@ -72248,5 +72434,6 @@ export {
   makeReadImage,
   makeReadImageRequest,
   name,
-  parseWindowsProxy
+  parseWindowsProxy,
+  utc8DayKey2 as utc8DayKey
 };

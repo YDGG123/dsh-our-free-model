@@ -439,6 +439,14 @@ window.__ModuleLoader__.load({
         'nav.tab.upgrade': '插件升级',
         'chan.titleSingle': '渠道',
         'dash.title': '数据看板',
+        'dash.credit.title': '每日积分消耗',
+        'dash.credit.today': '今日已用',
+        'dash.credit.gained': '今日补给',
+        'dash.credit.hint': '按余额差值记录真实扣费；上游不提供消耗量，故由本机采样',
+        'dash.credit.byAccount': '按账号',
+        'dash.credit.byPool': '按积分池',
+        'dash.credit.samples': '{n} 次采样',
+        'dash.credit.noSample': '还没有采样。发一条消息后回来查看（记账在每次查询余额时发生）。',
         'dash.sub': '渠道模型的 Token 消耗与推理指标：输入/输出/思考/缓存逐项统计，账号与模型双维度透视。',
         'dash.today': '今日数据',
         'dash.all': '全部历史',
@@ -1131,6 +1139,14 @@ window.__ModuleLoader__.load({
         'nav.tab.upgrade': 'Plugin upgrade',
         'chan.titleSingle': 'Channel',
         'dash.title': 'Usage dashboard',
+        'dash.credit.title': 'Daily credit spend',
+        'dash.credit.today': 'Used today',
+        'dash.credit.gained': 'Granted today',
+        'dash.credit.hint': 'Real charges recorded as balance deltas; the upstream reports no spend, so it is sampled locally',
+        'dash.credit.byAccount': 'By account',
+        'dash.credit.byPool': 'By credit pool',
+        'dash.credit.samples': '{n} samples',
+        'dash.credit.noSample': 'No samples yet. Send a message and come back — sampling happens on every balance read.',
         'dash.sub': 'Token spend and inference metrics for the channel models: input/output/reasoning/cache, pivoted by account and by model.',
         'dash.today': 'Today',
         'dash.all': 'All time',
@@ -4388,15 +4404,25 @@ window.__ModuleLoader__.load({
         } finally { setLockBusy(false) }
       }
 
-      // 「长期积分优先账号」：每日用尽后先烧指定号的长期积分。undefined=查询中，
-      // null=不支持/失败（隐藏按钮，与 lock 的降级同策），string=当前优先账号 id。
+      // 「长期积分优先账号」：每日用尽后先烧指定号的长期积分。
+      //
+      // ⚠️ 三个状态必须分开（真实缺陷，用户报障 2026-10-18）：`accountId: null`
+      // 是**合法且常见**的「尚未设置」，不是失败 —— 早先把「查询失败」也写成
+      // null，于是正常未设置时按钮被当成故障隐藏，功能等于不存在。
+      //   undefined = 查询中（先不渲染，避免闪烁）
+      //   null      = 查询失败/后端不支持 → 隐藏按钮（降级，与 lock 同策）
+      //   string    = 已设置该账号
+      //   ''        = 查询成功但未设置 → 按钮显示为「可设置」状态
       const [preferred, setPreferred] = useState(undefined)
       const [preferredBusy, setPreferredBusy] = useState(false)
       useEffect(() => {
         if (!creditCapability?.preferred) return undefined
         let alive = true
         rpc('credits.longTermPreferred', { provider: channel.id }, 15_000)
-          .then(value => { if (alive) setPreferred(typeof value?.accountId === 'string' ? value.accountId : null) })
+          .then(value => {
+            if (!alive) return
+            setPreferred(typeof value?.accountId === 'string' && value.accountId.length > 0 ? value.accountId : '')
+          })
           .catch(() => { if (alive) setPreferred(null) })
         return () => { alive = false }
       }, [creditCapability?.preferred, rpc, channel.id])
@@ -4405,7 +4431,7 @@ window.__ModuleLoader__.load({
         setPreferredBusy(true); setNotice('')
         try {
           const value = await rpc('credits.longTermPreferred', { provider: channel.id, accountId }, 15_000)
-          setPreferred(typeof value?.accountId === 'string' ? value.accountId : null)
+          setPreferred(typeof value?.accountId === 'string' && value.accountId.length > 0 ? value.accountId : '')
         } catch (error) {
           setNotice(t('chan.preferred.failed').replace('{reason}', String(error?.message ?? error)))
         } finally { setPreferredBusy(false) }
@@ -4510,7 +4536,7 @@ window.__ModuleLoader__.load({
                       `${balanceLabel} ${reading}`)
                   })(),
                   h('span', { className: 'ofm_acctacts' },
-                    creditCapability?.preferred && preferred !== null ? h('button', {
+                    creditCapability?.preferred && preferred !== undefined && preferred !== null ? h('button', {
                       type: 'button', className: 'ofm_minibtn preferred', disabled: preferredBusy || busy !== '' || !rpc,
                       'aria-pressed': preferred === row.id ? 'true' : 'false',
                       'aria-busy': preferredBusy ? 'true' : undefined,
@@ -4834,6 +4860,74 @@ window.__ModuleLoader__.load({
       return { ...state, reload: load }
     }
 
+    /**
+     * 每日积分消耗（`credits.usage`）。
+     *
+     * 与 token 账本分开取：两者的数据源、失败模式都不同 —— 余额查询失败
+     * 不该让 token 看板一起变空，反之亦然。失败时 status='error' 由面板
+     * 显示原因，而不是静默显示 0（0 会被读成「今天没花钱」）。
+     */
+    function useCreditUsage(props) {
+      const { available, rpc } = useChannelRpc(props.ctx)
+      const provider = props.provider
+      const [state, setState] = useState({ status: 'loading', data: null, error: '' })
+      const load = useCallback(async () => {
+        if (!available) { setState(current => ({ ...current, status: 'unavailable', error: 'no-connection' })); return }
+        if (typeof provider !== 'string' || provider.length === 0) { setState({ status: 'ready', data: null, error: '' }); return }
+        try {
+          const value = await rpc('credits.usage', { provider, days: 30 }, 30_000)
+          setState({ status: 'ready', data: value ?? null, error: '' })
+        } catch (error) { setState(current => ({ ...current, status: 'error', error: String(error?.message ?? error) })) }
+      }, [available, rpc, provider])
+      useEffect(() => { void load() }, [load])
+      return { ...state, reload: load }
+    }
+
+    /**
+     * 每日积分消耗区块。
+     *
+     * 三段：今日 KPI（已用/补给）→ 按账号明细 → 按积分池拆分。数据全部来自
+     * `credits.usage`（本机采样），因此**没有数据是常态**（刚装上、还没发过
+     * 消息），用明确的空态文案而不是显示 0 —— 0 会被读成「今天没花钱」。
+     */
+    function CreditUsageSection(props) {
+      const { t, credit } = props
+      if (credit.status === 'unavailable' || credit.status === 'loading') return null
+      if (credit.status === 'error') {
+        return h(Section, { title: t('dash.credit.title'), hint: t('dash.credit.hint') },
+          h('p', { className: 'ofm_balanceerror', role: 'alert' },
+            t('chan.credits.failed').replace('{reason}', credit.error)))
+      }
+      const data = credit.data
+      const today = data?.today ?? { spent: 0, gained: 0, accounts: 0 }
+      const samples = Number(data?.samples ?? 0)
+      const accounts = data?.accounts ?? []
+      const hasSpend = Number(today.spent ?? 0) > 0 || accounts.length > 0
+      return h(Section, { title: t('dash.credit.title'), hint: t('dash.credit.hint') },
+        samples === 0 || !hasSpend
+          ? h('p', { className: 'ofm_note' }, t('dash.credit.noSample'))
+          : h(Fragment, null,
+            h('div', { className: 'ofm_kpis' },
+              h(KpiCard, {
+                label: t('dash.credit.today'),
+                value: fmtInt(today.spent),
+                sub: `${t('dash.credit.samples').replace('{n}', String(samples))} · ${today.accounts} ${t('dash.credit.byAccount')}`,
+              }),
+              Number(today.gained ?? 0) > 0
+                ? h(KpiCard, { label: t('dash.credit.gained'), value: fmtInt(today.gained), sub: '—' })
+                : null),
+            accounts.length === 0 ? null : h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },
+              h('thead', null, h('tr', null,
+                h('th', { key: 'name' }, t('chan.titleSingle')),
+                h('th', { key: 'spent' }, t('dash.credit.today')),
+                h('th', { key: 'pools' }, t('dash.credit.byPool')))),
+              h('tbody', null, accounts.map(row => h('tr', { key: row.accountId },
+                h('td', { key: 'name' }, row.nickname ?? row.accountId),
+                h('td', { key: 'spent' }, fmtInt(row.spent)),
+                h('td', { key: 'pools' }, Object.entries(row.pools ?? {})
+                  .map(([pool, value]) => `${pool} ${fmtInt(value)}`).join(' · ') || '—'))))))))
+    }
+
     /** KPI cards: one reading per card, exactly like the gateway consoles. */
     function KpiCard(props) {
       const { label, value, sub, tone } = props
@@ -4846,6 +4940,8 @@ window.__ModuleLoader__.load({
     function LedgerPage(props) {
       const { t, ctx } = props
       const ledger = useLedger(props)
+      // 积分维度与 token 维度并行取数：任一失败都不影响另一个。
+      const credit = useCreditUsage(props)
       const [scope, setScope] = useState('today')
       const loaded = ledger.status === 'ready'
       // 今日 = the pack's live snapshot (its in-memory day tree); 全部 = the
@@ -4889,6 +4985,11 @@ window.__ModuleLoader__.load({
           h(KpiCard, { label: t('dash.kpiSpeed'), value: fmtTps(totals.avgTps), sub: `${t('dash.ttft')} ${fmtMs(totals.avgTtftMs)}` }),
           h(KpiCard, { label: t('dash.kpiCache'), value: fmtPct(totals.cacheReadTokens, cacheBase), sub: `${t('dash.cacheTokens')} ${fmtInt(totals.cacheReadTokens)}` }),
           h(KpiCard, { label: t('dash.kpiRequests'), value: fmtInt(totals.requests), sub: `${t('dash.successRate')} ${fmtPct(totals.requests - totals.errors, totals.requests)} · ${t('dash.failed')} ${fmtInt(totals.errors)}`, tone: totals.errors > 0 ? 'warn' : '' })) : null,
+        // ── 每日积分消耗（积分维度） ───────────────────────────────────────
+        // 上游只给剩余量，消耗由本机按余额差值采样（见 credit-usage-ledger.ts）。
+        // 与 token 看板并列显示：两个维度回答的是不同问题（用了多少模型 vs
+        // 扣了多少积分）。
+        loaded ? h(CreditUsageSection, { t, credit }) : null,
         loaded ? h(Section, { title: t('dash.recentTitle'), hint: t('dash.recentHint') },
           entries.length === 0 ? h('p', { className: 'ofm_note' }, t('dash.empty'))
             : h('div', { className: 'ofm_tablewrap' }, h('table', { className: 'ofm_table' },

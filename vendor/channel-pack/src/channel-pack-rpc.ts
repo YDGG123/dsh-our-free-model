@@ -19,6 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { AccountPool } from './account-pool.js'
+import type { CreditUsageLedger } from './credit-usage-ledger.js'
 import { isGatewayEnabled } from './openai-gateway/config.js'
 import { collectGatewayEffortViews, collectGatewayModels, toGatewayModelIds, type GatewayModelSource } from './openai-gateway/models.js'
 import {
@@ -898,7 +899,18 @@ export function registerChannelPackRpc(
    * 省略时退化为只用 `ctx.llm.listModels()` 的历史行为。
    */
   modelAdapters?: Readonly<Record<string, ModelCatalogSource>>,
-  config: { disableOpencode?: boolean } = {},
+  /**
+   * 附加依赖（**用具名字段而不是再加位置参数**）。
+   *
+   * ⚠️ 历史教训：本函数的 provider 形参是位置传参，已因少传/插队错位复发 6 次。
+   * 与 provider 无关的附加能力（如积分消耗账本）一律放进本对象，既不改调用点
+   * 的参数顺序，也让「有没有传」在类型层面可见。
+   */
+  config: {
+    disableOpencode?: boolean
+    /** 每日积分消耗账本（省略时 `credits.usage` 返回空快照，不报错）。 */
+    creditUsage?: CreditUsageLedger
+  } = {},
 ): void {
   ctx.inject(['connection'], (connectionCtx) => {
     registerChannelPackEndpoints(
@@ -2965,6 +2977,42 @@ function registerChannelPackEndpoints(
       // 独立于 account.list 的原因：余额要为每个账号发一次网络请求，而
       // account.list 是打开面板就会调的轻量操作。混在一起会让账号列表被
       // 网络耗时拖慢，且一次查询失败会让整份列表都取不到。
+      /**
+       * 每日积分消耗（数据看板的积分维度）。
+       *
+       * ⚠️ 数据来自**本插件自己的记账**（`credit-usage-ledger.ts`）：上游只给
+       * 剩余量、`used` 恒为 0、扣费公式无公开依据，所以消耗只能由相邻两次
+       * 余额读数的差值得到。含义与精度：
+       *
+       * - `spent` 是**真实扣费**（差值），不是按 token 推算的估计；
+       * - 采样发生在每次真实查询余额之后，缓存命中会跨过多笔请求，那一段
+       *   消耗合并成一条 —— 金额准确、时间粒度粗（宁可粗，不要假）；
+       * - 首次见到某账号只建基线、不记账（没有上一次可比）；
+       * - 服务重启后内存账本清空，重新从基线开始（历史按日落盘由
+       *   `creditUsage` 的持有方决定，当前为进程内）。
+       *
+       * 未注入账本时返回空快照而不是报错：面板据此显示「暂无数据」，
+       * 比一个「未知故障」有用。
+       */
+      case 'credits.usage': {
+        const req = payload as { provider?: unknown, days?: unknown }
+        const provider = typeof req.provider === 'string' ? req.provider.trim() : ''
+        if (provider.length === 0) {
+          return { ok: false, error: { code: 'bad-request', message: 'provider 必填' } }
+        }
+        const days = typeof req.days === 'number' && Number.isFinite(req.days) && req.days > 0
+          ? Math.min(365, Math.trunc(req.days))
+          : 30
+        if (config.creditUsage === undefined) {
+          const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+          return {
+            ok: true,
+            value: { provider, today: { day: today, spent: 0, gained: 0, accounts: 0 }, days: [], accounts: [], samples: 0 },
+          }
+        }
+        return { ok: true, value: config.creditUsage.snapshot(provider, days) }
+      }
+
       case 'credits.balances': {
         const req = payload as RpcCreditsBalancesRequest
         const accounts = await pool.listAccounts(req.provider)
