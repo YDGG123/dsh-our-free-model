@@ -20,6 +20,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { AccountPool } from './account-pool.js'
 import type { CreditUsageLedger } from './credit-usage-ledger.js'
+/** 跨渠道汇总用的日桶形态（= ledger 的 CreditUsageDay，此处只读三个数字）。 */
+type CreditUsageDayLike = { day: string; spent: number; gained: number; accounts: number }
 import { isGatewayEnabled } from './openai-gateway/config.js'
 import { collectGatewayEffortViews, collectGatewayModels, toGatewayModelIds, type GatewayModelSource } from './openai-gateway/models.js'
 import {
@@ -2997,17 +2999,44 @@ function registerChannelPackEndpoints(
       case 'credits.usage': {
         const req = payload as { provider?: unknown, days?: unknown }
         const provider = typeof req.provider === 'string' ? req.provider.trim() : ''
-        if (provider.length === 0) {
-          return { ok: false, error: { code: 'bad-request', message: 'provider 必填' } }
-        }
         const days = typeof req.days === 'number' && Number.isFinite(req.days) && req.days > 0
           ? Math.min(365, Math.trunc(req.days))
           : 30
         if (config.creditUsage === undefined) {
           const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+          const empty = { provider, today: { day: today, spent: 0, gained: 0, accounts: 0 }, days: [], accounts: [], samples: 0 }
+          return { ok: true, value: provider === '' ? { providers: [] , ...empty } : empty }
+        }
+        // ⚠️ provider 省略 = 「全部渠道」概览：数据看板要跨渠道看消耗，
+        // 而不只是 raccoon 一家。逐渠道取快照后汇总，任一渠道无数据也照常
+        // 返回（空渠道不是错误）。
+        if (provider === '') {
+          const ids = [...LONG_TERM_PREFERRED_PROVIDERS, LOOMY.id, CODEBUDDY.id, WORKBUDDY.id, RACCOON.id]
+            .filter((id, index, all) => all.indexOf(id) === index)
+          const providers = ids.map(id => config.creditUsage!.snapshot(id, days))
+          const byDay = new Map<string, CreditUsageDayLike>()
+          for (const entry of providers) {
+            for (const row of entry.days) {
+              const existing = byDay.get(row.day)
+              byDay.set(row.day, existing === undefined ? { ...row } : {
+                day: row.day,
+                spent: existing.spent + row.spent,
+                gained: existing.gained + row.gained,
+                accounts: existing.accounts + row.accounts,
+              })
+            }
+          }
+          const todayKey = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+          const days = [...byDay.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
           return {
             ok: true,
-            value: { provider, today: { day: today, spent: 0, gained: 0, accounts: 0 }, days: [], accounts: [], samples: 0 },
+            value: {
+              providers,
+              today: byDay.get(todayKey) ?? { day: todayKey, spent: 0, gained: 0, accounts: 0 },
+              days,
+              accounts: [],
+              samples: providers.reduce((sum, entry) => sum + entry.samples, 0),
+            },
           }
         }
         return { ok: true, value: config.creditUsage.snapshot(provider, days) }

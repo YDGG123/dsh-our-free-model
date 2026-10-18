@@ -119,7 +119,27 @@ export class CreditUsageLedger {
   /** provider → 日键 → accountId → 明细。 */
   private readonly accountDays = new Map<string, Map<string, Map<string, CreditUsageAccountDay>>>()
 
-  constructor(private readonly now: () => number = Date.now) {}
+  /** 已落盘的文档（增量 flush 的基线；内存态与磁盘态的差只来自本轮）。 */
+  private persisted: { providers: Record<string, { days: CreditUsageDay[] }> } = { providers: {} }
+  /** 节流：落盘定时器。 */
+  private flushTimer: ReturnType<typeof setTimeout> | undefined
+  /** 日志出口（默认静默；宿主注入）。 */
+  private onLog: ((message: string) => void) | undefined
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly persistence?: CreditUsagePersistence,
+    private readonly flushDebounceMs: number = 30_000,
+  ) {
+    if (persistence !== undefined) {
+      try {
+        const loaded = persistence.load()
+        if (loaded !== undefined && loaded !== null) this.persisted = loaded
+      } catch (error) {
+        this.log(`load failed (${error instanceof Error ? error.message : String(error)})`)
+      }
+    }
+  }
 
   /**
    * 用**刚读到的余额**更新基线并记一笔。
@@ -197,12 +217,28 @@ export class CreditUsageLedger {
     for (const key of keys.slice(0, keys.length - MAX_DAYS)) perProvider.delete(key)
   }
 
-  /** 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。 */
+  /**
+   * 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。
+   *
+   * 「最近 N 天」是**内存与磁盘的并集**：历史日桶已 flush 到盘上，今日的数字
+   * 还在内存里。只看一边都会漏（只看磁盘＝今天全是 0；只看内存＝重启后历史
+   * 全丢）。合并规则：同一天取**较大值**（内存 ≥ 磁盘，两者同源）。
+   */
   snapshot(provider: string, days = 30): CreditUsageSnapshot {
     const today = utc8DayKey(this.now())
-    const perProvider = this.days.get(provider) ?? new Map<string, CreditUsageDay>()
-    const sorted = [...perProvider.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
-    const todayRow = perProvider.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 }
+    const merged = new Map<string, CreditUsageDay>()
+    for (const row of this.persisted.providers[provider]?.days ?? []) merged.set(row.day, { ...row })
+    for (const row of (this.days.get(provider) ?? new Map<string, CreditUsageDay>()).values()) {
+      const existing = merged.get(row.day)
+      merged.set(row.day, existing === undefined ? { ...row } : {
+        day: row.day,
+        spent: Math.max(existing.spent, row.spent),
+        gained: Math.max(existing.gained, row.gained),
+        accounts: Math.max(existing.accounts, row.accounts),
+      })
+    }
+    const sorted = [...merged.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
+    const todayRow = merged.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 }
     const accounts = [...(this.accountDays.get(provider)?.get(today)?.values() ?? [])]
       .sort((a, b) => b.spent - a.spent)
     return {
@@ -212,6 +248,56 @@ export class CreditUsageLedger {
       accounts,
       samples: this.samples.filter(sample => sample.provider === provider).length,
     }
+  }
+
+  /** 立即落盘。失败只记日志：记账绝不能反噬选号路径。 */
+  async flush(): Promise<void> {
+    if (this.persistence === undefined) return
+    if (this.flushTimer !== undefined) { clearTimeout(this.flushTimer); this.flushTimer = undefined }
+    try {
+      const daysByProvider = new Map<string, Map<string, CreditUsageDay>>()
+      for (const [provider, entry] of Object.entries(this.persisted.providers)) {
+        const map = new Map<string, CreditUsageDay>()
+        for (const row of entry.days) map.set(row.day, { ...row })
+        daysByProvider.set(provider, map)
+      }
+      for (const [provider, perDay] of this.days) {
+        const map = daysByProvider.get(provider) ?? new Map<string, CreditUsageDay>()
+        for (const row of perDay.values()) {
+          const existing = map.get(row.day)
+          map.set(row.day, existing === undefined ? { ...row } : {
+            day: row.day,
+            spent: Math.max(existing.spent, row.spent),
+            gained: Math.max(existing.gained, row.gained),
+            accounts: Math.max(existing.accounts, row.accounts),
+          })
+        }
+        daysByProvider.set(provider, map)
+      }
+      const providers: Record<string, { days: CreditUsageDay[] }> = {}
+      for (const [provider, map] of daysByProvider) {
+        providers[provider] = { days: [...map.values()].sort((a, b) => (a.day < b.day ? 1 : -1)) }
+      }
+      this.persisted = { providers }
+      await this.persistence.save(this.persisted)
+    } catch (error) {
+      this.log(`flush failed (${error instanceof Error ? error.message : String(error)})`)
+    }
+  }
+
+  /** 节流落盘（防抖窗口内的多次记账只写一次盘）。 */
+  scheduleFlush(): void {
+    if (this.persistence === undefined || this.flushTimer !== undefined) return
+    this.flushTimer = setTimeout(() => { this.flushTimer = undefined; void this.flush() }, this.flushDebounceMs)
+    this.flushTimer.unref?.()
+  }
+
+  /** 安装日志出口（宿主侧调用）。 */
+  setLogger(logger: (message: string) => void): void {
+    this.onLog = logger
+  }
+  private log(message: string): void {
+    this.onLog?.(message)
   }
 
   /** 清空某 provider 的全部记账（测试与「重置统计」用）。 */

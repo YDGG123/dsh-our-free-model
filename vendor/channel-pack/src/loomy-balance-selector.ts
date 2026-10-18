@@ -87,6 +87,13 @@ export interface LoomySelectionDeps {
   ttlMs?: number
   /** **失败**结果的 TTL 覆盖（测试用）。 */
   errorTtlMs?: number
+  /**
+   * 余额采样回调（每日积分消耗账本的数据源）。
+   *
+   * 在**每次真实查询余额之后**调用（缓存命中不调用 —— 没有新读数就没有新
+   * 事实）。回调**不得抛错**：它在选号的关键路径上（与 raccoon 同纪律）。
+   */
+  onBalanceSample?: (accountId: string, balances: Record<string, number>) => void
 }
 
 /** 一个账号的缓存条目。 */
@@ -161,6 +168,16 @@ export class LoomyBalanceSelector {
     )
     if (detail === null) {
       return { id: account.id, ok: false, error: '余额查询失败（凭据失效或响应异常）' }
+    }
+    // 每日积分消耗账本：与 raccoon 同款 —— 这是本模块唯一真实读到余额的
+    // 地方；回调吞异常，记账失败绝不能影响选号。
+    if (this.deps.onBalanceSample !== undefined) {
+      try {
+        this.deps.onBalanceSample(account.id, {
+          '每日赠送': detail.daily,
+          '永久积分': detail.permanent,
+        })
+      } catch { /* 记账是尽力而为 */ }
     }
     return {
       id: account.id,
