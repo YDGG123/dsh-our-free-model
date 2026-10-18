@@ -19,6 +19,7 @@ import { ClineAuth } from './cline-auth.js'
 import { LoomyAuth } from './loomy-auth.js'
 import { RaccoonAuth } from './raccoon-auth.js'
 import { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
+import { CreditUsageLedger } from './credit-usage-ledger.js'
 import { LOOMY } from './loomy-product.js'
 import { LoomyBalanceSelector } from './loomy-balance-selector.js'
 import { RACCOON } from './raccoon-product.js'
@@ -79,6 +80,9 @@ export { createChannelFetch, parseWindowsProxy, channelProxyBypassed } from './c
 // 供离线套件（scripts/raccoon-balance-test.mjs）直接注入依赖做单测：
 // 依赖（fetch/now/TTL）在构造参数里，正是为此设计的注入缝。
 export { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
+// 供离线套件（scripts/credit-usage-test.mjs）直接注入时间做单测：
+// 账本的 now() 是构造参数，测试需要冻结时间来验证 UTC+8 日界。
+export { CreditUsageLedger, utc8DayKey } from './credit-usage-ledger.js'
 import { execFile } from 'node:child_process'
 
 /**
@@ -1158,9 +1162,25 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
    * 策略：优先有每日积分的号 → 其次有长期积分（奖励/会员/充值）的号 →
    * 都无/查不到排最后。档内保持手动拖拽顺序。
    */
+  /**
+   * 每日积分消耗账本（进程内，按 UTC+8 日聚合）。
+   *
+   * ⚠️ **为什么需要它**：数据看板原本只有 token 维度，用户看不到「今天用了
+   * 多少积分」。上游不提供消耗量（`used` 恒为 0，扣费公式无公开依据），
+   * 唯一可信的事实是**余额差值** —— 由选号器每次真实查询余额后回调采样
+   * 得到（见 `credit-usage-ledger.ts` 文件头的完整推理）。
+   */
+  const creditUsage = new CreditUsageLedger()
+
   const raccoonBalanceSelector = new RaccoonBalanceSelector({
     product: RACCOON,
     resolveCredential: resolveRaccoonCredentialByRef,
+    // 采样点：每次真实读到余额后记一笔差值。昵称在记账时取一次快照，
+    // 账号改名后历史仍显示当时的名字。
+    onBalanceSample: (accountId, balances) => {
+      const nickname = pool.listAccountsByProvider(RACCOON.id).find(account => account.id === accountId)?.nickname
+      creditUsage.record(RACCOON.id, accountId, nickname, balances)
+    },
   })
 
   /**
@@ -2126,7 +2146,7 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
   // 丢的却是「下一轮工具调用能不能带上签名」。
   ctx.effect(() => () => { void geminiSigStore.flush().catch(() => {}) })
 
-  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config)
+  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, { ...config, creditUsage })
   // 网关是旁路功能：这里传 `pool` 只为读设置页里的开关，其内部任何失败都已
   // 自行降级为日志，绝不会让插件 apply() 失败。
   mountOpenAiGateway(ctx, pool)

@@ -104,6 +104,15 @@ export interface RaccoonSelectionDeps {
   ttlMs?: number
   /** 失败 TTL 覆盖（测试用）。 */
   errorTtlMs?: number
+  /**
+   * 余额采样回调（每日积分消耗账本的唯一数据源）。
+   *
+   * 在**每次真实查询余额之后**调用（缓存命中不调用 —— 没有新读数就没有
+   * 新事实）。入参是各积分包的剩余量，由 `credit-usage-ledger` 与上次
+   * 基线求差得到消耗。回调**不得抛错**：它在选号的关键路径上，记账失败
+   * 绝不能影响选号（与 token 账本 `record()` 同一条纪律）。
+   */
+  onBalanceSample?: (accountId: string, balances: Record<string, number>) => void
 }
 
 /** 一个账号的缓存条目。 */
@@ -204,6 +213,18 @@ export class RaccoonBalanceSelector {
       return { id: account.id, ok: false, error: '余额查询失败（凭据失效或响应异常）' }
     }
     const daily = detail.packages.find(p => p.name === RACCOON_DAILY_PACKAGE_NAME)?.remaining
+    // 每日积分消耗账本：用「本次读数」与「上次基线」的差值记一笔。
+    // 只在这里采样 —— 这是本模块唯一真实读到余额的地方，缓存命中不产生
+    // 新事实。回调必须吞掉异常：记账失败不能影响选号。
+    if (this.deps.onBalanceSample !== undefined) {
+      try {
+        const balances: Record<string, number> = {}
+        for (const pkg of detail.packages) {
+          if (typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)) balances[pkg.name] = pkg.remaining
+        }
+        this.deps.onBalanceSample(account.id, balances)
+      } catch { /* 记账是尽力而为 */ }
+    }
     return {
       id: account.id,
       ok: true,
