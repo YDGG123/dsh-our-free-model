@@ -338,6 +338,39 @@ await checkAsync('两个脚本的「是否直接执行」判定在含空格路�
 //
 // 这条用**临时 git clone** 隔离跑：`OFM_SYNC_TESTS` 注入一个必失败的脚本，
 // 断言文件存在且字段齐全。不动当前工作区（脏树会被脚本自己拒绝）。
+// ── 工作分支 / 发布分支语义（2026-10-19 结构性修正） ──────────────────────
+
+await checkAsync('isGeneratedPath 覆盖独立端构建产物（否则合并必冲突）', async () => {
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
+  // 真实故障（2026-10-19 云端 dry-run）：基于 squash 的 main 合并时，
+  // packages/standalone/web/** 是构建产物（含带 hash 的分包），
+  // 出现 rename/delete、modify/delete 轮番冲突。正确做法永远是「取 ours + 重建」。
+  assert.match(source, /GENERATED_PREFIXES/, '必须有按目录前缀判定的生成产物集合')
+  assert.match(source, /'packages\/standalone\/web\/'/, '独立端产物目录必须在里面')
+  assert.match(source, /export function isGeneratedPath/, '判定要可导出以便测试')
+})
+
+await checkAsync('sync-upstream 支持 --work-branch 语义（不写死 main）', async () => {
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
+  assert.match(source, /OFM_WORK_BRANCH/, '工作分支必须可配置')
+  assert.match(source, /OFM_MAIN_SYNC_MODE/, '发布分支同步策略必须可配置')
+  // 合并后必须重建独立端产物（否则云端 build-standalone-ui --check 会红）
+  assert.match(source, /build-standalone-ui\.mjs/, '合并后必须重建独立端产物')
+})
+
+await checkAsync('workflow 检出 custom-main（事实源），不是 main', async () => {
+  const fs2 = await import('node:fs')
+  const yamlText = fs2.readFileSync(new URL('../.github/workflows/sync-upstream.yml', import.meta.url), 'utf8')
+  // 结构化断言：checkout 的 ref 必须是 custom-main。
+  const checkoutBlock = yamlText.slice(yamlText.indexOf('actions/checkout'))
+  const refMatch = /ref:\s*(\S+)/.exec(checkoutBlock)
+  assert.ok(refMatch !== null, 'checkout 必须有 ref')
+  assert.equal(refMatch[1], 'custom-main', '必须检出带完整上游祖先的事实源分支')
+  assert.match(yamlText, /OFM_MAIN_SYNC_MODE:\s*history/, 'main 应与工作分支同历史（常规历史）')
+})
+
 await checkAsync('--fail-file 在失败时真的写出状态文件（端到端，隔离 clone）', async () => {
   const { execFileSync } = await import('node:child_process')
   const fs2 = await import('node:fs')
@@ -460,25 +493,31 @@ await checkAsync('setCatalogRevision 写入两处 revision（且校验 sha 格�
   assert.throws(() => setCatalogRevision('A'.repeat(40), { root: dir }), /40 位/)
 })
 
-await checkAsync('sync-upstream 的 --ci 推送是**两段式**（推完再刷新 revision 再推）', async () => {
-  // 真实故障（2026-10-19 run 39244615254）：只推一次时，catalog 里的 revision
-  // 指向**本地** sha，而远端是新的 squash commit ⇒ 远端 main 上
-  // `catalog-test` 报 got/want 不一致，release-sign 红。
+await checkAsync('--ci 推送：先推工作分支（完整历史），再投影发布分支', async () => {
+  // 2026-10-19 结构性修正：云端必须基于**带完整上游祖先**的 custom-main 工作。
+  // 基于 squash 的 main 合并会让三方合并基准退化为旧祖先 ⇒ 必然大量冲突
+  //（云端 dry-run 实测 10 个文件：README / client.js / package.json / standalone/*）。
   const fs2 = await import('node:fs')
   const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
-  assert.match(source, /scripts\/set-catalog-revision\.mjs/, '推完必须刷新 revision')
-  // 刷新后必须再推一次（否则远端仍是旧 revision）。
-  const ciBlock = source.slice(source.indexOf('if (ciMode)'), source.indexOf('} else {', source.indexOf('if (ciMode)')))
-  const pushes = ciBlock.match(/\['push', 'origin'/g) ?? []
-  assert.ok(pushes.length >= 2, `--ci 分支应有两次 push（实际 ${pushes.length}）`)
-  // 刷新后要自证，不靠推断。
-  assert.match(ciBlock, /catalog-test\.mjs/, '刷新后必须跑 catalog-test 自证')
+  // ⚠️ 切片边界：`if (ciMode)` 之后**第一个** `} else {` 可能落在别的分支上。
+  // 用行号定位到「下一个顶层 else」为止，取足够长的窗口（到推送段结束）。
+  const startAt = source.indexOf('if (ciMode)')
+  const ciBlock = source.slice(startAt, startAt + 9000)
+
+  // 工作分支至少推两次：①首次推 merge 结果 ②刷新 revision 后再推
+  const workPushes = (ciBlock.match(/push', 'origin', `HEAD:\$\{workBranch\}`/g) ?? []).length
+  assert.ok(workPushes >= 2, `工作分支应至少推两次（实测 ${workPushes}）`)
+  assert.match(ciBlock, /set-catalog-revision\.mjs/, '刷新 revision 必须复用该脚本')
+
+  // 发布分支投影：默认 history（force-with-lease 对齐），保留 squash 兼容分支。
+  assert.match(ciBlock, /force-with-lease/, 'history 模式用 force-with-lease 对齐 main')
+  assert.match(ciBlock, /OFM_MAIN_SYNC_MODE/, '投影策略必须可配置')
+
   // 推送前必须有「祖先检查」，否则本机用 --ci 试跑只会得到一句
   // "failed to push some refs"，看不出是模式与本机分支布局不匹配。
   assert.match(ciBlock, /merge-base.*--is-ancestor/, '推送前必须检查 HEAD 是否为远端后代')
-  assert.match(ciBlock, /只能用于云端全新 checkout/, '拒绝时必须说明原因与替代做法')
-  // ⚠️ 不能用 reset --hard 到远端：会丢掉本地 merge 历史。
-  // 只看**非注释行**（注释里会引用这句话作为反例说明）。
+
+  // ⚠️ 不得 reset --hard 到远端（会丢本地 merge 历史）。只看非注释行。
   const ciCode = ciBlock.split('\n').filter(line => !/^\s*(\/\/|\*|\/\*|\*\/)/.test(line)).join('\n')
   assert.ok(!/reset.*--hard.*origin\//.test(ciCode), '不得 reset --hard 到远端分支')
 })

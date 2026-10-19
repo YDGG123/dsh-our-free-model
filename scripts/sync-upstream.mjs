@@ -109,6 +109,15 @@ const flag = name => {
  * 手写清单会与 `package.json.files` 漂移，release 模式的 catalog-test 立刻变红。 */
 
 /** 冲突时可以安全「取 ours」的生成产物（随后重建/重签，内容总是正确的）。 */
+/**
+ * 冲突时可以安全「取 ours」的**生成产物**（随后重建/重签，内容总是正确）。
+ *
+ * ⚠️ `packages/standalone/web/**` 必须在这里（2026-10-19 云端 dry-run 实测）：
+ * 那是独立端的**构建产物**（`app.js` / `assets.json` / 带 hash 的分包），
+ * 上游每次发版都会重新生成、hash 也会变。把它们当源码去三方合并必然冲突
+ * （rename/delete、modify/delete 轮番出现），而正确做法永远是
+ * **取 ours + 合并后重建**（`build-standalone-ui.mjs`）。
+ */
 const GENERATED = new Set([
   'feed/manifest.json',
   'catalog/integrity.json',
@@ -116,6 +125,17 @@ const GENERATED = new Set([
   'catalog/provenance.json',
   'vendor/channel-pack/pack.js',
 ])
+
+/** 生成产物里按**目录前缀**判定的（`packages/standalone/web/` 下全是产物）。 */
+const GENERATED_PREFIXES = [
+  'packages/standalone/web/',
+]
+
+/** 是否属于「可以取 ours 再重建」的生成产物。 */
+export function isGeneratedPath(filePath) {
+  if (GENERATED.has(filePath)) return true
+  return GENERATED_PREFIXES.some(prefix => filePath.startsWith(prefix))
+}
 
 /** 合并后必须通过的目标测试集（全量 test-all 中已知稳定通过的部分；
  * reload 套件在上游纯净分支同样失败，属上游与 Node 24 的兼容问题，不列入）。 */
@@ -217,7 +237,7 @@ function classifyFailure(message) {
   return 'unknown'
 }
 
-function main() {
+async function main() {
   say(`sync-upstream 开始${dryRun ? '（--dry-run）' : ''}`)
 
   // ── 1. 拉上游（镜像免认证） ─────────────────────────────────────────────
@@ -262,7 +282,7 @@ function main() {
   const merged = run('git', ['merge', '--no-ff', '-m', mergeMessage, upstreamHead], GIT_ENV)
   if (merged.code !== 0) {
     const conflicted = git('diff', '--name-only', '--diff-filter=U').split('\n').filter(Boolean)
-    const unresolvable = conflicted.filter(file => !GENERATED.has(file))
+    const unresolvable = conflicted.filter(file => !isGeneratedPath(file))
     if (conflicted.length === 0 || unresolvable.length > 0) {
       run('git', ['merge', '--abort'])
       failOut(
@@ -302,6 +322,34 @@ function main() {
       say('  pack.js 已重建并提交')
     } else {
       say('  pack.js 无变化')
+    }
+
+    /**
+     * ── 5b. 重建独立端产物（`packages/standalone/web/**`）──
+     *
+     * 这些是**构建产物**（`app.js` / `assets.json` / 带 hash 的分包）。
+     * 合并时我们「取 ours」保留了本 fork 的版本，但我们的 `client.js` 改动
+     * 嵌在独立端包里 ⇒ 取 ours 之后它与当前 `client.js` **已经不一致**，
+     * 云端 `build-standalone-ui --check` 会报「需要重新生成」。
+     *
+     * 重建后它们与源码自洽。注意这些文件**不在** `package.json` 的 `files`
+     * 里，不进发布清单，故不需要重签 manifest。
+     */
+    say('重建独立端产物（packages/standalone/web）…')
+    const builtUi = run('node', ['scripts/build-standalone-ui.mjs'])
+    if (builtUi.code !== 0) {
+      // 独立端构建依赖 vite（`packages/standalone` 的 devDependency）。
+      // 云端装了依赖，本地可能没装 —— 记清楚，不要伪装成通过。
+      throw new Error(`独立端重建失败：${builtUi.output.slice(-1200)}`)
+    }
+    const standaloneDirty = git('status', '--porcelain', '--', 'packages/standalone/web').trim()
+    if (standaloneDirty !== '') {
+      run('git', ['add', 'packages/standalone/web'])
+      const committed = run('git', ['commit', '-m', 'build(standalone): 重建上游合并后的独立端产物'], GIT_ENV)
+      if (committed.code !== 0) throw new Error('独立端产物提交失败')
+      say('  独立端产物已重建并提交')
+    } else {
+      say('  独立端产物无变化')
     }
 
     // ── 6. catalog revision + 重签 ────────────────────────────────────────
@@ -421,77 +469,110 @@ function main() {
        * 写进 catalog 再推一次。第二次推送只改 `catalog/` 与 `feed/`，不会
        * 移动 revision 指针本身（该指针只统计发布内容），所以不会循环。
        */
-      const branch = process.env.OFM_PUSH_BRANCH ?? 'main'
-      say(`推送 HEAD → origin/${branch}（--ci，常规 git push）…`)
       /**
-       * 推送前先看一眼「远端分支是否存在、HEAD 是否是它的后代」。
+       * ## 云端推送：**两个分支**（2026-10-19 结构性修正）
        *
-       * 云端 runner 是全新 checkout（`HEAD` 就是 `main` 的检出），这是快进推送。
-       * 但在**本机**用 `--ci` 试跑时，`HEAD` 是 `custom-main` 而目标是 `main`
-       * （squash 历史）⇒ 必然 non-fast-forward。那种失败信息（"failed to push
-       * some refs"）不会告诉用户「这是模式用错了」，只会让人以为同步坏了。
+       * ### 为什么必须基于 custom-main 工作
        *
-       * 所以这里显式判定并给出**可照做**的提示；真正的推送逻辑不变。
+       * 远端 `main` 是 **squash 历史**：它和上游的共同祖先停在 v2.5.4 之前。
+       * 拿它当合并基底，三方合并的基准太旧 ⇒ 上游 2.5.4+2.5.5 的全部改动
+       * 和本 fork 的 squash 改动被摆在一起对撞，**必然出现大量「需人工判断」
+       * 的冲突**（云端 dry-run 实测 10 个文件，含 README / client.js /
+       * package.json / standalone/*）。
+       *
+       * 而 `custom-main` 有**完整的上游祖先**（昨天合并 2.5.4 就是零冲突的
+       * 证明）。故云端改为：
+       *
+       *   checkout custom-main → merge upstream → 测试 → 推 custom-main → squash 推 main
+       *
+       * `custom-main` 是**事实源**，`main` 只是它的发布投影。
        */
-      const remoteRef = run('git', ['rev-parse', '--verify', '--quiet', `origin/${branch}`])
-      if (remoteRef.code === 0) {
-        const remoteSha = remoteRef.output.trim()
-        const behind = run('git', ['merge-base', '--is-ancestor', remoteSha, 'HEAD'])
-        if (behind.code !== 0) {
+      const workBranch = process.env.OFM_WORK_BRANCH ?? 'custom-main'
+      const releaseBranch = process.env.OFM_PUSH_BRANCH ?? 'main'
+      const pushBranch = process.env.OFM_PUSH_BRANCH_ONLY !== '1'
+
+      // ── ① 推 custom-main（**完整历史**，常规 git push，绝不 squash）──
+      //    合并基线必须是带上游祖先的完整历史；squash 会把祖先压掉，
+      //    下一次合并又退化成「基准太旧」。
+      say(`推送 HEAD → origin/${workBranch}（--ci，完整历史）…`)
+      const workRef = run('git', ['rev-parse', '--verify', '--quiet', `origin/${workBranch}`])
+      if (workRef.code === 0) {
+        const remoteSha = workRef.output.trim()
+        if (run('git', ['merge-base', '--is-ancestor', remoteSha, 'HEAD']).code !== 0) {
           say(
-            `⚠️ 本地 HEAD 不是 origin/${branch} 的后代（远端 ${remoteSha.slice(0, 7)}）。\n`
-            + '  云端 runner 每次都是全新 checkout（HEAD 即该分支），故那里是快进推送；\n'
-            + '  在本机用 --ci 试跑时 HEAD 是 custom-main、目标是 squash 历史的 main，\n'
-            + '  必然 non-fast-forward —— 这不是同步失败，是模式与本机分支布局不匹配。\n'
-            + '  本机要发布请用 `node scripts/sync-upstream.mjs --push`（走 API squash 通道）。',
+            `⚠️ 本地 HEAD 不是 origin/${workBranch} 的后代（远端 ${remoteSha.slice(0, 7)}）。\n`
+            + '  云端 runner 每次都是全新 checkout（HEAD 即该分支），故是快进推送。\n'
+            + '  本机用 --ci 试跑时若 HEAD 与该分支不一致，请改用 `--push`。',
           )
-          throw new Error(`HEAD 不是 origin/${branch} 的后代，拒绝推送（--ci 只能用于云端全新 checkout）`)
+          throw new Error(`HEAD 不是 origin/${workBranch} 的后代，拒绝推送`)
         }
       }
-      const pushed = run('git', ['push', 'origin', `HEAD:${branch}`])
-      say(pushed.output.trim().slice(-1500))
-      if (pushed.code !== 0) throw new Error('推送失败')
+      const pushedWork = run('git', ['push', 'origin', `HEAD:${workBranch}`])
+      say(pushedWork.output.trim().slice(-1500))
+      if (pushedWork.code !== 0) throw new Error(`推送 ${workBranch} 失败`)
+      const workHead = run('git', ['rev-parse', `origin/${workBranch}`]).output.trim()
+      say(`  ✅ ${workBranch} -> ${workHead.slice(0, 7)}`)
 
-      // ── 二次刷新：让 catalog 的 revision 指向**远端真实存在**的提交 ──
-      say('二次刷新 catalog revision（指向刚推送的远端提交）…')
-      run('git', ['fetch', 'origin', branch])
-      const remoteHead = git('rev-parse', `origin/${branch}`).trim()
-      say(`  远端 ${branch} = ${remoteHead.slice(0, 7)}`)
-      /**
-       * 直接把 revision 写成**远端 HEAD**，而不是 `reset --hard` 到远端再跑
-       * `refresh-revision.mjs`：
-       *
-       * - 远端 HEAD 就是「最后一次触碰发布内容的提交」（我们刚推上去的那一批
-       *   内容全在它里面）—— 与 `catalog-test` 的判据完全一致；
-       * - `reset --hard origin/<branch>` 会**丢掉本地 merge 历史**，让这次同步
-       *   在本地看起来什么也没发生，日志也会误导（且如果远端被并发改写，
-       *   本地会被静默拉到别人分支上）。
-       *
-       * 写完仍跑一次 `catalog-test`（release 语义）自证，不靠推断。
-       */
-      const refreshed = run('node', ['scripts/set-catalog-revision.mjs', remoteHead])
+      // ── ② 刷新 revision 指向**远端 custom-main 的 HEAD** ──
+      //
+      // 为什么是 custom-main 而不是 main：发布内容（`package.json` + files）
+      // 的「最后触碰提交」在 **custom-main 的完整历史**里才有意义。
+      // `main` 是 squash 投影，它的提交 sha 不是发布内容的真实历史节点。
+      // `release-sign.yml` 在 main 上算的是「main 分支上的最后一次触碰」，
+      // 所以两边算法不同 —— 但那正是它的职责：**它是最终纠偏机制**。
+      say('刷新 catalog revision（指向远端工作分支 HEAD）…')
+      const refreshed = run('node', ['scripts/set-catalog-revision.mjs', workHead])
       say(refreshed.output.trim().slice(-800))
       if (refreshed.code !== 0) throw new Error('刷新 revision 失败')
-      // 刷新后必须仍然自洽（catalog-test 的 release 语义）。
-      const catalogCheck = run('node', ['scripts/catalog-test.mjs'])
-      if (catalogCheck.code !== 0) {
-        say(catalogCheck.output.trim().slice(-1200))
-        throw new Error('刷新后的 catalog 校验未通过')
-      }
-      say('  ✅ 刷新后 catalog-test 通过')
-      // 只在真的变了时才第二次推送。
+
+      // ── ③ 把刷新后的 revision 再推一次 custom-main（快进）──
       const dirtyCatalog = git('status', '--porcelain', '--', 'catalog', 'feed').trim()
       if (dirtyCatalog !== '') {
         run('git', ['add', 'catalog', 'feed'])
-        const message = `catalog: refresh revision over ${git('rev-parse', '--short=7', 'HEAD').trim()}`
-        const committed = run('git', ['commit', '-m', message], GIT_ENV)
+        const committed = run('git', ['commit', '-m', `catalog: refresh revision over ${workHead.slice(0, 7)}`], GIT_ENV)
         if (committed.code !== 0) throw new Error('revision 刷新提交失败')
-        const repushed = run('git', ['push', 'origin', `HEAD:${branch}`])
-        say(repushed.output.trim().slice(-800))
-        if (repushed.code !== 0) throw new Error('二次推送失败')
+        const repushedWork = run('git', ['push', 'origin', `HEAD:${workBranch}`])
+        say(repushedWork.output.trim().slice(-800))
+        if (repushedWork.code !== 0) throw new Error(`二次推送 ${workBranch} 失败`)
         say('  ✅ revision 已刷新并推送')
       } else {
         say('  revision 已正确，无需二次推送')
+      }
+
+      if (!pushBranch) {
+        say(`OFM_PUSH_BRANCH_ONLY=1：跳过 ${releaseBranch} 的投影推送`)
+        writeState({ lastUpstreamSha: upstreamHead })
+        return
+      }
+
+      // ── ④ 把工作分支投影到发布分支 `main` ──
+      //
+      // ## 两种形态，由 `OFM_MAIN_SYNC_MODE` 选择（默认 `history`）
+      //
+      // - `history`（推荐，2026-10-19 起）：`main` 与上游同形 —— **常规历史**。
+      //   用 `force-with-lease` 把 `custom-main` 推上去。好处是 revision 口径
+      //   在全仓统一（`git log -1 -- <发布内容>` 在任何分支都成立），
+      //   且以后合并上游不再需要「两段式刷新」这套 squash 补偿逻辑。
+      // - `squash`：保留旧的 squash 投影（`main` 是每推一次一个新提交）。
+      //   ⚠️ 这个形态会让**合并基底退化为旧祖先**，云端 merge 必然大量冲突
+      //   （2026-10-19 云端 dry-run 实测 10 个文件）—— 仅作兼容保留。
+      const mode = process.env.OFM_MAIN_SYNC_MODE ?? 'history'
+      if (mode === 'history') {
+        say(`投影 HEAD → origin/${releaseBranch}（force-with-lease，保持常规历史）…`)
+        const projected = run('git', ['push', '--force-with-lease', 'origin', `HEAD:${releaseBranch}`])
+        say(projected.output.trim().slice(-1500))
+        if (projected.code !== 0) throw new Error(`投影 ${releaseBranch} 失败`)
+        say(`  ✅ ${releaseBranch} 已与 ${workBranch} 同历史`)
+      } else {
+        say(`投影 HEAD → origin/${releaseBranch}（squash，单提交）…`)
+        const tokenForPush = process.env.GH_TOKEN
+          ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
+        const projected = run('node', ['scripts/api-push-squash.mjs'], {
+          GH_TOKEN: tokenForPush,
+          OFM_PUSH_BRANCH: releaseBranch,
+        })
+        say(projected.output.trim().slice(-1500))
+        if (projected.code !== 0) throw new Error(`投影 ${releaseBranch} 失败`)
       }
     } else {
       const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
@@ -518,4 +599,4 @@ function main() {
   }
 }
 
-main()
+await main()

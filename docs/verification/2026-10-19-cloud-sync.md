@@ -149,6 +149,51 @@ node scripts/check-sync-failure.mjs --force     # 忽略去重，无条件弹一
 Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可。
 （plist 由 Chief 执行，本任务只产出脚本与这段配置。）
 
+## ⚠️ 云端必须以 `custom-main` 为工作分支（结构性修正，2026-10-19 傍晚）
+
+### 现象
+
+云端 dry-run 报 **10 个文件「需人工判断」的冲突**：`README.md`、`client.js`、
+`package.json`、`packages/standalone/*`、`sponsor.js` …
+
+### 根因（是结构性的，不是个别文件）
+
+| 分支 | 与上游的共同祖先 | 合并行为 |
+|---|---|---|
+| `main`（旧设计，**squash 历史**） | 停在 **v2.5.4 之前** | 基准太旧 ⇒ 上游 2.5.4+2.5.5 的全部改动与本 fork 的 squash 改动摆在一起对撞 ⇒ **必然大量冲突** |
+| `custom-main`（**完整历史**） | 含全部上游祖先 | 同样的合并**零源码冲突**（昨天合并 2.5.4 即证明） |
+
+这正是当初否决「云端用 custom-main」时**漏掉的依据** —— 当时只考虑了「分支存不存在」，
+没考虑「合并基底够不够新」。
+
+### 修法
+
+```
+checkout custom-main（事实源）
+  → fetch upstream → merge（祖先完整，零源码冲突）
+  → 重建 pack.js + 重建独立端产物
+  → 重签 + 刷新 revision
+  → 测试
+  → ① push custom-main（**完整历史**，绝不 squash）
+    ② 刷新 revision 后再 push custom-main
+    ③ 把 custom-main 投影到 main（OFM_MAIN_SYNC_MODE=history ⇒ force-with-lease）
+```
+
+- **`custom-main` 是事实源，`main` 只是它的发布投影。**
+- 本机 launchd 退化为 **fallback**：检测到远端 `custom-main` 已含上游新提交就空转；
+  两边谁先做都不冲突（都以 `custom-main` 为事实源）。
+- 脚本新增 `OFM_WORK_BRANCH` / `OFM_PUSH_BRANCH` / `OFM_MAIN_SYNC_MODE`，
+  **不再写死 `main`**。
+
+### 独立端产物必须取 ours 再重建
+
+`packages/standalone/web/**`（`app.js` / `assets.json` / 带 hash 的分包）是
+**构建产物**，上游每次发版都重新生成、hash 也变。把它们当源码三方合并会出现
+`rename/delete`、`modify/delete` 轮番冲突。正确做法永远是**取 ours + 合并后重建**
+（`build-standalone-ui.mjs`），脚本已加 `GENERATED_PREFIXES` 与重建步骤。
+
+⚠️ 这些文件**不在** `package.json` 的 `files` 里 ⇒ 不进发布清单 ⇒ 不需要重签 manifest。
+
 ## ⚠️ squash 推送后的 revision 口径（今天踩了三轮的教训）
 
 `catalog.source.revision` 的定义是「**最后一次触碰发布内容的提交**」。

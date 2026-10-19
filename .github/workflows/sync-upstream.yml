@@ -60,20 +60,20 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # ## ⚠️ checkout 的是 `main`，不是 `custom-main`（2026-10-19 修正）
+      # ## checkout `custom-main`（事实源，2026-10-19 结构性修正）
       #
-      # 第一版写 `ref: custom-main` ⇒ **云端 checkout 失败**：`custom-main` 是
-      # 本 fork 的本地分支，**远端根本没有**（远端只有 `main`，且是 squash 历史）。
-      # 那次 run 39244642263 在第 2 步就红了。
+      # ### 为什么不能基于 `main` 合并（云端 dry-run 实测）
       #
-      # 为什么不改用「本机把 custom-main 推到远端、云端 fetch 它」：
-      # 那要求**每次推送都先在云端之外产生一个新分支**，且两个写者（本机
-      # launchd + 云端）会争同一个分支；更麻烦的是 `main` 仍然是 squash 历史，
-      # 云端推完 `custom-main` 还得再转换一次语义才能更新 `main` —— 等于把
-      # 一套逻辑拆成三段，每段都可能漂移。
+      # 远端 `main` 曾是 **squash 历史**：它和上游的共同祖先停在 v2.5.4 之前。
+      # 以它为基底做三方合并，基准太旧 ⇒ 上游 2.5.4+2.5.5 的全部改动与本 fork
+      # 的 squash 改动被摆在一起对撞，**必然出现大量「需人工判断」的冲突**
+      # （实测 10 个文件：README / client.js / package.json / standalone/* …）。
       #
-      # 现在沿用**与本机完全一致**的语义：以 `main`（发布分支）为基线，
-      # 合并上游，推送。完整历史仍留在本机 `custom-main`。
+      # `custom-main` 有**完整的上游祖先**（昨天合并 2.5.4 零冲突即证明）。
+      # 故云端改为：checkout custom-main → merge → 测试 → 推 custom-main
+      #      → 再把 main 对齐（`OFM_MAIN_SYNC_MODE=history` 时是 force-with-lease）。
+      #
+      # `custom-main` 是**事实源**，`main` 只是它的发布投影。
       #
       # fetch-depth: 0 是**必须**的：merge 需要与上游求 merge-base，
       # 而 catalog-test 的 revision 校验要 `git log` 走过 package.json 的
@@ -82,7 +82,7 @@ jobs:
       # http extraheader，压制后面用 PAT push 的凭据（release-sign.yml 记过同一个坑）。
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: main
+          ref: custom-main
           fetch-depth: 0
           persist-credentials: false
 
@@ -148,6 +148,11 @@ jobs:
           # 失败时脚本把结构化信息写到这里，下一步提交到 fork。
           OFM_SYNC_FAIL_FILE: ${{ runner.temp }}/sync-failure.json
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # 工作分支（事实源，带完整上游祖先）与发布分支（投影）。
+          OFM_WORK_BRANCH: custom-main
+          OFM_PUSH_BRANCH: main
+          # 让 main 与 custom-main 同历史（常规历史），revison 口径全仓统一。
+          OFM_MAIN_SYNC_MODE: history
         run: |
           set +e
           if [ "${{ inputs.dry_run }}" = "true" ]; then
