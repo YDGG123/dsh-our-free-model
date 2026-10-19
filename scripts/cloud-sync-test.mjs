@@ -338,5 +338,63 @@ await checkAsync('--fail-file 在失败时真的写出状态文件（端到端�
   fs2.rmSync(work, { recursive: true, force: true })
 })
 
+// ── set-catalog-revision：云端二次刷新用 ─────────────────────────────────────
+
+await checkAsync('setCatalogRevision 写入两处 revision（且校验 sha 格式）', async () => {
+  const fs2 = await import('node:fs')
+  const os2 = await import('node:os')
+  const { setCatalogRevision, REVISION_TARGETS } = await import('./set-catalog-revision.mjs')
+
+  const dir = fs2.mkdtempSync(path.join(os2.tmpdir(), 'ofm-setrev-'))
+  fs2.mkdirSync(path.join(dir, 'catalog'), { recursive: true })
+  fs2.writeFileSync(path.join(dir, 'catalog/dsh-plugin.json'),
+    JSON.stringify({ version: '2.5.4', source: { revision: 'old', version: '2.5.4' } }, null, 2))
+  fs2.writeFileSync(path.join(dir, 'catalog/provenance.json'),
+    JSON.stringify({ subject: { sourceRevision: 'old' } }, null, 2))
+
+  const sha = 'a'.repeat(40)
+  const result = setCatalogRevision(sha, { root: dir })
+  assert.equal(result.changed.length, 2, '两处都要写')
+  assert.deepEqual(REVISION_TARGETS.map(t => t.file).sort(), ['catalog/dsh-plugin.json', 'catalog/provenance.json'])
+
+  const catalog = JSON.parse(fs2.readFileSync(path.join(dir, 'catalog/dsh-plugin.json'), 'utf8'))
+  assert.equal(catalog.source.revision, sha)
+  assert.equal(catalog.source.version, '2.5.4', '不能顺手改动 version')
+  const provenance = JSON.parse(fs2.readFileSync(path.join(dir, 'catalog/provenance.json'), 'utf8'))
+  assert.equal(provenance.subject.sourceRevision, sha)
+
+  // 幂等：同一 sha 再写一次不该产生变更。
+  const again = setCatalogRevision(sha, { root: dir })
+  assert.deepEqual(again.changed, [], '同值重复写应无变更')
+  assert.equal(again.skipped.length, 2)
+
+  // 非法 sha：必须报错（不能把短 sha / 大写写进 catalog）。
+  assert.throws(() => setCatalogRevision('abc123', { root: dir }), /40 位/)
+  assert.throws(() => setCatalogRevision('A'.repeat(40), { root: dir }), /40 位/)
+})
+
+await checkAsync('sync-upstream 的 --ci 推送是**两段式**（推完再刷新 revision 再推）', async () => {
+  // 真实故障（2026-10-19 run 39244615254）：只推一次时，catalog 里的 revision
+  // 指向**本地** sha，而远端是新的 squash commit ⇒ 远端 main 上
+  // `catalog-test` 报 got/want 不一致，release-sign 红。
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
+  assert.match(source, /scripts\/set-catalog-revision\.mjs/, '推完必须刷新 revision')
+  // 刷新后必须再推一次（否则远端仍是旧 revision）。
+  const ciBlock = source.slice(source.indexOf('if (ciMode)'), source.indexOf('} else {', source.indexOf('if (ciMode)')))
+  const pushes = ciBlock.match(/\['push', 'origin'/g) ?? []
+  assert.ok(pushes.length >= 2, `--ci 分支应有两次 push（实际 ${pushes.length}）`)
+  // 刷新后要自证，不靠推断。
+  assert.match(ciBlock, /catalog-test\.mjs/, '刷新后必须跑 catalog-test 自证')
+  // 推送前必须有「祖先检查」，否则本机用 --ci 试跑只会得到一句
+  // "failed to push some refs"，看不出是模式与本机分支布局不匹配。
+  assert.match(ciBlock, /merge-base.*--is-ancestor/, '推送前必须检查 HEAD 是否为远端后代')
+  assert.match(ciBlock, /只能用于云端全新 checkout/, '拒绝时必须说明原因与替代做法')
+  // ⚠️ 不能用 reset --hard 到远端：会丢掉本地 merge 历史。
+  // 只看**非注释行**（注释里会引用这句话作为反例说明）。
+  const ciCode = ciBlock.split('\n').filter(line => !/^\s*(\/\/|\*|\/\*|\*\/)/.test(line)).join('\n')
+  assert.ok(!/reset.*--hard.*origin\//.test(ciCode), '不得 reset --hard 到远端分支')
+})
+
 console.log(`cloud-sync: ${failures === 0 ? 'all ok' : `${failures} failure(s)`}`)
 process.exitCode = failures > 0 ? 1 : 0
