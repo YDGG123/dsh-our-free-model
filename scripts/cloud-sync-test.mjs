@@ -369,9 +369,15 @@ await checkAsync('--fail-file 在失败时真的写出状态文件（端到端�
    * ⚠️ 两个坑（都踩过）：
    * 1. 必须先 `git remote add upstream`，否则脚本第一步 `git fetch upstream`
    *    就失败，走的是 fetch-failed 路径（要测，但不是本用例的目标）；
-   * 2. 脚本 fetch 的是 `main`，而 clone 只有 `custom-main` ⇒ 报
-   *    `couldn't find remote ref main`。故要在 clone 里造一个 `main`。
+   * 2. 脚本 fetch 的是 `main`，而 clone 的检出分支取决于**源仓库当前分支**
+   *    ⇒ 报 `couldn't find remote ref main`。故要在 clone 里造一个 `main`。
+   *
+   * ⚠️ **绝不能写死分支名**：本用例原先 `git checkout -q custom-main`，
+   * 而云端 CI 检出的仓库只有 `main`（`custom-main` 只在作者的本地）⇒
+   * 在 GitHub Actions 里报 `pathspec 'custom-main' did not match`（真实故障，
+   * 2026-10-19 offline job）。改为记下**检出时的 HEAD**，最后回到那里。
    */
+  const startRef = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: clone, encoding: 'utf8' }).trim()
   // ⚠️ 关键：`main` 必须是**当前 HEAD 的祖先所不含**的提交，否则脚本判定
   // 「上游已在本地历史中」直接成功退出（那样根本走不到测试环节）。
   // 做法：从 clone 里 checkout 出一个**平行分支**并加一个提交，让它与 HEAD 分叉。
@@ -380,7 +386,8 @@ await checkAsync('--fail-file 在失败时真的写出状态文件（端到端�
   execFileSync('git', ['add', 'upstream-marker.txt'], { cwd: clone })
   execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'upstream side'], { cwd: clone })
   execFileSync('git', ['branch', '-f', 'main', 'upstream-fixture'], { cwd: clone })
-  execFileSync('git', ['checkout', '-q', 'custom-main'], { cwd: clone })
+  // 回到检出时的提交（detached 亦可 —— 脚本只关心 HEAD 的内容与历史）。
+  execFileSync('git', ['checkout', '-q', startRef], { cwd: clone })
   execFileSync('git', ['remote', 'add', 'upstream', clone], { cwd: clone })
   execFileSync('git', ['fetch', '--quiet', 'upstream', 'main:refs/remotes/upstream/main'], { cwd: clone })
 
