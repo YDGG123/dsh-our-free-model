@@ -14,7 +14,7 @@
 ```
 ┌─────────────── GitHub Actions（云端，Mac 开不开机都能跑）───────────────┐
 │                                                                        │
-│  schedule 03:17 UTC (= 11:17 CST)      workflow_dispatch（手动）        │
+│  schedule 03:45 UTC (= 11:45 CST)      workflow_dispatch（手动）        │
 │              │                                      │                  │
 │              └──────────────┬───────────────────────┘                  │
 │                             ▼                                          │
@@ -35,7 +35,7 @@
 └──────────────────────────────────────┼─────────────────────────────────┘
                                        │  (raw.githubusercontent.com)
 ┌──────────────────────────────────────┼─────────────────────────────────┐
-│ 本机 launchd（每日 11:40）            ▼                                 │
+│ 本机 launchd（每日 11:55）            ▼                                 │
 │  node scripts/check-sync-failure.mjs ── 有新的失败 ── osascript 通知     │
 │                                       └ 已通知过 ── 跳过（指纹去重）     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -77,8 +77,15 @@
 
 ## 时间安排与并发
 
-- 云端：**03:17 UTC = 11:17 CST**，刻意**错开本机 11:30** 13 分钟。
-  两者都动同一个远端分支，撞在一起时后者必然 non-fast-forward 失败。
+- 云端：**03:45 UTC = 11:45 CST**，排在本机 launchd（**11:30**）**之后**。
+  两者都动同一个远端分支，撞在一起时后一个必然 non-fast-forward 失败
+  （两个 runner 从同一 base 各自 merge，都尝试推 main）。让**本机先跑**：
+  本机那轮只在本机开机时存在、时间不确定，排在前面时云端能看到它刚推的
+  内容并 fast-forward；反过来会让本机每天因基线过期而报错，而本机是人工兜底，
+  不该天天红。
+
+  ⚠️ 旧版写的是 11:17 且注释称「让本机那轮先跑完」，与实际顺序矛盾
+  （11:17 < 11:30），属笔误，Tester 复核时指出，已连同 cron 一起改正。
 - `concurrency: group: sync-upstream, cancel-in-progress: false` —— 不并发、
   也不半途取消（取消可能留下中间状态，虽然脚本会回滚，但排队更可预测）。
 
@@ -115,7 +122,8 @@ node scripts/check-sync-failure.mjs --force     # 忽略去重，无条件弹一
 ### plist 需要加的内容
 
 在 `~/Library/LaunchAgents/com.ydgg.ofm-sync-upstream.plist` **另加一个**任务
-（不要覆盖原有那个），每天 11:40 跑（本机 11:30 那轮结束后）：
+（不要覆盖原有那个），每天 **11:55** 跑（云端 11:45 那轮结束后 —— 它会写状态文件，
+本机必须**在云端之后**读才有意义）：
 
 ```xml
 <key>ProgramArguments</key>
@@ -130,7 +138,7 @@ node scripts/check-sync-failure.mjs --force     # 忽略去重，无条件弹一
   <key>Hour</key>
   <integer>11</integer>
   <key>Minute</key>
-  <integer>40</integer>
+  <integer>55</integer>
 </dict>
 <key>StandardOutPath</key>
 <string>/Volumes/办公/IDM下载/Our Free Model/dsh-our-free-model/.private/notify.log</string>
@@ -147,7 +155,7 @@ Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可�
 
 ```json
 {
-  "failedAt": "2026-10-19T03:17:00Z",
+  "failedAt": "2026-10-19T03:45:00Z",
   "failedStep": "merge-conflict",
   "message": "…",
   "upstreamHead": "…",
@@ -157,8 +165,10 @@ Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可�
 }
 ```
 
-1. 看 `runUrl` 的日志，确认是哪一步（`failedStep`：`merge-conflict` /
-   `test-failed` / `sign-failed` / `build-failed` / `push-failed`）
+1. 看 `runUrl` 的日志，确认是哪一步。`failedStep` 可能是：
+   `fetch-failed`（拉不到上游，网络/鉴权）、`dirty-worktree`（工作区不干净）、
+   `merge-conflict`（源码冲突，需人工）、`merge-commit-failed`、
+   `test-failed`、`sign-failed`、`build-failed`、`push-failed`、`unknown`
 2. 云端**不会**在失败时推送任何东西（脚本会 `reset --hard` 回合并前），
    所以远端始终是上一个好状态 —— 不需要紧急回滚
 3. 按 `docs/verification/2026-10-19-upstream-sync.md` 的「冲突处理 SOP」在**本机**
@@ -174,9 +184,25 @@ Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可�
 | 误推的 main | `git revert -m 1 <merge-sha>`（**不要** reset，会改写别人的历史） |
 | 清掉失败记录 | 删掉 fork 上的 `sync-failure` 分支（下次失败会重建） |
 
+## ⚠️ 三条早期退出路径也必须写状态文件（真实缺陷，2026-10-19）
+
+第一版只在 `catch` 块末尾写状态文件。于是**三条早期退出**全都写不出来：
+
+| 路径 | 为什么 |
+|---|---|
+| `fetch 失败` | 在 try 之外，直接 `process.exit(1)` |
+| `工作区不干净` | 同上 |
+| `合并冲突` | 在 try 之外（合并发生在 try 之前） |
+
+而 `fetch 失败` 恰恰是云端最常见的一种（网络/鉴权），且这三条都不会进
+`catch` ⇒ 状态文件永远缺失 ⇒ workflow 只能写「未知失败」兜底 ⇒ 用户看不到原因。
+
+现在统一走 `failOut(step, message, extra)`：写状态文件 → 打日志 → `process.exit(1)`。
+**任何非零退出都必须经过它**（代码里除 `failOut` 内部外已无裸 `process.exit`）。
+
 ## 测试
 
-`scripts/cloud-sync-test.mjs`（**17 项**，已接入 `test-all`）：
+`scripts/cloud-sync-test.mjs`（**18 项**，已接入 `test-all`）：
 
 - **写**：首次写不带 `sha`、重复写必须带 `sha`（否则 API 422）、失败时如实返回状态码
 - **载荷归一化**：缺字段补齐（通知里不能出现 `undefined`）、脏字段剔除
@@ -188,6 +214,12 @@ Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可�
 - **直接执行守卫**：本仓库路径含空格，必须用 `pathToFileURL` 而不是手工拼
   `file://`（真实缺陷：手工拼永不相等 ⇒ 脚本静默空过）
 
+- **端到端（隔离 git clone）**：`--fail-file` 在**真实失败**时确实写出文件，
+  且字段齐全（`failedAt` / `failedStep` / `message` / `conflictedFiles` /
+  `runUrl`）。这条正是首轮 17/17 漏掉的路径 —— 它测了 report/check 两个脚本，
+  却没测 `sync-upstream.mjs --fail-file` 本身。**变异测试确认**：删掉 `flag`
+  定义后该用例立刻变红。
+
 另外做了**本地端到端模拟**（本地 HTTP 服务器扮演 fork）：写入 → 读出 →
 去重 → 通知文案，全链路通过。
 
@@ -196,7 +228,7 @@ Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可�
 | 项 | 结果 |
 |---|---|
 | workflow YAML 解析（js-yaml） | 通过，8 个 step，触发 `schedule` + `workflow_dispatch` |
-| `node scripts/cloud-sync-test.mjs` | **17/17 通过** |
+| `node scripts/cloud-sync-test.mjs` | **18/18 通过** |
 | `node scripts/sync-upstream.mjs --ci` | 通过（上游无新提交 → 安全退出） |
 | `npm run test:contributor` | **73/74**，唯一失败是已知基线 `reload-test` |
 | `npm test`（release 模式） | **75/76**，同样只剩该基线 |

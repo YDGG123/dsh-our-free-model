@@ -86,6 +86,23 @@ const shouldPush = process.argv.includes('--push')
  */
 const ciMode = process.argv.includes('--ci')
 const willPush = shouldPush || ciMode
+/**
+ * 取一个带值的命令行参数（`--name value`），缺省返回 `undefined`。
+ *
+ * ## ⚠️ 这个函数曾经被调用却没有定义（真实缺陷，2026-10-19 Tester 实测发现）
+ *
+ * 失败路径里 `const failFile = flag('fail-file')` 直接抛
+ * `TypeError: flag is not a function`，而这行在 `catch` 块里、回滚**之后**
+ * —— 于是「云端失败 ⇒ 写状态文件 ⇒ 本机弹通知」这条链路在第一步就断，
+ * 用户只会看到「失败了，原因未知」。`cloud-sync-test` 当时 17/17 全绿也没
+ * 抓到，因为它只测了 report/check 两个脚本，没测本脚本的 `--fail-file`。
+ *
+ * 语义与 `api-push-squash.mjs` 里的同名实现一致（那边一直是对的）。
+ */
+const flag = name => {
+  const index = process.argv.indexOf(`--${name}`)
+  return index === -1 ? undefined : process.argv[index + 1]
+}
 
 /** ⚠️ 不要在这里手写「发布内容」清单：revision 判据必须与 catalog-test /
  * prepare-release 用同一算法（`package.json` + 其 `files` 列表）。
@@ -102,7 +119,16 @@ const GENERATED = new Set([
 
 /** 合并后必须通过的目标测试集（全量 test-all 中已知稳定通过的部分；
  * reload 套件在上游纯净分支同样失败，属上游与 Node 24 的兼容问题，不列入）。 */
-const TESTS = [
+/**
+ * 测试集。可用 `OFM_SYNC_TESTS`（逗号分隔）覆盖 —— **只为离线回归而开**：
+ * `scripts/cloud-sync-test.mjs` 需要跑一个「必定失败」的场景来验证
+ * `--fail-file` 真的写得出状态文件，而全量测试集要几分钟且不该故意挂。
+ *
+ * ⚠️ 生产路径（launchd / GitHub Actions）不设这个变量，行为不变。
+ */
+const TESTS = process.env.OFM_SYNC_TESTS !== undefined && process.env.OFM_SYNC_TESTS.trim() !== ''
+  ? process.env.OFM_SYNC_TESTS.split(',').map(item => item.trim()).filter(Boolean)
+  : [
   'scripts/raccoon-balance-test.mjs',
   'scripts/updater-test.mjs',
   'scripts/catalog-test.mjs',
@@ -144,6 +170,43 @@ function writeState(state) {
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
 }
 
+/**
+ * 失败出口：写状态文件（若给了 `--fail-file`）、打日志、以 1 退出。
+ *
+ * ## 为什么所有失败路径都必须走这里（真实缺陷，2026-10-19）
+ *
+ * 最初只有 `catch` 块末尾写状态文件，于是**三条早期退出路径**全都写不出来：
+ * `fetch 失败`、`工作区不干净`、`合并冲突`（后两者是 `process.exit(1)` 直接退，
+ * 根本不进 catch）。而 `fetch 失败` 恰恰是云端最常见的一种失败（网络/鉴权）。
+ *
+ * 云端 workflow 依赖这个文件给用户「原因」，缺失时只能报「未知失败」——
+ * 那等于通知白做。故：**任何非零退出都要先经过这里**。
+ */
+function failOut(step, message, extra) {
+  say(`❌ ${message}`)
+  const failFile = flag('fail-file')
+  if (failFile !== undefined) {
+    try {
+      const payload = {
+        failedAt: new Date().toISOString(),
+        failedStep: step,
+        message,
+        upstreamHead: extra?.upstreamHead ?? '',
+        preMergeHead: extra?.preMergeHead ?? '',
+        headAtFailure: extra?.headAtFailure ?? '',
+        conflictedFiles: extra?.conflictedFiles ?? [],
+        runUrl: process.env.GITHUB_RUN_URL ?? '',
+      }
+      fs.writeFileSync(failFile, JSON.stringify(payload, null, 2) + '\n')
+      say(`失败信息已写入 ${failFile}`)
+    } catch (error) {
+      // 写不出来也不能掩盖原始失败：记一行，继续以 1 退出。
+      say(`⚠️ 失败信息写入 ${failFile} 失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  process.exit(1)
+}
+
 /** 把失败消息归到「哪一步」——通知里要能一眼看出是冲突还是测试挂。 */
 function classifyFailure(message) {
   if (/需要人工判断的冲突|CONFLICT|Merge conflict/i.test(message)) return 'merge-conflict'
@@ -160,7 +223,9 @@ function main() {
   // ── 1. 拉上游（镜像免认证） ─────────────────────────────────────────────
   say('fetch upstream …')
   const fetched = run('git', ['fetch', '--force', 'upstream', 'main:refs/remotes/upstream/main'])
-  if (fetched.code !== 0) { say(`❌ fetch 失败：${fetched.output.slice(0, 300)}`); process.exit(1) }
+  if (fetched.code !== 0) {
+    failOut('fetch-failed', `fetch 失败：${fetched.output.slice(0, 300)}`)
+  }
   const upstreamHead = git('rev-parse', 'refs/remotes/upstream/main').trim()
   say(`上游 main = ${upstreamHead.slice(0, 7)}`)
 
@@ -181,8 +246,7 @@ function main() {
   // ── 3. 工作区必须干净 ──────────────────────────────────────────────────
   const dirty = git('status', '--porcelain').trim()
   if (dirty !== '') {
-    say(`❌ 工作区不干净，放弃本次同步（不覆盖未提交改动）：\n${dirty}`)
-    process.exit(1)
+    failOut('dirty-worktree', `工作区不干净，放弃本次同步（不覆盖未提交改动）：\n${dirty}`)
   }
   const preMergeHead = git('rev-parse', 'HEAD').trim()
   say(`合并前 HEAD = ${preMergeHead.slice(0, 7)}`)
@@ -201,8 +265,11 @@ function main() {
     const unresolvable = conflicted.filter(file => !GENERATED.has(file))
     if (conflicted.length === 0 || unresolvable.length > 0) {
       run('git', ['merge', '--abort'])
-      say(`❌ 存在需要人工判断的冲突，已回滚合并，留待处理：\n${unresolvable.join('\n')}`)
-      process.exit(1)
+      failOut(
+        'merge-conflict',
+        `存在需要人工判断的冲突，已回滚合并，留待处理：\n${unresolvable.join('\n')}`,
+        { upstreamHead, conflictedFiles: unresolvable },
+      )
     }
     // 生成产物冲突：取 ours（随后重建/重签，内容总是正确的）。
     for (const file of conflicted) {
@@ -213,8 +280,7 @@ function main() {
     const resolved = run('git', ['commit', '--no-edit'], GIT_ENV)
     if (resolved.code !== 0) {
       run('git', ['merge', '--abort'])
-      say(`❌ 冲突解决后提交失败：${resolved.output.slice(0, 200)}`)
-      process.exit(1)
+      failOut('merge-commit-failed', `冲突解决后提交失败：${resolved.output.slice(0, 200)}`, { upstreamHead })
     }
   }
   const mergedHead = git('rev-parse', 'HEAD').trim()
@@ -353,36 +419,16 @@ function main() {
     say(`✅ 同步完成：上游 ${upstreamHead.slice(0, 7)} → 本地 ${git('rev-parse', 'HEAD').trim().slice(0, 7)}`)
   } catch (error) {
     // 测试/构建/签名任一失败：回滚到合并前。远端未动，无副作用。
-    say(`❌ ${error.message}`)
-    // 冲突文件清单（若非冲突类失败则为空；workflow 用它做通知摘要）。
     const conflicted = run('git', ['diff', '--name-only', '--diff-filter=U']).output
       .split('\n').map(line => line.trim()).filter(Boolean)
     const currentHead = git('rev-parse', 'HEAD').trim()
     run('git', ['reset', '--hard', preMergeHead])
     say(`已回滚到 ${preMergeHead.slice(0, 7)}（远端未受影响）`)
-    /**
-     * `--fail-file <path>`：把结构化失败信息写出来。
-     *
-     * 为什么由**脚本**写而不是 workflow 自己拼：失败步骤与冲突文件只有脚本
-     * 知道（workflow 只看得到 exit code）。写成一个文件后，workflow 只需把它
-     * 提交到 fork，本机通知桥再读。
-     */
-    const failFile = flag('fail-file')
-    if (failFile !== undefined) {
-      const payload = {
-        failedAt: new Date().toISOString(),
-        failedStep: classifyFailure(error.message),
-        message: error.message,
-        upstreamHead,
-        preMergeHead,
-        headAtFailure: currentHead,
-        conflictedFiles: conflicted,
-        runUrl: process.env.GITHUB_RUN_URL ?? '',
-      }
-      fs.writeFileSync(failFile, JSON.stringify(payload, null, 2) + '\n')
-      say(`失败信息已写入 ${failFile}`)
-    }
-    process.exit(1)
+    failOut(
+      classifyFailure(error.message),
+      error instanceof Error ? error.message : String(error),
+      { upstreamHead, preMergeHead, headAtFailure: currentHead, conflictedFiles: conflicted },
+    )
   }
 }
 

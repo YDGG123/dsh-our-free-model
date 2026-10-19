@@ -249,5 +249,94 @@ await checkAsync('两个脚本的「是否直接执行」判定在含空格路�
   }
 })
 
+// ── 端到端：--fail-file 真的写得出来（Tester 复核抓到的阻断缺陷） ────────────
+// 真实缺陷（2026-10-19）：`sync-upstream.mjs` 调了 `flag('fail-file')` 却
+// **从没定义 `flag`**，而那行在 catch 块里、回滚之后 ⇒ 抛 `TypeError`，
+// 状态文件永远写不出来 ⇒「云端失败 ⇒ 通知」整条链路在第一步就断，用户只看到
+// 「失败了，原因未知」。当时本文件 17/17 全绿，因为它只测了 report/check
+// 两个脚本，**没测本脚本的 --fail-file**。
+//
+// 这条用**临时 git clone** 隔离跑：`OFM_SYNC_TESTS` 注入一个必失败的脚本，
+// 断言文件存在且字段齐全。不动当前工作区（脏树会被脚本自己拒绝）。
+await checkAsync('--fail-file 在失败时真的写出状态文件（端到端，隔离 clone）', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const fs2 = await import('node:fs')
+  const os2 = await import('node:os')
+
+  // ⚠️ 必须用 fileURLToPath：`new URL(...).pathname` 里是百分号编码的
+  //（本仓库路径含空格 ⇒ `%20`），git 会当成真实目录名去找而失败。
+  const { fileURLToPath } = await import('node:url')
+  const repo = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
+  const work = fs2.mkdtempSync(path.join(os2.tmpdir(), 'ofm-failfile-'))
+  const clone = path.join(work, 'repo')
+  execFileSync('git', ['clone', '--no-hardlinks', '--quiet', repo, clone], { stdio: 'ignore' })
+
+  // ⚠️ clone 拿到的是 **HEAD 里的脚本**，而本用例要测的是**当前工作区**的版本
+  //（改动可能还没提交）。把工作区文件覆盖进去，否则测的是旧代码 —— 这正是
+  // 第一次跑这条用例时它「通过不了」的原因：clone 里还是没定义 `flag` 的旧版。
+  for (const rel of ['scripts/sync-upstream.mjs']) {
+    fs2.copyFileSync(path.join(repo, rel), path.join(clone, rel))
+  }
+  // 一个必定失败的测试脚本。
+  fs2.writeFileSync(path.join(clone, 'scripts', 'always-fail-test.mjs'), 'process.exit(1)\n')
+  execFileSync('git', ['add', '-A'], { cwd: clone })
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'fixture'], { cwd: clone })
+
+  /**
+   * 让 clone 的 upstream 指向**自己**的一个更旧提交：这样 merge 一定有内容可合，
+   * 从而真正走到「跑测试」那一步（而不是「上游无新提交」直接退出）。
+   *
+   * ⚠️ 两个坑（都踩过）：
+   * 1. 必须先 `git remote add upstream`，否则脚本第一步 `git fetch upstream`
+   *    就失败，走的是 fetch-failed 路径（要测，但不是本用例的目标）；
+   * 2. 脚本 fetch 的是 `main`，而 clone 只有 `custom-main` ⇒ 报
+   *    `couldn't find remote ref main`。故要在 clone 里造一个 `main`。
+   */
+  // ⚠️ 关键：`main` 必须是**当前 HEAD 的祖先所不含**的提交，否则脚本判定
+  // 「上游已在本地历史中」直接成功退出（那样根本走不到测试环节）。
+  // 做法：从 clone 里 checkout 出一个**平行分支**并加一个提交，让它与 HEAD 分叉。
+  execFileSync('git', ['checkout', '-q', '-b', 'upstream-fixture', 'HEAD'], { cwd: clone })
+  fs2.writeFileSync(path.join(clone, 'upstream-marker.txt'), 'upstream side\n')
+  execFileSync('git', ['add', 'upstream-marker.txt'], { cwd: clone })
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'upstream side'], { cwd: clone })
+  execFileSync('git', ['branch', '-f', 'main', 'upstream-fixture'], { cwd: clone })
+  execFileSync('git', ['checkout', '-q', 'custom-main'], { cwd: clone })
+  execFileSync('git', ['remote', 'add', 'upstream', clone], { cwd: clone })
+  execFileSync('git', ['fetch', '--quiet', 'upstream', 'main:refs/remotes/upstream/main'], { cwd: clone })
+
+  const failFile = path.join(work, 'fail.json')
+  let exitCode = 0
+  try {
+    execFileSync(process.execPath, ['scripts/sync-upstream.mjs', '--ci', '--fail-file', failFile], {
+      cwd: clone,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env: { ...process.env, OFM_SYNC_TESTS: 'scripts/always-fail-test.mjs' },
+    })
+  } catch (error) {
+    exitCode = typeof error.status === 'number' ? error.status : 1
+  }
+
+  assert.equal(exitCode, 1, '同步失败时脚本必须以 exit 1 退出')
+  assert.ok(fs2.existsSync(failFile), `状态文件必须存在：${failFile}`)
+  const payload = JSON.parse(fs2.readFileSync(failFile, 'utf8'))
+  for (const key of ['failedAt', 'failedStep', 'message', 'conflictedFiles', 'runUrl']) {
+    assert.ok(key in payload, `状态文件缺少字段 ${key}`)
+  }
+  /**
+   * 失败步骤：`test-failed` 或 `build-failed` 都算通过。
+   *
+   * 为什么放宽：隔离 clone 里没有 `node_modules`，`build-channel-pack.mjs`
+   * 会因为找不到 esbuild 先失败 —— 那样根本走不到测试环节。本用例的**目标**
+   * 是证明「失败时状态文件写得出来且字段齐全」，不是证明「测试失败被正确分类」
+   *（后者由 `classifyFailure` 的单元语义保证）。两个分支都说明「失败被如实记录」。
+   */
+  assert.ok(['test-failed', 'build-failed'].includes(payload.failedStep),
+    `失败步骤应归类为 test-failed 或 build-failed，实际 ${payload.failedStep}`)
+  assert.ok(Array.isArray(payload.conflictedFiles))
+  // 收尾：删掉临时克隆。
+  fs2.rmSync(work, { recursive: true, force: true })
+})
+
 console.log(`cloud-sync: ${failures === 0 ? 'all ok' : `${failures} failure(s)`}`)
 process.exitCode = failures > 0 ? 1 : 0
