@@ -420,6 +420,14 @@ window.__ModuleLoader__.load({
         'chan.claim.result': '已领取 {count} 个账号，共 {credit} 积分。',
         'chan.claim.none': '今天没有可领取的积分。',
         'chan.credit.today': '今日已领 {credit}',
+        'chan.credit.none': '今日未领',
+        'chan.credit.todayNoAmount': '今日已领',
+        'chan.credit.claimedNow': '刚领取 +{credit}',
+        'chan.credit.claimedNowZero': '刚领取',
+        'chan.credit.already': '今日已领',
+        'chan.credit.failed': '领取失败',
+        'chan.credit.unsupported': '该渠道无状态接口',
+        'chan.credit.unknown': '状态未知（查看按钮重试）',
         'chan.model.free': '免费额度',
         'chan.model.dead': '已下架',
         'chan.model.hidden': '已隐藏',
@@ -1128,6 +1136,14 @@ window.__ModuleLoader__.load({
         'chan.claim.result': 'Claimed for {count} account(s), {credit} credits in total.',
         'chan.claim.none': 'Nothing to claim today.',
         'chan.credit.today': '{credit} claimed today',
+        'chan.credit.none': 'Not claimed today',
+        'chan.credit.todayNoAmount': 'Claimed today',
+        'chan.credit.claimedNow': '+{credit} just claimed',
+        'chan.credit.claimedNowZero': 'Just claimed',
+        'chan.credit.already': 'Claimed today',
+        'chan.credit.failed': 'Claim failed',
+        'chan.credit.unsupported': 'No status endpoint',
+        'chan.credit.unknown': 'Status unknown (retry)',
         'chan.model.free': 'Free quota',
         'chan.model.dead': 'Retired',
         'chan.model.hidden': 'Hidden',
@@ -1852,6 +1868,8 @@ window.__ModuleLoader__.load({
 .ofm_chanlogo{padding:0;overflow:hidden}
 .ofm_credittotal b{color:var(--dsw-alias-state-success-primary);font-variant-numeric:tabular-nums}
 .ofm_creditbadge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 9px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warning-primary,#f0a441) 50%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warning-primary,#f0a441) 9%,transparent);color:var(--dsw-alias-state-warning-primary,#f0a441);white-space:nowrap}
+.ofm_creditbadge.none{color:var(--dsw-alias-text-secondary,#8b8f96);border-color:color-mix(in srgb,var(--dsw-alias-text-secondary,#8b8f96) 40%,transparent);background:transparent}
+.ofm_creditbadge.weak{color:var(--dsw-alias-text-secondary,#8b8f96);border-color:color-mix(in srgb,var(--dsw-alias-text-secondary,#8b8f96) 30%,transparent);background:transparent;font-weight:500}
 .ofm_creditbadge.strong{max-width:100%;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-state-success-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 50%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 9%,transparent)}
 /* ══ 账号池状态 ════════════════════════════════════════════════════════ */
 .ofm_pooltop{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -4127,6 +4145,14 @@ window.__ModuleLoader__.load({
       const [accounts, setAccounts] = useState(undefined)
       const [models, setModels] = useState(undefined)
       const [credits, setCredits] = useState(undefined)
+      /**
+       * 本次「一键领取」的逐账号结果（accountId → ClaimOutcome）。
+       *
+       * 用途见 `claim()` 里的说明：没有状态接口的渠道（codearts / lobsterai /
+       * trae / cline / loomy）在没点过领取之前无从知道今日状态，但用户刚点过时
+       * 那条 outcome 就是最准确的答案。**只影响展示**，不参与任何判定。
+       */
+      const [claimByAccount, setClaimByAccount] = useState({})
       // 实时积分：每个账号的剩余余额（credits.balances），卡片汇总 + 账号行
       // 逐条展示；随账号列表与领积分动作刷新，另有一个慢轮询兜底。
       const [balances, setBalances] = useState(undefined)
@@ -4177,12 +4203,30 @@ window.__ModuleLoader__.load({
           setModels(value?.models ?? [])
         } catch (error) { setModels([]); onError(channel, error) }
       }, [rpc, channel.id, onError])
+      /**
+       * 读「今日领取状态」。
+       *
+       * ## ⚠️ 判据从「能力表有没有 status」改成「这个渠道能不能领取」
+       *
+       * 旧实现是 `if (!CHANNEL_CREDITS[channel.id]?.status) return` —— 于是
+       * codearts / lobsterai / trae / cline / loomy / zcode（能力表没写 `status`）
+       * **一次状态都不查**，账号行自然一片空白。用户报障的「有的账号不显示」
+       * 有两层原因，这是第二层：即便后端如实返回「没有状态接口」，前端也没问过。
+       *
+       * 现在的口径：**只要这个渠道支持一键领取（`claim: true`），就必须给每个
+       * 账号一个明确的今日状态**。「没有接口」本身是一个合法状态（后端用
+       * `unsupported: true` 标明），由展示层如实说出来，而不是静默不查。
+       *
+       * 查询失败（网络/超时）只清空当次结果并保留既有展示，不把整块状态抹掉
+       * —— 领取状态是辅助信息，不该因一次抖动让所有账号变成空白。
+       */
       const loadCredits = useCallback(async () => {
-        if (!CHANNEL_CREDITS[channel.id]?.status) return
+        const capability = CHANNEL_CREDITS[channel.id]
+        if (!capability || capability.claim !== true) return
         try {
           const value = await rpc('credits.status', { provider: channel.id })
           setCredits(value?.accounts ?? [])
-        } catch { setCredits([]) }
+        } catch { /* 保留上一次的状态：一次抖动不该让整块信息消失 */ }
       }, [rpc, channel.id])
       const loadBalances = useCallback((afterWrite = false) => {
         if (!CHANNEL_CREDITS[channel.id] || !rpc) return Promise.resolve()
@@ -4399,11 +4443,54 @@ window.__ModuleLoader__.load({
           const failureText = t('chan.claim.failed').replace('{reason}', failed.map(row => row.outcome.message).join('；'))
           setNotice(failed.length > 0 ? claimed > 0 ? `${successText}；${failureText}` : failureText
             : claimed > 0 ? successText : t('chan.claim.none'))
+          /**
+           * 记下**本次点领取**的逐账号结果。
+           *
+           * 为什么需要：有些渠道没有「今日领取状态」接口（codearts / lobsterai /
+           * trae / cline / loomy ⇒ `unsupported`），它们的账号在没点过领取之前
+           * 确实无从知道状态。但用户**刚点过**时，那条 outcome 就是最准确的答案，
+           * 应当直接显示出来，而不是让账号行空着。
+           *
+           * ⚠️ 只在一个账号有多条结果（ZCode 多 plan）时保留**最后一条**：
+           * 面板只放得下一个徽标，最后一条通常是最终结论。
+           */
+          const byAccount = {}
+          for (const row of value?.results ?? []) {
+            if (row?.accountId !== undefined && row.outcome !== undefined) byAccount[row.accountId] = row.outcome
+          }
+          setClaimByAccount(byAccount)
           void loadCredits(); void loadBalances(true)
         } catch (error) { onError(channel, error) } finally { claimPending.current = false; setBusy('') }
       }
 
-      const creditFor = accountId => (credits ?? []).find(row => row.accountId === accountId)?.status ?? null
+      /**
+       * 某账号的领取状态行（`credits.status` 的原始行）。
+       *
+       * ⚠️ 与旧版 `creditFor`（只返回 `status`）的差别：需要 `error` /
+       * `unsupported` 才能把「查不到」和「今天没领」区分开 —— 旧版拿不到这两个
+       * 字段，于是两者在界面上都是**同一个空白**（用户报障的根因）。
+       */
+      const creditRow = accountId => (credits ?? []).find(row => row.accountId === accountId)
+      const creditFor = accountId => creditRow(accountId)?.status ?? null
+
+      /**
+       * 把一条 `ClaimOutcome` 翻成账号行上的一句话（凭 `kind` 判定，不看文案）。
+       *
+       * 返回 `null` 表示「这条 outcome 不足以说明今日状态」，交给后面的兜底分支
+       * （例如 `inactive` 说明活动没开，用渠道级文案更准）。
+       */
+      const claimOutcomeText = (outcome, t) => {
+        if (outcome === null || outcome === undefined) return null
+        if (outcome.kind === 'claimed') {
+          const credit = Number(outcome.credit ?? 0)
+          return credit > 0
+            ? t('chan.credit.claimedNow').replace('{credit}', String(credit))
+            : t('chan.credit.claimedNowZero')
+        }
+        if (outcome.kind === 'already-claimed') return t('chan.credit.already')
+        if (outcome.kind === 'failed') return t('chan.credit.failed')
+        return null
+      }
 
       // 锁定开关：初始读一次（省略 locked 即只读回显），切换后用返回值更新。
       // 查询失败按「不支持」降级隐藏按钮，而不是渲染一个必报错的开关。
@@ -4542,8 +4629,69 @@ window.__ModuleLoader__.load({
                 return h('div', { className: 'ofm_acct' + (pending ? ' pending' : ''), key: row.id },
                   h('span', { className: 'ofm_acctname', title: row.nickname ?? row.id }, row.nickname ?? row.id),
                   h('span', { className: 'ofm_acctmeta' }, row.enabled === false ? t('chan.disabled') : t('chan.enabled'), ' · ', expiryText(row, t)),
-                  credit?.todayCheckedIn === true && Number.isFinite(credit.todayCredit) ? h('span', { className: 'ofm_creditbadge' },
-                    t('chan.credit.today').replace('{credit}', String(credit.todayCredit))) : null,
+                  /**
+                   * 今日领取状态：**每个可领渠道的每个账号都必须有明确结论**。
+                   *
+                   * ## 为什么不再只是「已领才显示」
+                   *
+                   * 用户报障（2026-10-19）：Raccoon 两个账号，5173 显示「今日已领300」，
+                   * 0899 什么都不显示 —— 于是以为 0899 没领到（实际两个号早上都领了）。
+                   * 根因是旧代码只在 `todayCheckedIn === true` 时渲染，**其余一律留白**，
+                   * 而留白可能来自「今天没领」「查询失败」「该渠道没有状态接口」三种
+                   * 完全不同的情况。
+                   *
+                   * 现在的判定顺序（先精确、后兜底，绝不留白）：
+                   * 1. `credits.status` 有值 ⇒ 已领(+N) / 今日未领；
+                   * 2. 状态查不到但**本次点过领取** ⇒ 用那条 outcome（已领/失败/无可领）；
+                   * 3. 该渠道没有状态接口（`unsupported`）⇒ 「该渠道无状态接口」；
+                   * 4. 其余（查询失败）⇒ 「状态未知：原因」。
+                   */
+                  (() => {
+                    const statusRow = creditRow(row.id)
+                    const status = statusRow?.status ?? null
+                    const claimed = claimByAccount[row.id]
+                    if (status !== null) {
+                      /**
+                       * ⚠️ **`todayCheckedIn` 优先，`todayCredit` 只决定要不要带数字**
+                       * （Tester 观察，2026-10-19）。
+                       *
+                       * 旧写法把两个条件并列在同一个 `if` 里，于是「已领但没给数字」
+                       * 会掉到下面的「今日未领」——**把已领说成未领**，这是最坏的一种
+                       * 错法（用户看到「没领」会去重复点领取）。
+                       *
+                       * 真实后端当前不产生这种形态（`todayCredit` 是必填 number，
+                       * 六个生产者都写了；qoder/trae/zcode 已领时填 0），所以这是
+                       * **护栏**：将来新增渠道漏填该字段时，宁可少显示一个数字，
+                       * 也不能把「已领」显示成「未领」。
+                       */
+                      if (status.todayCheckedIn === true) {
+                        const credit = Number(status.todayCredit)
+                        return h('span', { className: 'ofm_creditbadge' },
+                          Number.isFinite(credit)
+                            ? t('chan.credit.today').replace('{credit}', String(credit))
+                            : t('chan.credit.todayNoAmount'))
+                      }
+                      // 查得到且明确「今天还没领」—— 这同样是一个必须显示的状态。
+                      return h('span', { className: 'ofm_creditbadge none' }, t('chan.credit.none'))
+                    }
+                    if (claimed !== undefined) {
+                      const text = claimOutcomeText(claimed, t)
+                      if (text !== null) {
+                        return h('span', {
+                          className: 'ofm_creditbadge' + (claimed.kind === 'failed' ? ' weak' : ''),
+                          title: claimed.message ?? '',
+                        }, text)
+                      }
+                    }
+                    if (statusRow?.unsupported === true) {
+                      return h('span', { className: 'ofm_creditbadge weak' }, t('chan.credit.unsupported'))
+                    }
+                    // 走到这里说明查了但没查成 —— 把原因显示出来，而不是留白。
+                    return h('span', {
+                      className: 'ofm_creditbadge weak',
+                      title: statusRow?.error ?? '',
+                    }, t('chan.credit.unknown'))
+                  })(),
                   (() => {
                     const balance = balanceOf(row.id)
                     if (!creditCapability) return null
@@ -4557,6 +4705,29 @@ window.__ModuleLoader__.load({
                       : kilo(balance.total)
                     return h('span', { className: 'ofm_creditbadge strong', title: balanceLabel },
                       `${balanceLabel} ${reading}`)
+                  })(),
+                  /**
+                   * 上游 `used` 与差值法同屏对照（TRAE 独有，任务 D）。
+                   *
+                   * 两个数字**口径不同，只并排、不相减**：上游按资源包周期累计
+                   * （包轮换会重置），差值法是 UTC+8 今日聚合。差异大 ⇒ 采样仍在漏，
+                   * 这是用户自证「修没修好」的看板。口径说明由后端给（`extra.note`），
+                   * 前端不本地化 —— 措辞改了不会出现前后端不一致。
+                   */
+                  (() => {
+                    const row2 = (balances ?? []).find(entry => entry.accountId === row.id)
+                    const extra = row2?.extra
+                    if (!extra) return null
+                    const used = extra.upstreamUsed
+                    const recorded = extra.recordedSpent
+                    if (!used && !recorded) return null
+                    return h('span', {
+                      className: 'ofm_creditbadge',
+                      title: [used?.note, recorded?.note].filter(Boolean).join('\n\n'),
+                    },
+                      used ? `上游累计已用 ${kilo(used.total)}` : null,
+                      used && recorded ? ' · ' : null,
+                      recorded ? `今日差值 ${kilo(recorded.spent)}` : null)
                   })(),
                   h('span', { className: 'ofm_acctacts' },
                     creditCapability?.preferred && preferred !== undefined && preferred !== null ? h('button', {

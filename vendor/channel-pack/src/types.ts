@@ -379,6 +379,32 @@ export interface RpcCreditsAccountStatus {
   nickname: string
   /** 状态查询失败（网络错误/凭据损坏）时为 null */
   status: import('./credits.js').CheckinStatus | null
+  /**
+   * 状态**无法确认**时的原因（`status === null` 时才有）。
+   *
+   * ## 为什么必须有这个字段（真实缺陷，2026-10-19）
+   *
+   * 用户报障：Raccoon 两个账号，一个显示「今晚已领300」、另一个什么都不显示，
+   * 于是以为后者没领到（实际早上自动签到对两个号都完成过账单核实）。
+   *
+   * 根因就在「`status: null` 没有任何解释」：前端只在 `todayCheckedIn === true`
+   * 时渲染徽标，其余一律**静默留白**。而 `null` 的来源有好几种，用户看到的
+   * 却是同一个空白 —— 无法区分「今天没领」「查询失败」「这个渠道没有状态接口」。
+   *
+   * 判据是三态，缺一不可：
+   * - `status` 有值 ⇒ 用它的 `todayCheckedIn` 决定已领/未领；
+   * - `status` 为 null 且**没有** `unsupported` ⇒ 「状态查询失败」（要显示原因）；
+   * - `unsupported === true` ⇒ 「该渠道没有查询接口」（不是故障，是能力缺失）。
+   */
+  error?: string
+  /**
+   * 该渠道**没有**「今日领取状态」可查（不是故障，是能力缺失）。
+   *
+   * 与 `error` 分开的理由：两者对用户的含义完全不同 ——
+   * 一个是「去查了但没查成」（值得重试/排查），一个是「这家根本没有这个接口」
+   * （重试无用，直接看余额即可）。混成一句话会让用户白折腾。
+   */
+  unsupported?: boolean
 }
 /** RPC: 查询签到状态响应 */
 export interface RpcCreditsStatusResponse {

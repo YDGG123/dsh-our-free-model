@@ -64151,6 +64151,15 @@ function computeClaimSummary(outcomes) {
   }
   return summary;
 }
+var CREDITS_CLAIMABLE_WITHOUT_STATUS = /* @__PURE__ */ new Set([
+  // ⚠️ codearts **不**在此表：它在 `credits.status` 里有显式分支（早于本兜底
+  // 分支执行），列在这里是永远走不到的死项（Tester 观察，2026-10-19 已删）。
+  LOBSTERAI.id,
+  TRAE.id,
+  "qoder",
+  "qodercn",
+  ZCODE.id
+]);
 async function collectCreditsStatus(accounts, product, deps) {
   const fetcher = deps.fetcher ?? fetch;
   const fetchStatus = deps.fetchStatus ?? (async (credential, product2) => fetchCheckinStatus(
@@ -64161,17 +64170,27 @@ async function collectCreditsStatus(accounts, product, deps) {
   const results = [];
   for (const entry of accounts) {
     let status = null;
+    let error;
     try {
       const resolved = await deps.resolve(credentialRef13(entry.credentialRef));
-      if (resolved !== void 0) {
+      if (resolved === void 0) {
+        error = "\u51ED\u636E\u672A\u914D\u7F6E";
+      } else {
         const credential = JSON.parse(resolved.value);
         status = await fetchStatus(credential, product);
+        if (status === null) error = "\u72B6\u6001\u67E5\u8BE2\u5931\u8D25\uFF08\u4E0A\u6E38\u65E0\u54CD\u5E94\u6216\u51ED\u636E\u5931\u6548\uFF09";
       }
-    } catch (error) {
-      deps.warn?.(`[channel-pack] credits.status \u8D26\u53F7 ${entry.id} \u5931\u8D25: ${String(error)}`);
+    } catch (caught) {
+      deps.warn?.(`[channel-pack] credits.status \u8D26\u53F7 ${entry.id} \u5931\u8D25: ${String(caught)}`);
       status = null;
+      error = caught instanceof Error && caught.message.length > 0 ? `\u72B6\u6001\u67E5\u8BE2\u5931\u8D25\uFF1A${caught.message}` : "\u72B6\u6001\u67E5\u8BE2\u5931\u8D25";
     }
-    results.push({ accountId: entry.id, nickname: entry.nickname, status });
+    results.push({
+      accountId: entry.id,
+      nickname: entry.nickname,
+      status,
+      ...error === void 0 ? {} : { error }
+    });
   }
   return results;
 }
@@ -65412,7 +65431,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           return {
             ok: true,
             value: {
-              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null }))
+              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true }))
             }
           };
         }
@@ -65421,7 +65440,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           return {
             ok: true,
             value: {
-              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null }))
+              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true }))
             }
           };
         }
@@ -65430,7 +65449,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           return {
             ok: true,
             value: {
-              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null }))
+              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true }))
             }
           };
         }
@@ -65439,7 +65458,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           return {
             ok: true,
             value: {
-              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null }))
+              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true }))
             }
           };
         }
@@ -65448,9 +65467,22 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           return {
             ok: true,
             value: {
-              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null }))
+              accounts: accounts2.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true }))
             }
           };
+        }
+        if (req.provider === RACCOON.id) {
+          const raccoonStatusAccounts = await pool.listAccounts(req.provider);
+          const value = await collectCreditsStatus(
+            raccoonStatusAccounts,
+            RACCOON,
+            {
+              resolve: (ref) => ctx.credentials.resolve(ref),
+              fetchStatus: (credential) => raccoon.fetchDailyGrantStatus(credential),
+              warn: (msg) => ctx.logger?.warn?.(msg)
+            }
+          );
+          return { ok: true, value: { accounts: value } };
         }
         if (req.provider === MINIMAX.id) {
           const minimaxStatusAccounts = await pool.listAccounts(req.provider);
@@ -65467,7 +65499,22 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         const product = productById(req.provider);
         if (product === void 0) {
-          return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
+          const claimable = CREDITS_CLAIMABLE_WITHOUT_STATUS.has(req.provider);
+          if (!claimable) {
+            return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
+          }
+          const accounts2 = await pool.listAccounts(req.provider);
+          return {
+            ok: true,
+            value: {
+              accounts: accounts2.map((entry) => ({
+                accountId: entry.id,
+                nickname: entry.nickname,
+                status: null,
+                unsupported: true
+              }))
+            }
+          };
         }
         const accounts = await pool.listAccounts(req.provider);
         const results = await collectCreditsStatus(accounts, product, {

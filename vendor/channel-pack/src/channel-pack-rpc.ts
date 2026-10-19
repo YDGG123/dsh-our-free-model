@@ -582,6 +582,37 @@ export interface CreditsEndpointDeps<
 }
 
 /**
+ * **支持「一键领取」但没有「今日领取状态」接口**的渠道。
+ *
+ * 判据只有一条：`credits.claimAll` 有真实实现，且上游**没有**任何端点能回答
+ * 「这个账号今天领了没」。列在这里的渠道，`credits.status` 会明确返回
+ * `unsupported: true`（能力缺失，不是故障），前端据此显示「该渠道无状态接口」。
+ *
+ * ## 为什么这份名单必须显式维护（而不是「默认返回 unsupported」）
+ *
+ * 默认放行会把**拼错的 provider id** 也当成「可领取但无状态」——那会让一个
+ * 纯粹的调用错误看起来像正常的能力缺失。故未知 id 仍然 bad-request，
+ * 只有这里列出的才走「无状态」分支。
+ *
+ * ## 各家为什么没有状态接口（依据都在各自模块注释里）
+ *
+ * - `lobsterai`：slot → context 两步，同样不同构；
+ * - `trae`：状态要发起 Ug 请求，属 claim 内部的多步流程；
+ * - `qoder` / `qodercn`：领取流程自带活动列表查询（`loadCampaigns`），
+ *   无独立状态端点；
+ * - `zcode`：无「今日是否已领」端点，`claimDailyWith` 自带激活上报与 preview。
+ *
+ * ⚠️ `raccoon` / `minimax` / `buddy` 有真实状态接口，**不在**此表。
+ * `workbuddy` 虽是 buddy 系但**没有签到**，它的 `claimAll` 会直接报不支持，
+ * 故也不需要状态。
+ */
+const CREDITS_CLAIMABLE_WITHOUT_STATUS: ReadonlySet<string> = new Set([
+  // ⚠️ codearts **不**在此表：它在 `credits.status` 里有显式分支（早于本兜底
+  // 分支执行），列在这里是永远走不到的死项（Tester 观察，2026-10-19 已删）。
+  LOBSTERAI.id, TRAE.id, 'qoder', 'qodercn', ZCODE.id,
+])
+
+/**
  * 逐账号收集签到状态（顺序执行，避免并发触发风控）。
  *
  * **包含已停用账号**：停用只影响账号池的自动选择与限流切换，不改变账号本身
@@ -611,18 +642,39 @@ export async function collectCreditsStatus<TCredential = BuddyCredential, TProdu
   // 顺序查询，避免并发触发风控
   for (const entry of accounts) {
     let status: CheckinStatus | null = null
+    /**
+     * 失败原因：**必须带出去**（真实缺陷，2026-10-19）。
+     *
+     * 旧实现把 `status: null` 原样返回、不带任何解释，前端只在
+     * `todayCheckedIn === true` 时渲染徽标 ⇒ 「查不到」与「今天没领」在界面上
+     * 是**同一个空白**。用户就因为一个账号空白而以为没领到（实际早上已领）。
+     */
+    let error: string | undefined
     try {
       const resolved = await deps.resolve(credentialRef(entry.credentialRef))
-      if (resolved !== undefined) {
+      if (resolved === undefined) {
+        // 凭据缺失是最常见的一种「查不到」，且原因明确、可操作。
+        error = '凭据未配置'
+      } else {
         const credential = JSON.parse(resolved.value) as TCredential
         status = await fetchStatus(credential, product)
+        // 拿到 null 且没抛错：上游请求失败/响应形状不对（实现层统一用 null 表达）。
+        if (status === null) error = '状态查询失败（上游无响应或凭据失效）'
       }
-    } catch (error) {
+    } catch (caught) {
       // 单个账号的凭据缺失 / JSON 损坏 / 名称非法 / 网络失败都不影响其余账号
-      deps.warn?.(`[channel-pack] credits.status 账号 ${entry.id} 失败: ${String(error)}`)
+      deps.warn?.(`[channel-pack] credits.status 账号 ${entry.id} 失败: ${String(caught)}`)
       status = null
+      error = caught instanceof Error && caught.message.length > 0
+        ? `状态查询失败：${caught.message}`
+        : '状态查询失败'
     }
-    results.push({ accountId: entry.id, nickname: entry.nickname, status })
+    results.push({
+      accountId: entry.id,
+      nickname: entry.nickname,
+      status,
+      ...error === undefined ? {} : { error },
+    })
   }
   return results
 }
@@ -2664,7 +2716,7 @@ function registerChannelPackEndpoints(
           return {
             ok: true,
             value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
+              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true })),
             } satisfies RpcCreditsStatusResponse,
           }
         }
@@ -2677,7 +2729,7 @@ function registerChannelPackEndpoints(
           return {
             ok: true,
             value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
+              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true })),
             } satisfies RpcCreditsStatusResponse,
           }
         }
@@ -2688,7 +2740,7 @@ function registerChannelPackEndpoints(
           return {
             ok: true,
             value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
+              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true })),
             } satisfies RpcCreditsStatusResponse,
           }
         }
@@ -2701,7 +2753,7 @@ function registerChannelPackEndpoints(
           return {
             ok: true,
             value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
+              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true })),
             } satisfies RpcCreditsStatusResponse,
           }
         }
@@ -2713,9 +2765,22 @@ function registerChannelPackEndpoints(
           return {
             ok: true,
             value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
+              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null, unsupported: true })),
             } satisfies RpcCreditsStatusResponse,
           }
+        }
+        if (req.provider === RACCOON.id) {
+          // Raccoon 有独立的「每日积分」状态：读账单看今天是否有 `points > 0`
+          // 的入账。失败时返回 null，由 collectCreditsStatus 的 try/catch 兜住。
+          const raccoonStatusAccounts = await pool.listAccounts(req.provider)
+          const value = await collectCreditsStatus<RaccoonCredential, RaccoonProduct>(
+            raccoonStatusAccounts, RACCOON, {
+              resolve: (ref) => ctx.credentials.resolve(ref),
+              fetchStatus: (credential) => raccoon.fetchDailyGrantStatus(credential),
+              warn: (msg) => ctx.logger?.warn?.(msg),
+            },
+          )
+          return { ok: true, value: { accounts: value } satisfies RpcCreditsStatusResponse }
         }
         if (req.provider === MINIMAX.id) {
           // ⚠️ MiniMax **有**独立的签到状态端点（`/minimax-cloud/api/v1/signin/status`），
@@ -2737,7 +2802,42 @@ function registerChannelPackEndpoints(
         }
         const product = productById(req.provider)
         if (product === undefined) {
-          return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
+          /**
+           * **支持领取、但没有「今日状态」接口**的渠道，统一在这里如实作答。
+           *
+           * ## 为什么不能回 bad-request（真实缺陷，2026-10-19）
+           *
+           * 修复前：qoder / qodercn / zcode 三条走到这里都拿到
+           * `unsupported provider: …`，客户端把它当「查询失败」吞掉 ⇒ 这些渠道的
+           * 账号行永远没有领取状态。而它们**都能领取**，用户自然期望看到
+           * 「今天领了没」。用户报障的「有的账号不显示」正是这一类。
+           *
+           * 现在：明确告诉前端「这个渠道没有状态接口」（`unsupported: true`），
+           * 由展示层如实说出来 —— 这跟「查失败」是两种完全不同的语义，
+           * 前者不该让用户以为要去排查网络。
+           *
+           * ⚠️ 仍然返回 `ok: true`：能力缺失不是 RPC 错误，前端据此渲染
+           * 「该渠道无状态接口」而不是一条红色失败提示。
+           *
+           * ⚠️ 未知 provider 仍按 bad-request 处理（下面那行），不能因为
+           * 「能领取」这一条就把拼错的 provider id 也放过去。
+           */
+          const claimable = CREDITS_CLAIMABLE_WITHOUT_STATUS.has(req.provider)
+          if (!claimable) {
+            return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
+          }
+          const accounts = await pool.listAccounts(req.provider)
+          return {
+            ok: true,
+            value: {
+              accounts: accounts.map((entry) => ({
+                accountId: entry.id,
+                nickname: entry.nickname,
+                status: null,
+                unsupported: true,
+              })),
+            } satisfies RpcCreditsStatusResponse,
+          }
         }
         const accounts = await pool.listAccounts(req.provider)
         const results = await collectCreditsStatus(accounts, product, {
