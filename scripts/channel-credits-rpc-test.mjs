@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { pathToFileURL } from 'node:url'
 
 /** 使用实际已打包 RPC，只提供账号池 ref，禁止真实网络与旧单凭据回退。 */
 export async function verifyChannelCreditsRpc({ ctx, call, creds }) {
@@ -45,6 +46,27 @@ export async function verifyChannelCreditsRpc({ ctx, call, creds }) {
       } else throw new Error(`未预期的替身端点：${pathname}`)
       return Response.json(body)
     }
+    // ── credits.status：**每个支持领取的渠道，每个账号都要有明确状态** ──────
+    // 用户报障（2026-10-19）：raccoon 两个号一个显示已领、一个空白，于是以为
+    // 空白那个没领到。根因有两层：① 后端把 null 原样返回不给原因；
+    // ② 前端只对能力表写了 `status: true` 的渠道发起查询，其余渠道**从不问**。
+    // 这里锁定后端那一半：可领取但无状态接口的渠道必须明确回答 unsupported。
+    //
+    // ⚠️ 只断言**本夹具真的建了账号**的渠道（codearts / trae 的凭据形状不同，
+    // 分别在别的套件里覆盖）；这里的目的是锁定「有账号就必须有一行状态」。
+    const claimableWithoutStatus = ['lobsterai', 'qoder', 'qodercn', 'zcode']
+    for (const provider of claimableWithoutStatus) {
+      const result = await call('credits.status', { provider })
+      assert.equal(result.ok, true, `${provider} 的 credits.status 不能报错（能力缺失不是错误）`)
+      const row = (result.value.accounts ?? []).find(entry => entry.accountId === `fixture-credits-${provider}`)
+      assert.ok(row !== undefined, `${provider} 必须为池里每个账号返回一行`)
+      assert.equal(row.status, null)
+      assert.equal(row.unsupported, true, `${provider} 必须标明「该渠道无状态接口」，而不是让前端以为是查询失败`)
+    }
+    // 未知 provider 仍然要被拒绝：不能因为「能领取」就把拼错的 id 也放过去。
+    const bogus = await call('credits.status', { provider: 'no-such-provider' })
+    assert.equal(bogus.ok, false, '未知 provider 必须 bad-request')
+
     for (const provider of providers.filter(id => id !== 'zcode' && id !== 'gemini')) {
       resolvedRefs.length = 0
       const result = await call('credits.balances', { provider })
@@ -109,4 +131,24 @@ async function verifyRefreshDispatch({ ctx, call }) {
     }
   }
   console.log('ok  refresh RPC: all 13 providers pass exact ref/pool/id; disabled accounts refresh; failures return ok:false')
+}
+
+/**
+ * 自执行入口（真实缺陷，2026-10-19）。
+ *
+ * 本函数需要宿主上下文（`{ ctx, call, creds }`），单独执行时**没有**现成的
+ * 挂载实例可复用 —— 而它正是 `channel-pack-test.mjs` 的主体，自己再搭一套
+ * 宿主既重复又容易漂移。
+ *
+ * 故这里的自执行入口**不假装跑过**：如实说明「需要宿主上下文，请经
+ * channel-pack-test 运行」并给出**非零退出码**。假绿灯比不跑更危险 ——
+ * 前者会让人以为覆盖到了。
+ */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  console.error(
+    'channel-credits-rpc: 本套件需要挂载好的宿主上下文（ctx / call / creds），\n'
+    + '无法独立执行。请运行 `node scripts/channel-pack-test.mjs` 或 `npm run test`。',
+  )
+  process.exitCode = 2
 }

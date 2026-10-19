@@ -59,8 +59,75 @@ export interface CreditUsageDay {
   spent: number
   /** 当日补给合计。 */
   gained: number
-  /** 当日采样到的账号数。 */
+  /**
+   * 当日采样到的账号数。
+   *
+   * ⚠️ **派生字段**：只要有 {@link accountIds} 就应等于它的长度；老文档没有
+   * `accountIds` 时才单独成立（见 {@link mergeAccountIds} 的兼容说明）。
+   * 消费方（面板 / `allSnapshot`）继续读这个数字即可，不必自己数集合。
+   */
   accounts: number
+  /**
+   * 当日**见过的账号 id 集合**（并集语义，落盘用）。
+   *
+   * ## 为什么需要它（真实缺陷，2026-10-19 Tester 复现）
+   *
+   * 账号数**没有差值语义**：它不是「可减的计数器」，而是「当日出现过的 id 的
+   * 基数」。旧实现把它也塞进差值法（`本次累计 − 上次已写`）+ 后端 `Math.max`，
+   * 于是同一实例跨 flush 窗口会卡死：
+   *
+   * ```
+   * 第 1 窗口用账号 A：内存 1，盘 0   → 送 1−0=1，盘 max(0,1)=1
+   * 第 2 窗口用账号 B：内存 2，盘(基线)1 → 送 2−1=1，盘 max(1,1)=1  ← 卡住
+   * 第 3 窗口用账号 C：内存 3，基线 3 → 送 3−3=0，被当零增量跳过
+   * ```
+   *
+   * 结果：金额 `spent` 一直正确，但「今日 N 个账号」永远停在 1，重启后更是
+   * 永久丢失。触发条件是**常态**（一天里陆续用到第 2、3 个账号，间隔超过
+   * 默认 30 秒防抖窗口）。
+   *
+   * 修法就是存集合：增量只送「基线里还没有的 id」，合并时取**并集**，
+   * 重复 flush / 多实例 / 重启都不会重复计数或丢计数。
+   */
+  accountIds?: string[]
+}
+
+/**
+ * 合并若干「账号 id 集合」为并集（去重、保持首次出现的顺序）。
+ *
+ * ## 向后兼容：老文档没有 `accountIds`
+ *
+ * 修复前落盘的日桶只有数字 `accounts`。那种数据**无法还原**具体是哪些账号，
+ * 故调用方应当用 {@link accountCountOf} 处理「集合 + 老数字」并存的场景
+ * （取二者较大值：集合是精确认知，老数字是历史下界）。
+ */
+export function mergeAccountIds(
+  ...lists: ReadonlyArray<readonly string[] | undefined>
+): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const list of lists) {
+    if (list === undefined) continue
+    for (const id of list) {
+      if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue
+      seen.add(id)
+      out.push(id)
+    }
+  }
+  return out
+}
+
+/**
+ * 一天的「账号数」：有集合用集合基数，没有就退回老数字，两者都有取较大值。
+ *
+ * 取较大值是**刻意的保守方向**：集合是精确认知，老数字是历史下界，任何一方
+ * 更大都说明另一方漏了；取小会把「确实用过」的账号显示丢掉。
+ */
+export function accountCountOf(row: { accounts?: number; accountIds?: readonly string[] } | undefined): number {
+  if (row === undefined) return 0
+  const ids = row.accountIds?.length ?? 0
+  const legacy = Number.isFinite(row.accounts) ? Number(row.accounts) : 0
+  return Math.max(ids, legacy)
 }
 
 /** 单个账号在某天的消耗明细。 */
@@ -104,6 +171,33 @@ export function utc8DayKey(ts: number): string {
 export type CreditBaseline = Record<string, number>
 
 /**
+ * 「按日聚合的日桶」文档形状（不含 schema 字段）。
+ *
+ * 账本只关心日桶，持久化后端（`credit-usage-store.ts`）在它之上再加
+ * `schema` 版本标记。两处共用这一个形状，避免「账本以为是全量、后端以为是
+ * 增量」这类签名歧义 —— 那正是本次修复要消灭的缺陷形态。
+ */
+export interface CreditUsageDaysDocument {
+  providers: Record<string, { days: CreditUsageDay[] }>
+}
+
+/**
+ * 持久化后端契约（由 `credit-usage-store.ts` 实现）。
+ *
+ * ## ⚠️ `save()` 的入参是**增量**，返回的是**合并后**的完整文档
+ *
+ * 账本把「相对上次成功落盘的新增部分」交给后端，后端负责重读盘上现况再合并
+ * （两个实例并存时各自的贡献互不覆盖）。返回值必须回传，否则账本无从知道
+ * 「盘上还有别人写的部分」—— 面板会在重启后一直少读。
+ */
+export interface CreditUsagePersistence {
+  /** 载入盘上现况；不存在时返回空文档。 */
+  load(): CreditUsageDaysDocument
+  /** 把增量合并进盘上现况，返回合并结果。 */
+  save(delta: CreditUsageDaysDocument): Promise<CreditUsageDaysDocument>
+}
+
+/**
  * 每日积分消耗账本（进程内 + 按日折叠）。
  *
  * 生命周期与插件实例一致；跨重启的持久化由调用方（RPC 层）负责落盘 ——
@@ -119,8 +213,22 @@ export class CreditUsageLedger {
   /** provider → 日键 → accountId → 明细。 */
   private readonly accountDays = new Map<string, Map<string, Map<string, CreditUsageAccountDay>>>()
 
-  /** 已落盘的文档（增量 flush 的基线；内存态与磁盘态的差只来自本轮）。 */
+  /**
+   * 盘上现况（含**别的实例**写下的日桶）。
+   *
+   * 只读语义：它代表「已经进入持久化层的部分」，与内存 `days` 的关系见
+   * {@link written}。合并展示时不能简单取较大值 —— 两者是**可加计数器**
+   *（见 {@link snapshot} 的合并算法）。
+   */
   private persisted: { providers: Record<string, { days: CreditUsageDay[] }> } = { providers: {} }
+  /**
+   * **已落盘基线**：上次成功写盘时本实例内存 `days` 的快照。
+   *
+   * `flush()` 只把「内存 − written」这段增量交给后端（后端再与盘上现况合并）。
+   * 有了它，两个实例并存时各自的贡献互不覆盖：A 写 100、B 写 50 ⇒ 盘上 150。
+   * 这正是审计发现的真实缺陷（旧实现整体覆盖，后写者抹掉先写者）。
+   */
+  private written = new Map<string, Map<string, CreditUsageDay>>()
   /** 节流：落盘定时器。 */
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   /** 日志出口（默认静默；宿主注入）。 */
@@ -207,7 +315,10 @@ export class CreditUsageLedger {
     if (nickname !== undefined && nickname.length > 0) account.nickname = nickname
     if (sample.spent > 0) account.pools[sample.pool] = (account.pools[sample.pool] ?? 0) + sample.spent
     accounts.set(sample.accountId, account)
-    row.accounts = accounts.size
+    // 账号数 = 「当日见过的 id 集合」基数（并集语义）。明细表本身就是那份集合，
+    // 故直接取它的大小，同时把 id 写进日桶 —— 落盘要能跨重启/跨实例求并集。
+    row.accountIds = [...accounts.keys()]
+    row.accounts = row.accountIds.length
   }
 
   /** 只保留最近 {@link MAX_DAYS} 天（日键可字典序比较）。 */
@@ -244,11 +355,45 @@ export class CreditUsageLedger {
     for (const entry of providers) {
       for (const row of entry.days) {
         const existing = byDay.get(row.day)
-        byDay.set(row.day, existing === undefined ? { ...row } : {
+        if (existing === undefined) {
+          byDay.set(row.day, { ...row })
+          continue
+        }
+        // 跨渠道汇总：账号数按**集合**求并（同一账号不会跨 provider 重复，
+        // 但集合运算比累加更稳：重复调用 / 未来 provider 合并都不会翻倍）。
+        // 没有集合的老数据退回累加（与旧行为一致）。
+        const accountIds = mergeAccountIds(existing.accountIds, row.accountIds)
+        byDay.set(row.day, {
           day: row.day,
           spent: existing.spent + row.spent,
           gained: existing.gained + row.gained,
-          accounts: existing.accounts + row.accounts,
+          /**
+           * **跨渠道的账号数 = 各渠道相加**（与升级前的语义一致），不是并集、
+           * 也不是取较大值。
+           *
+           * ## 为什么是相加（2026-10-19 Tester 复现后对账）
+           *
+           * 账号 id 是**带 provider 前缀**的池条目 id（`raccoon-6c9bfc87`、
+           * `buddy-bfc5feec`），**跨渠道永不相同** —— 所以「并集」与「相加」
+           * 在 id 齐全时完全等价，一旦某侧是老数据（没有 id），并集就会把它的
+           * 数字**抹掉**。本机真实数据正是这种混合形态：
+           *
+           * ```
+           * raccoon 10-19: {accounts: 2, accountIds: ['raccoon-6c9bfc87']}  ← 老数字 2、集合 1 个
+           * buddy   10-19: {accounts: 1, accountIds: ['buddy-bfc5feec']}
+           * 真值 = 3（两个渠道 2 + 1 个账号）；并集 = 2 ✗
+           * ```
+           *
+           * ⚠️ 注意 `Math.max(并集长度, 两侧数字)` 在这里同样得 2 —— 它能让
+           * 单渠道视图不倒退，但**跨渠道必须相加**才符合「全部渠道共用了几个
+           * 账号」这个问题。两个口径不能互相推导，各自写死。
+           *
+           * `accountCountOf` 负责把「老数字下界」与「集合基数」在**每个渠道
+           * 内部**先取较大值，再加总 —— 于是老渠道也不会因为集合只有 1 个 id
+           * 就被当成 1 个账号。
+           */
+          accounts: accountCountOf(existing) + accountCountOf(row),
+          ...accountIds.length > 0 ? { accountIds } : {},
         })
       }
     }
@@ -266,23 +411,59 @@ export class CreditUsageLedger {
    *
    * 「最近 N 天」是**内存与磁盘的并集**：历史日桶已 flush 到盘上，今日的数字
    * 还在内存里。只看一边都会漏（只看磁盘＝今天全是 0；只看内存＝重启后历史
-   * 全丢）。合并规则：同一天取**较大值**（内存 ≥ 磁盘，两者同源）。
+   * 全丢）。
+   *
+   * ## ⚠️ 合并是**加法**，不是 `Math.max`（真实缺陷，2026-10-19 审计发现）
+   *
+   * `spent` / `gained` 是**可加计数器**。旧实现取较大值，前提是「内存是磁盘的
+   * 超集」—— 那只在**单实例**下成立：本实例内存的今日累计确实 ≥ 磁盘上
+   * 「本实例上次写的值」。但两个实例并存时（同机多 profile、fiber 重启交错），
+   * 各自记 100，盘上 100、内存 100，取较大值仍是 100（真值 200）。
+   *
+   * 现在的算法：**磁盘值 + 本实例尚未落盘的增量**（内存 − {@link written}）。
+   * 单实例下与本实例内存值完全相等（增量 = 内存 − 上次写的），多实例下
+   * 得到的是「盘上别人的 + 我新记的」，不再互相掩盖。
+   *
+   * ## ⚠️ `accounts` 走**集合并集**，不走差值（真实缺陷，2026-10-19 Tester 复现）
+   *
+   * 账号数是「当日见过的 id 的基数」，没有差值语义。旧实现把它也当计数器，
+   * 于是跨 flush 窗口卡死（`credit-usage-ledger.ts` 的 `CreditUsageDay.accountIds`
+   * 注释里有完整推演）。现在合并的是**集合**：盘上集合 ∪ 内存集合，再取基数；
+   * 老文档没有集合时退回它自己的数字（{@link accountCountOf}）。
    */
   snapshot(provider: string, days = 30): CreditUsageSnapshot {
     const today = utc8DayKey(this.now())
     const merged = new Map<string, CreditUsageDay>()
     for (const row of this.persisted.providers[provider]?.days ?? []) merged.set(row.day, { ...row })
-    for (const row of (this.days.get(provider) ?? new Map<string, CreditUsageDay>()).values()) {
-      const existing = merged.get(row.day)
-      merged.set(row.day, existing === undefined ? { ...row } : {
-        day: row.day,
-        spent: Math.max(existing.spent, row.spent),
-        gained: Math.max(existing.gained, row.gained),
-        accounts: Math.max(existing.accounts, row.accounts),
-      })
+    const mine = this.days.get(provider)
+    const base = this.written.get(provider)
+    if (mine !== undefined) {
+      for (const row of mine.values()) {
+        const previous = base?.get(row.day)
+        // 未落盘增量：本实例内存值减去上次写盘时的值（负数钳到 0，防手工编辑倒挂）。
+        const spent = Math.max(0, row.spent - (previous?.spent ?? 0))
+        const gained = Math.max(0, row.gained - (previous?.gained ?? 0))
+        const existing = merged.get(row.day)
+        if (existing === undefined) {
+          merged.set(row.day, { ...row, spent, gained, accounts: accountCountOf(row) })
+          continue
+        }
+        // 账号：集合求并集（不是相加、也不是取较大值）。
+        const accountIds = mergeAccountIds(existing.accountIds, row.accountIds)
+        merged.set(row.day, {
+          day: row.day,
+          spent: existing.spent + spent,
+          gained: existing.gained + gained,
+          accounts: Math.max(accountIds.length, accountCountOf(existing), accountCountOf(row)),
+          ...accountIds.length > 0 ? { accountIds } : {},
+        })
+      }
     }
-    const sorted = [...merged.values()].sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
-    const todayRow = merged.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 }
+    const sorted = [...merged.values()]
+      .map(row => ({ ...row, accounts: accountCountOf(row) }))
+      .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))
+    const todayRow = sorted.find(row => row.day === today)
+      ?? { day: today, spent: 0, gained: 0, accounts: 0 }
     const accounts = [...(this.accountDays.get(provider)?.get(today)?.values() ?? [])]
       .sort((a, b) => b.spent - a.spent)
     return {
@@ -294,36 +475,76 @@ export class CreditUsageLedger {
     }
   }
 
-  /** 立即落盘。失败只记日志：记账绝不能反噬选号路径。 */
+  /**
+   * 立即落盘。失败只记日志：记账绝不能反噬选号路径。
+   *
+   * ## 增量语义（真实缺陷修复，2026-10-19）
+   *
+   * 旧实现把**内存全量**交给后端，而 `FileUsageStore` 是整体覆盖 ⇒ 两个实例
+   * 并存时后写者抹掉先写者（审计已复现：A 记 100、B 记 5，最后盘上只剩 5）。
+   *
+   * 现在只交「相对 {@link written} 的增量」，后端负责重读盘上现况再合并，
+   * 回传合并后的完整文档 —— 本实例立刻用它更新 {@link persisted}，于是
+   * 刚写下的东西不必等下次重启就能在面板里看到（旧实现 flush 后仍只读
+   * 自己那份内存视图，重启前的历史要等重载才出现）。
+   */
   async flush(): Promise<void> {
     if (this.persistence === undefined) return
     if (this.flushTimer !== undefined) { clearTimeout(this.flushTimer); this.flushTimer = undefined }
     try {
-      const daysByProvider = new Map<string, Map<string, CreditUsageDay>>()
-      for (const [provider, entry] of Object.entries(this.persisted.providers)) {
-        const map = new Map<string, CreditUsageDay>()
-        for (const row of entry.days) map.set(row.day, { ...row })
-        daysByProvider.set(provider, map)
-      }
+      // ① 算出增量（内存 − 上次写盘基线，负数钳到 0 防手工编辑倒挂）。
+      const delta: Record<string, { days: CreditUsageDay[] }> = {}
+      let hasDelta = false
       for (const [provider, perDay] of this.days) {
-        const map = daysByProvider.get(provider) ?? new Map<string, CreditUsageDay>()
+        const base = this.written.get(provider)
+        const rows: CreditUsageDay[] = []
         for (const row of perDay.values()) {
-          const existing = map.get(row.day)
-          map.set(row.day, existing === undefined ? { ...row } : {
+          const previous = base?.get(row.day)
+          const spent = Math.max(0, row.spent - (previous?.spent ?? 0))
+          const gained = Math.max(0, row.gained - (previous?.gained ?? 0))
+          /**
+           * 账号：只送**基线里还没有的 id**（集合增量），绝不送数量差值。
+           *
+           * 旧实现送 `row.accounts − previous.accounts`，后端再取 `Math.max`，
+           * 于是第 2 个窗口送的 2−1=1 与盘上的 1 取大仍是 1、第 3 个窗口送的
+           * 3−3=0 直接被当零增量跳过 —— 计数从此不再前移（Tester 已复现）。
+           * 集合增量没有这个问题：并集天然幂等且可重复合并。
+           */
+          const previousIds = new Set(previous?.accountIds ?? [])
+          const newIds = (row.accountIds ?? []).filter(id => !previousIds.has(id))
+          // 老文档没有集合（`accountIds` 缺失）：只有当内存里的数字比基线大时才
+          // 送数量 —— 这时没有 id 可送，退化成旧语义（至少不会倒退）。
+          const legacyDelta = row.accountIds === undefined || row.accountIds.length === 0
+            ? Math.max(0, row.accounts - (previous?.accounts ?? 0))
+            : 0
+          if (spent === 0 && gained === 0 && newIds.length === 0 && legacyDelta === 0) continue
+          rows.push({
             day: row.day,
-            spent: Math.max(existing.spent, row.spent),
-            gained: Math.max(existing.gained, row.gained),
-            accounts: Math.max(existing.accounts, row.accounts),
+            spent,
+            gained,
+            // 数量字段始终填**本日总量**（不是增量）：后端合并时按集合重算基数，
+            // 这个数字只作为「老数据兜底」与并集基数一起参与取大。填增量会让
+            // 没有集合的消费方（老前端 / 老文档）读到一个毫无意义的数。
+            accounts: accountCountOf(row),
+            ...newIds.length > 0 ? { accountIds: newIds } : {},
           })
         }
-        daysByProvider.set(provider, map)
+        if (rows.length === 0) continue
+        hasDelta = true
+        delta[provider] = { days: rows }
       }
-      const providers: Record<string, { days: CreditUsageDay[] }> = {}
-      for (const [provider, map] of daysByProvider) {
-        providers[provider] = { days: [...map.values()].sort((a, b) => (a.day < b.day ? 1 : -1)) }
+      // ⚠️ 没有任何增量 ⇒ 什么都不写（与 `token-ledger-store` 的脏检查同款）。
+      if (!hasDelta) return
+      // ② 交给后端合并写入；它返回**合并后**的完整文档。
+      const merged = await this.persistence.save({ providers: delta })
+      if (merged !== undefined && merged !== null && typeof merged === 'object') {
+        this.persisted = { providers: merged.providers ?? this.persisted.providers }
       }
-      this.persisted = { providers }
-      await this.persistence.save(this.persisted)
+      // ③ 基线前移（只在写盘成功后）。
+      this.written = new Map()
+      for (const [provider, perDay] of this.days) {
+        this.written.set(provider, new Map([...perDay].map(([day, row]) => [day, { ...row }])))
+      }
     } catch (error) {
       this.log(`flush failed (${error instanceof Error ? error.message : String(error)})`)
     }

@@ -32,6 +32,11 @@ const summary = { settings, catalog: [], networkMode: 'fixture' }
 const context = {
   ...react, h: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }), Fragment: 'fragment',
   Sidebar: 'Sidebar', Topbar: 'Topbar', Overview: 'Overview', Connection: 'Connection', ChannelMount: 'ChannelMount', LazyPage: 'LazyPage', LoadingScreen: 'LoadingScreen', LoginScreen: 'LoginScreen', AlertCircle: 'AlertCircle',
+  // ⚠️ 上游 2.5.4 在 app.tsx 里新引了这两个组件（赞助页/公告）。本套件用 vm 跑
+  // 真实 app.tsx 源码，**必须**给它们提供桩 —— 否则渲染到那一步会抛
+  // `ReferenceError: SponsorNotice is not defined`，看起来像页面坏了，实际只是
+  // 测试桩没跟上上游新增的导入。
+  SponsorPage: 'SponsorPage', SponsorNotice: 'SponsorNotice',
   pageNames: ['overview', 'models', 'usage', 'channels', 'eac', 'settings', 'connection'], API: '/api/management',
   messageOf: error => error.message, AbortSignal, URLSearchParams, location: { hash: '' }, history: {},
   window: { scrollTo() {}, addEventListener() {}, removeEventListener() {}, setInterval() { return 1 }, clearInterval() {} },

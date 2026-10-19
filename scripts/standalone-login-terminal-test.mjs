@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { pathToFileURL } from 'node:url'
 import { once } from 'node:events'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
@@ -169,5 +170,21 @@ export async function verifyLoginTerminal() {
     management.dispose()
     server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))
+  }
+}
+
+/** 自执行入口（2026-10-19）：只导出的脚本直接 `node` 跑会静默空过（假绿灯）。 */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  try {
+    await verifyLoginLaunchers()
+    console.log('ok  登录启动器：路径安全引用、令牌只经 stdin')
+    await verifyLoginTerminal()
+    console.log('ok  本机取令牌入口：来源/参数限制、拒绝并发、不泄露密钥')
+    console.log('standalone-login-terminal: all ok')
+    process.exitCode = 0
+  } catch (error) {
+    console.error(`standalone-login-terminal: FAILED — ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
   }
 }

@@ -38,6 +38,7 @@ const suites = [
   ['release', 'release-e2e.mjs', []],
   ['release-preparation', 'release-preparation-test.mjs', []],
   ['client-lint', 'client-lint.mjs', []],
+  ['sponsor', 'sponsor-test.mjs', []],
   ['heatmap', 'heatmap-test.mjs', []],
   ['trust', 'trust-test.mjs', []],
   ['sanitize', 'sanitize-test.mjs', []],
@@ -53,13 +54,21 @@ const suites = [
   ['channel-source', 'channel-pack-test.mjs', ['--source', '--channels-only']],
   ['channel-network', 'channel-network-test.mjs', []],
   ['raccoon-balance', 'raccoon-balance-test.mjs', []],
+  ['raccoon-daily-grant', 'raccoon-daily-grant-test.mjs', []],
   ['credit-usage', 'credit-usage-test.mjs', []],
-  ['channel-credits-rpc', 'channel-credits-rpc-test.mjs', []],
+  ['credit-sampling', 'credit-sampling-test.mjs', []],
+  ['cloud-sync', 'cloud-sync-test.mjs', []],
+  ['api-push', 'api-push-test.mjs', []],
+  // ⚠️ `channel-credits-rpc` / `channel-model-actions` **不列为独立套件**：
+  // 它们需要 `channel-pack-test.mjs` 挂载出来的宿主上下文（ctx / call / creds /
+  // adapters），单独 spawn 一个进程没有那些东西。曾经它们也在表里，于是
+  // 「按文件名逐个跑」得到的是一次**什么都没做的绿灯**（假绿灯，2026-10-19
+  // Tester 发现）。现在它们自己会在被直接执行时报错退出（exit 2），
+  // 真正的覆盖由 `channel-pack` 套件负责，本表不再重复列出。
   ['channel-credits-ui', 'channel-credits-ui-test.mjs', []],
-  ['channel-model-actions', 'channel-model-actions-test.mjs', []],
   ['channel-login', 'channel-login-test.mjs', []],
   ['open-external', 'open-external-test.mjs', []],
-  ['channel-image-pricing', 'channel-image-pricing-test.mjs', []],
+  // 同上：需要 channel-pack-test 挂载出的 adapters 表，不能独立执行。
   ['forward-boot', 'forward-boot-test.mjs', []],
   ['standalone', 'standalone-test.mjs', []],
   ['desktop', 'desktop-test.mjs', []],

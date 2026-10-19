@@ -20,7 +20,15 @@ import { LoomyAuth } from './loomy-auth.js'
 import { RaccoonAuth } from './raccoon-auth.js'
 import { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
 import { CreditUsageLedger } from './credit-usage-ledger.js'
+import { CreditUsageSampler, creditBalancePools } from './credit-usage-sampler.js'
 import { createCreditUsageStore } from './credit-usage-store.js'
+import { fetchCodeArtsAccountInfo } from './codearts-credits.js'
+import { fetchLobsteraiCreditBalance } from './lobsterai-credits.js'
+import { fetchQoderCreditBalance } from './qoder-credits.js'
+import { fetchTraeCreditBalance } from './trae-credits.js'
+import { fetchClineCreditBalance } from './cline-credits.js'
+import { fetchMinimaxCreditBalance } from './minimax-credits.js'
+import { fetchGeminiCreditBalance } from './gemini-credits.js'
 import { LOOMY } from './loomy-product.js'
 import { LoomyBalanceSelector } from './loomy-balance-selector.js'
 import { RACCOON } from './raccoon-product.js'
@@ -84,6 +92,12 @@ export { RaccoonBalanceSelector } from './raccoon-balance-selector.js'
 // 供离线套件（scripts/credit-usage-test.mjs）直接注入时间做单测：
 // 账本的 now() 是构造参数，测试需要冻结时间来验证 UTC+8 日界。
 export { CreditUsageLedger, utc8DayKey } from './credit-usage-ledger.js'
+// 供离线套件（scripts/credit-sampling-test.mjs）单独验证采样器的节流与吞错：
+// 它不认识任何具体渠道（渠道适配性由各 resolveCredential 现场证明）。
+export { CreditUsageSampler, creditBalancePools, creditSampleTtlMs } from './credit-usage-sampler.js'
+// 供离线套件（scripts/credit-usage-test.mjs）验证**真实文件后端**的增量合并：
+// 假 store 只能证明合并算法，证明不了 FileUsageStore 的「重读盘 → 合并 → 原子写」。
+export { createCreditUsageStore, CREDIT_USAGE_FILE } from './credit-usage-store.js'
 import { execFile } from 'node:child_process'
 
 /**
@@ -365,6 +379,17 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       // 这里仍保留 `credentialRef` 选项，仅为满足适配器契约与报错文案
       // （其余 provider 同样传各自的默认 ref，但都不再作为回退来源）。
       const available = await pool.getAvailableAccount('codearts', '')
+      if (available) {
+        // 发消息路径采样（八家共用节流器，见 credit-usage-sampler.ts）。
+        // ⚠️ `void` + 不 await：余额是统计信息，绝不能让每条消息多等一次网络。
+        // ⚠️ 非积分账户（`credit === undefined`）自然返回 undefined ⇒ 不记账，
+        // 不会把「Token 计费账户」误记成余额归零。
+        const credential = available.credential as CodeArtsCredential
+        void creditSampler.sample('codearts', available.entry.id, async () => {
+          const info = await fetchCodeArtsAccountInfo(credential)
+          return creditBalancePools(info?.credit)
+        })
+      }
       return available?.credential as CodeArtsCredential | undefined
     },
     // 续期按**账号池里的具体账号**走：`refreshAccountCredential` 读写的是
@@ -425,7 +450,12 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
    */
   const creditUsageStore = createCreditUsageStore(ctx)
   const creditUsage = new CreditUsageLedger(undefined, creditUsageStore, 30_000)
-  creditUsage.setLogger(message => logger.warn?.(`our-free-model: ${message}`))
+  // ⚠️ 这里曾写成裸 `logger.warn?.(…)`：`logger` 在本文件**从未定义**，
+  // 于是「账本落盘失败」这条唯一的诊断线索会在回调执行时抛 ReferenceError，
+  // 被上层 catch 吞成一句 `flush failed (logger is not defined)` —— 用户永远
+  // 看不到真实原因（真实缺陷，2026-10-19 一并修）。取 ctx.logger 并保持可选链，
+  // 与同文件其它日志出口一致（宿主某些形态不给 logger）。
+  creditUsage.setLogger(message => ctx.logger?.warn?.(`our-free-model: ${message}`))
   /**
    * 记账的公共入口：按 provider + 账号采一次样，并安排节流落盘。
    *
@@ -441,6 +471,22 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   }
   // 进程退出前尽量落盘（防抖窗口内最多丢 30 秒的计数）。
   process.once('beforeExit', () => { void creditUsage.flush() })
+  /**
+   * 发消息路径的**节流余额采样器**（八家「只有开面板才记账」渠道共用）。
+   *
+   * 重建理由见 `credit-usage-sampler.ts` 模块头与
+   * `docs/verification/2026-10-19-credit-sampling-fix.md`：这些渠道原先唯一的
+   * 采样入口是面板的 `credits.balances`，面板不开就等于完全不记（用户报障
+   * 「TRAE 少记约 10 倍」的根因）。挂到 `resolveCredential` 后每 60 秒
+   * （按账号，`DSH_CHANNEL_PACK_CREDIT_SAMPLE_MS` 可覆盖）最多多打一次只读请求，
+   * 且**不阻塞**凭据解析、异常全吞。
+   */
+  const creditSampler = new CreditUsageSampler({
+    // 复用 recordCreditUsage（它负责补昵称、吞异常、安排节流落盘）——
+    // 采样器只决定「何时采、采谁」，记账口径与选号器/面板完全同一处。
+    record: (provider, accountId, balances) => recordCreditUsage(provider)(accountId, balances),
+    warn: message => ctx.logger?.warn?.(`our-free-model: ${message}`),
+  })
 
   // 池名是 buddy 系自己算的（`临时积分` / `永久积分`，见 buddy-balance-selector），
   // 采样这两格合成余额即可做差值记账。
@@ -712,6 +758,10 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const available = await pool.getAvailableAccount(LOBSTERAI.id, modelId ?? '')
       // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
       if (available) {
+        // 发消息路径采样（理由见 credit-usage-sampler.ts）。
+        const credential = available.credential as LobsteraiCredential
+        void creditSampler.sample(LOBSTERAI.id, available.entry.id, async () =>
+          creditBalancePools(await fetchLobsteraiCreditBalance(credential, LOBSTERAI)))
         reportLedgerAccount(LOBSTERAI.id, available.entry.id)
         return available.credential as LobsteraiCredential
       }
@@ -785,6 +835,10 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const available = await pool.getAvailableAccount(QODER.id, modelId ?? '')
       if (available) {
         activeQoderAccountId.set(QODER.id, available.entry.id)
+        // 发消息路径采样（理由见 credit-usage-sampler.ts）。
+        const credential = available.credential as QoderCredential
+        void creditSampler.sample(QODER.id, available.entry.id, async () =>
+          creditBalancePools(await fetchQoderCreditBalance(credential, QODER)))
         // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
         reportLedgerAccount(QODER.id, available.entry.id)
         return available.credential as QoderCredential
@@ -845,6 +899,11 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const available = await pool.getAvailableAccount(QODER_CN.id, modelId ?? '')
       if (available) {
         activeQoderAccountId.set(QODER_CN.id, available.entry.id)
+        // 发消息路径采样（理由见 credit-usage-sampler.ts）。provider 用
+        // QODER_CN.id —— 与面板分支同 id，两个实例的桶不会串。
+        const credential = available.credential as QoderCredential
+        void creditSampler.sample(QODER_CN.id, available.entry.id, async () =>
+          creditBalancePools(await fetchQoderCreditBalance(credential, QODER_CN)))
         // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
         reportLedgerAccount(QODER_CN.id, available.entry.id)
         return available.credential as QoderCredential
@@ -897,6 +956,13 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       const available = await pool.getAvailableAccount(TRAE.id, modelId ?? '')
       // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
       if (available) {
+        // 发消息路径采样（用户报障「TRAE 少记约 10 倍」的根因修复）。
+        // ⚠️ TRAE 的 `pay/ide_user_ent_usage` 是**只读**端点（body 只有
+        // `require_usage`/`req_source`，无副作用），官方 IDE 打开即调，
+        // 60 秒一次的节流不会带来风控风险。
+        const credential = available.credential as TraeCredential
+        void creditSampler.sample(TRAE.id, available.entry.id, async () =>
+          creditBalancePools(await fetchTraeCreditBalance(credential, TRAE)))
         reportLedgerAccount(TRAE.id, available.entry.id)
         return available.credential as TraeCredential
       }
@@ -955,7 +1021,16 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       activeClineAccountId = available?.entry.id ?? ''
       // Token 账本（第 2 期）：回报「本笔请求解析出的账号」（空串不回报）。
       if (activeClineAccountId.length > 0) reportLedgerAccount(CLINE.id, activeClineAccountId)
-      if (available) return available.credential as ClineCredential
+      if (available) {
+        // 发消息路径采样（理由见 credit-usage-sampler.ts）。
+        const credential = available.credential as ClineCredential
+        const accountId = available.entry.id
+        void creditSampler.sample(CLINE.id, accountId, async () => {
+          const result = await fetchClineCreditBalance(credential, CLINE)
+          return creditBalancePools(result.balance)
+        })
+        return available.credential as ClineCredential
+      }
       // ⚠️ 与 buddy / workbuddy 同因（真实缺陷，2026-10-03 用户报障）：
       // 唯一的 cline 账号被**模型级限流**标记挡住时，候选会筛成空集，最终降级成
       // `cline: no usable credential; log in first` —— 凭据明明在、账号也登录着，
@@ -1411,6 +1486,13 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       // 联合（历史遗留），与 `MinimaxCredential` 无充分重叠，故经 `unknown` 转换。
       // 运行时安全性由 provider 过滤保证：查询用 `MINIMAX.id`，取到的必是 minimax 凭据。
       if (available) {
+        // 发消息路径采样（理由见 credit-usage-sampler.ts）。
+        // ⚠️ MiniMax 的余额响应**只有汇总数**（`details` 被折叠成 total，
+        // `packages` 为空）——`creditBalancePools` 的「总余额」兜底正是为它
+        // （以及任何只给汇总数的上游）。没有兜底会让这家永远记不到账。
+        const credential = available.credential as unknown as MinimaxCredential
+        void creditSampler.sample(MINIMAX.id, available.entry.id, async () =>
+          creditBalancePools(await fetchMinimaxCreditBalance(credential)))
         // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
         reportLedgerAccount(MINIMAX.id, available.entry.id)
         return available.credential as unknown as MinimaxCredential
@@ -1504,6 +1586,15 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
       // `GeminiCredential` 无充分重叠，故经 `unknown` 转换；运行时安全性由
       // provider 过滤保证（查询用 `GEMINI.id`，取到的必是 gemini 凭据）。
       if (available) {
+        // 发消息路径采样（理由见 credit-usage-sampler.ts）。
+        // ⚠️ **必须 `force: true` 绕过 60 秒配额缓存**：默认路径会命中
+        // `GEMINI_QUOTA_CACHE_TTL_MS` 的缓存，节流窗口（60s）与之同量级，
+        // 缓存会把读数吃掉 ⇒ 差值法看到的是「余额没变」，实际已经消耗。
+        const credential = available.credential as unknown as GeminiCredential
+        void creditSampler.sample(GEMINI.id, available.entry.id, async () => {
+          const result = await fetchGeminiCreditBalance(credential, GEMINI, { force: true })
+          return creditBalancePools(result.balance)
+        })
         // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
         reportLedgerAccount(GEMINI.id, available.entry.id)
         return available.credential as unknown as GeminiCredential
@@ -1674,6 +1765,24 @@ const zcodeAdapter = registerZcodeLlm(ctx, {
     if (available) {
       // 记下**实际返回的**账号：额度受限时适配器要标记的是它。
       activeZcodeAccountId.set(ZCODE.id, available.entry.id)
+      // 发消息路径采样（理由见 credit-usage-sampler.ts）。
+      // ⚠️ ZCode 的量纲是 **token 额度**（不是积分），池名按上游 `show_name`
+      // 逐桶记账 —— 与面板路径同口径（见 `buildZcodeBalance` 的逐桶映射）。
+      // ⚠️ 只挂余额采样，**captcha 签到流程一行不动**（边界要求）。
+      const credential = available.credential as unknown as ZcodeCredential
+      void creditSampler.sample(ZCODE.id, available.entry.id, async () => {
+        const result = await zcode.fetchBalanceFor(credential)
+        if (result === undefined || result.enterprise === true) return undefined
+        const pools: Record<string, number> = {}
+        for (const bucket of result.buckets) {
+          const remaining = bucket.availableUnits ?? bucket.remainingUnits
+          if (typeof remaining !== 'number' || !Number.isFinite(remaining)) continue
+          pools[bucket.showName ?? result.planName ?? 'ZCode 免费额度'] = remaining
+        }
+        if (Object.keys(pools).length > 0) return pools
+        // 空桶兜底：与面板的占位包同口径，否则这家永远记不到账。
+        return Number.isFinite(result.remaining) ? { [result.planName ?? 'ZCode 免费额度']: result.remaining } : undefined
+      })
       // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
       reportLedgerAccount(ZCODE.id, available.entry.id)
       return available.credential as unknown as ZcodeCredential

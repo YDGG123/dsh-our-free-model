@@ -67,7 +67,7 @@ globalThis.fetch = async (url, init = {}) => {
   throw new Error(`credit-usage-test: unexpected endpoint ${pathname}`)
 }
 
-const { CreditUsageLedger, utc8DayKey } = await import('../vendor/channel-pack/pack.js')
+const { CreditUsageLedger, utc8DayKey, createCreditUsageStore } = await import('../vendor/channel-pack/pack.js')
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -402,14 +402,56 @@ check('snapshot 取内存与磁盘的并集（今天在内存、历史在盘上�
   assert.equal(snapshot.days.length, 2, '两天都在最近列表里')
 })
 
-check('同一天内存 ≥ 磁盘时取内存值（内存是同源的更新读数）', () => {
+check('同一天：磁盘值 + 本实例未落盘增量（相加，不是取较大值）', () => {
+  // 盘上今天已有 80（重启前 / 另一个实例记的），本实例重启后又记了 150。
+  // 真值 = 80 + 150 = 230。旧实现取 Math.max 得 150 —— 这正是审计发现的
+  // 「跨实例互相掩盖、少记」缺陷（详见 credit-usage-ledger.ts 的 snapshot 注释）。
   const store = fakeStore(withDays('raccoon', [{ day: '2026-10-17', spent: 80, gained: 0, accounts: 1 }]))
   const ledger = new CreditUsageLedger(frozenAt('2026-10-17T09:00:00+08:00'), store)
-  // 内存里这一天已经累计到 150（磁盘是早先 flush 的 80）。
   ledger.record('raccoon', 'a1', 'A', { '每日积分': 300 })
   ledger.record('raccoon', 'a1', 'A', { '每日积分': 150 })
   const snapshot = ledger.snapshot('raccoon')
-  assert.equal(snapshot.today.spent, 150, '并集取较大值，不重复累加')
+  assert.equal(snapshot.today.spent, 230, '磁盘 80 + 本实例增量 150')
+})
+
+check('两个实例并发记账：盘上相加，谁也不抹掉谁', async () => {
+  // 用同一个「假磁盘」模拟两个实例（各自的内存视图独立）。
+  let document = { providers: {} }
+  const sharedStore = () => ({
+    load: () => JSON.parse(JSON.stringify(document)),
+    async save(delta) {
+      // 模拟 FileUsageStore 的增量合并写（读 → 合并 → 写回）。
+      const merged = JSON.parse(JSON.stringify(document))
+      for (const [provider, entry] of Object.entries(delta.providers)) {
+        const byDay = new Map((merged.providers[provider]?.days ?? []).map(row => [row.day, row]))
+        for (const row of entry.days) {
+          const existing = byDay.get(row.day)
+          byDay.set(row.day, existing === undefined ? { ...row } : {
+            day: row.day,
+            spent: existing.spent + row.spent,
+            gained: existing.gained + row.gained,
+            accounts: Math.max(existing.accounts, row.accounts),
+          })
+        }
+        merged.providers[provider] = { days: [...byDay.values()] }
+      }
+      document = merged
+      return JSON.parse(JSON.stringify(merged))
+    },
+  })
+  const at = frozenAt('2026-10-18T09:00:00+08:00')
+  const first = new CreditUsageLedger(at, sharedStore())
+  const second = new CreditUsageLedger(at, sharedStore())
+  first.record('trae', 'a1', 'A', { '每日积分': 300 })
+  first.record('trae', 'a1', 'A', { '每日积分': 200 }) // 记 100
+  second.record('trae', 'a2', 'B', { '每日积分': 300 })
+  second.record('trae', 'a2', 'B', { '每日积分': 250 }) // 记 50
+  await first.flush()
+  await second.flush()
+  const onDisk = document.providers.trae.days.find(row => row.day === '2026-10-18')
+  assert.equal(onDisk.spent, 150, '两个实例的 100 + 50 必须相加，不是后写覆盖')
+  // 各自快照也应看到对方的部分（flush 返回值回灌 persisted）。
+  assert.equal(second.snapshot('trae').today.spent, 150, 'flush 后立刻能看到合并结果')
 })
 
 check('flush 是增量合并：不丢盘上已有的历史日桶', async () => {
@@ -423,6 +465,176 @@ check('flush 是增量合并：不丢盘上已有的历史日桶', async () => {
   const byDay = new Map(written.providers.raccoon.days.map(row => [row.day, row.spent]))
   assert.equal(byDay.get('2026-10-16'), 500, '昨天的桶必须还在（合并写不是覆盖写）')
   assert.equal(byDay.get('2026-10-17'), 200)
+})
+
+check('跨 flush 窗口陆续用新账号：盘上 accounts 必须前进到 3（不卡在 1）', async () => {
+  // ⚠️ 这条用例锁定 Tester 复现的真实缺陷（2026-10-19）：旧实现把 accounts 也
+  // 塞进差值法 + 后端 Math.max 合并，于是第 2 个窗口送的 2−1=1 与盘上 1 取大
+  // 仍是 1，第 3 个窗口送的 3−3=0 被当零增量跳过 —— 计数永远停在 1。
+  // 触发条件是**常态**：一天里陆续用到第 2、3 个账号，间隔超过 30 秒防抖窗口。
+  const store = fakeStore()
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  // 三个账号分别在三个窗口里各记一笔（每轮之间 flush 一次，模拟防抖到期）。
+  for (const accountId of ['a1', 'a2', 'a3']) {
+    ledger.record('trae', accountId, accountId.toUpperCase(), { '每日积分': 300 })
+    ledger.record('trae', accountId, accountId.toUpperCase(), { '每日积分': 290 }) // 各记 10
+    await ledger.flush()
+  }
+  const written = await store.load()
+  const row = written.providers.trae.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 30, '金额必须正确（差值法：三个 10）')
+  assert.equal(row.accounts, 3, '账号数必须前进到 3，不能卡在 1')
+  assert.deepEqual([...row.accountIds ?? []].sort(), ['a1', 'a2', 'a3'], '落盘要存 id 集合（并集才对得起来）')
+  // 内存快照与盘上一致。
+  assert.equal(ledger.snapshot('trae').today.accounts, 3)
+})
+
+check('同一 flush 窗口内多账号：accounts 也对', async () => {
+  const store = fakeStore()
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  for (const accountId of ['a1', 'a2', 'a3']) {
+    ledger.record('trae', accountId, undefined, { '每日积分': 300 })
+    ledger.record('trae', accountId, undefined, { '每日积分': 280 })
+  }
+  await ledger.flush()
+  const row = (await store.load()).providers.trae.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 60)
+  assert.equal(row.accounts, 3)
+})
+
+check('重复 flush 不重复计数（并集幂等）', async () => {
+  const store = fakeStore()
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  ledger.record('trae', 'a1', undefined, { '每日积分': 300 })
+  ledger.record('trae', 'a1', undefined, { '每日积分': 250 })
+  await ledger.flush()
+  await ledger.flush() // 第二次没有增量，不应写盘也不应改变计数
+  await ledger.flush()
+  const row = (await store.load()).providers.trae.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 50)
+  assert.equal(row.accounts, 1, '同一账号反复 flush 仍算 1 个')
+})
+
+check('老文档没有 accountIds：按旧数字兜底，不会被并集抹成 0', () => {
+  // 修复前落盘的日桶只有数字 accounts（无法还原是哪些 id）。
+  const legacy = { providers: { trae: { days: [{ day: '2026-10-18', spent: 500, gained: 0, accounts: 4 }] } } }
+  const store = fakeStore(legacy)
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  ledger.record('trae', 'a1', undefined, { '每日积分': 300 })
+  ledger.record('trae', 'a1', undefined, { '每日积分': 200 })
+  const today = ledger.snapshot('trae').today
+  assert.equal(today.spent, 600, '金额照旧相加')
+  assert.equal(today.accounts, 4, '老数字 4 是历史下界，不能被 1 覆盖掉')
+})
+
+check('两个实例各见不同账号：账号数按并集，不是相加也不是取大', async () => {
+  let document = { providers: {} }
+  const sharedStore = () => ({
+    load: () => JSON.parse(JSON.stringify(document)),
+    async save(delta) {
+      const merged = JSON.parse(JSON.stringify(document))
+      for (const [provider, entry] of Object.entries(delta.providers)) {
+        const byDay = new Map((merged.providers[provider]?.days ?? []).map(row => [row.day, row]))
+        for (const row of entry.days) {
+          const existing = byDay.get(row.day)
+          if (existing === undefined) { byDay.set(row.day, { ...row }); continue }
+          const ids = [...new Set([...(existing.accountIds ?? []), ...(row.accountIds ?? [])])]
+          byDay.set(row.day, {
+            day: row.day,
+            spent: existing.spent + row.spent,
+            gained: existing.gained + row.gained,
+            accounts: Math.max(ids.length, existing.accounts ?? 0, row.accounts ?? 0),
+            ...ids.length > 0 ? { accountIds: ids } : {},
+          })
+        }
+        merged.providers[provider] = { days: [...byDay.values()] }
+      }
+      document = merged
+      return JSON.parse(JSON.stringify(merged))
+    },
+  })
+  const at = frozenAt('2026-10-18T09:00:00+08:00')
+  const first = new CreditUsageLedger(at, sharedStore())
+  const second = new CreditUsageLedger(at, sharedStore())
+  first.record('trae', 'a1', undefined, { '每日积分': 300 })
+  first.record('trae', 'a1', undefined, { '每日积分': 200 })
+  second.record('trae', 'a2', undefined, { '每日积分': 300 })
+  second.record('trae', 'a2', undefined, { '每日积分': 100 })
+  await first.flush()
+  await second.flush()
+  const row = document.providers.trae.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 300, '金额：100 + 200')
+  assert.equal(row.accounts, 2, '两个实例各见一个账号 ⇒ 并集 2')
+})
+
+check('allSnapshot 跨渠道：一侧老数字 + 一侧新集合，不能丢老下界', () => {
+  // 真实缺陷（Tester 在本机数据上复现，2026-10-19）：旧实现「只要任一侧有
+  // accountIds 就只取并集长度」，于是 raccoon 老数字 2（升级前残留、集合只有
+  // 1 个 id）+ buddy 1 ⇒ 跨渠道显示 2（应为 3）。
+  const store = fakeStore({
+    providers: {
+      // raccoon：老日桶只有数字 2，没有集合（升级前落盘的数据）
+      raccoon: { days: [{ day: '2026-10-18', spent: 100, gained: 0, accounts: 2 }] },
+      // trae：新日桶，集合里 1 个账号
+      trae: { days: [{ day: '2026-10-18', spent: 50, gained: 0, accounts: 1, accountIds: ['c'] }] },
+    },
+  })
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  const all = ledger.allSnapshot(30)
+  const row = all.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 150, '金额照旧相加')
+  assert.equal(row.accounts, 3, '老数字 2 的下界不能被并集长度 1 覆盖')
+  // 与单渠道视图口径必须一致（同一份数据不能给出两个答案）。
+  assert.equal(ledger.snapshot('raccoon').days[0].accounts, 2)
+  assert.equal(ledger.snapshot('trae').days[0].accounts, 1)
+})
+
+check('allSnapshot 跨渠道：两侧都是老数据时保持累加语义', () => {
+  // 两渠道都没有集合 ⇒ 升级前就是累加（max 会把两个渠道都算少）。
+  const store = fakeStore({
+    providers: {
+      raccoon: { days: [{ day: '2026-10-18', spent: 10, gained: 0, accounts: 2 }] },
+      buddy: { days: [{ day: '2026-10-18', spent: 20, gained: 0, accounts: 1 }] },
+    },
+  })
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  const row = ledger.allSnapshot(30).days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.accounts, 3, '两个渠道各自 2 与 1 ⇒ 累加 3（2+1）')
+})
+
+check('allSnapshot 跨渠道：两侧都有集合时相加（真实 id 带 provider 前缀，永不相撞）', () => {
+  // 真实形态：accountId 是池条目 id，带 provider 前缀（`trae-…` / `qoder-…`），
+  // 跨渠道不可能相同。故「全部渠道共用了几个账号」= 各渠道相加。
+  const store = fakeStore({
+    providers: {
+      trae: { days: [{ day: '2026-10-18', spent: 10, gained: 0, accounts: 2, accountIds: ['trae-a', 'trae-b'] }] },
+      qoder: { days: [{ day: '2026-10-18', spent: 20, gained: 0, accounts: 2, accountIds: ['qoder-x', 'qoder-y'] }] },
+    },
+  })
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  const row = ledger.allSnapshot(30).days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 30, '金额相加')
+  assert.equal(row.accounts, 4, '两个渠道各 2 个账号 ⇒ 4')
+})
+
+check('allSnapshot 跨渠道：真实混合数据（老数字 + 新集合）得 3', () => {
+  // 直接复刻 Tester 在本机 `credit-usage.json` 里看到的那两条：
+  //   raccoon 10-19: {accounts: 2, accountIds: ['raccoon-6c9bfc87']}
+  //   buddy   10-19: {accounts: 1, accountIds: ['buddy-bfc5feec']}
+  // 跨渠道真值 = 3。旧实现（并集长度）得 2；Tester 给的 Math.max 也得 2 ——
+  // 两者都低于真值，因为账号数在跨渠道维度上**没有**去重语义。
+  const store = fakeStore({
+    providers: {
+      raccoon: { days: [{ day: '2026-10-19', spent: 27, gained: 600, accounts: 2, accountIds: ['raccoon-6c9bfc87'] }] },
+      buddy: { days: [{ day: '2026-10-19', spent: 3.58, gained: 0, accounts: 1, accountIds: ['buddy-bfc5feec'] }] },
+    },
+  })
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-19T09:00:00+08:00'), store)
+  const row = ledger.allSnapshot(30).days.find(entry => entry.day === '2026-10-19')
+  assert.equal(row.accounts, 3, 'raccoon 2（老数字下界）+ buddy 1 = 3')
+  // 单渠道视图各自保持自己的口径（2 / 1），两者不矛盾。
+  assert.equal(ledger.snapshot('raccoon').days[0].accounts, 2)
+  assert.equal(ledger.snapshot('buddy').days[0].accounts, 1)
 })
 
 check('flush 失败只记日志，不影响调用方（记账绝不能反噬选号）', async () => {
@@ -467,6 +679,67 @@ check('allSnapshot：与磁盘历史合并（重启后仍跨渠道）', () => {
   const byDay = new Map(all.days.map(row => [row.day, row.spent]))
   assert.equal(byDay.get('2026-10-16'), 700, '盘上历史日桶')
   assert.equal(byDay.get('2026-10-17'), 150, '内存今日桶')
+})
+
+// ── 真实文件后端（Tester 指出：假 store 证明不了 FileUsageStore 的合并） ──────────
+// 这里跑的是**真的** `$home/channel-pack/credit-usage.json`：读 → 合并 → 原子 rename
+// 整条路径，包括「另一个实例刚写过」的那一步重读。
+const realHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-usage-store-'))
+
+check('真实文件后端：跨 flush 窗口 3 个账号 → 盘上 accounts=3', async () => {
+  const ctx = { profileContext: { home: realHome }, logger: { warn() {} } }
+  const store = createCreditUsageStore(ctx)
+  assert.equal(store.kind, 'file', '必须真的是文件后端（memory 会掩盖缺陷）')
+  const ledger = new CreditUsageLedger(frozenAt('2026-10-18T09:00:00+08:00'), store)
+  for (const accountId of ['a1', 'a2', 'a3']) {
+    ledger.record('trae', accountId, undefined, { '每日积分': 300 })
+    ledger.record('trae', accountId, undefined, { '每日积分': 290 })
+    await ledger.flush() // 三个独立防抖窗口
+  }
+  // 从磁盘重新读（不经过内存），确认真的落盘了。
+  const raw = JSON.parse(fs.readFileSync(path.join(realHome, 'channel-pack', 'credit-usage.json'), 'utf8'))
+  const row = raw.providers.trae.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 30, '金额正确')
+  assert.equal(row.accounts, 3, '账号数必须前进到 3（缺陷修复的核心断言）')
+  assert.deepEqual([...row.accountIds].sort(), ['a1', 'a2', 'a3'])
+})
+
+check('真实文件后端：两个实例先后写，盘上金额相加、账号并集', async () => {
+  const ctx = { profileContext: { home: realHome }, logger: { warn() {} } }
+  const at = frozenAt('2026-10-18T09:00:00+08:00')
+  // 两个 Ledger 各建一份后端实例 —— 模拟两个实例共享同一目录。
+  const first = new CreditUsageLedger(at, createCreditUsageStore(ctx))
+  const second = new CreditUsageLedger(at, createCreditUsageStore(ctx))
+  first.record('qoder', 'a1', undefined, { '每日积分': 300 })
+  first.record('qoder', 'a1', undefined, { '每日积分': 250 }) // 50
+  second.record('qoder', 'a2', undefined, { '每日积分': 300 })
+  second.record('qoder', 'a2', undefined, { '每日积分': 280 }) // 20
+  await first.flush()
+  await second.flush() // 后写者必须读到先写者的内容再合并
+  const raw = JSON.parse(fs.readFileSync(path.join(realHome, 'channel-pack', 'credit-usage.json'), 'utf8'))
+  const row = raw.providers.qoder.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 70, '两个实例的 50 + 20 必须相加')
+  assert.equal(row.accounts, 2, '两个不同账号 ⇒ 并集 2')
+})
+
+check('真实文件后端：重启后历史与账号集合同样可读', async () => {
+  const ctx = { profileContext: { home: realHome }, logger: { warn() {} } }
+  // 全新的 Ledger（模拟重启）：内存空，全部来自磁盘。
+  const restarted = new CreditUsageLedger(frozenAt('2026-10-19T09:00:00+08:00'), createCreditUsageStore(ctx))
+  const snapshot = restarted.snapshot('trae')
+  const row = snapshot.days.find(entry => entry.day === '2026-10-18')
+  assert.equal(row.spent, 30, '重启后金额仍在')
+  assert.equal(row.accounts, 3, '重启后账号数仍在（旧实现这里会丢）')
+})
+
+check('真实文件后端：损坏的文档按空账本处理，不抛错', async () => {
+  const brokenHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-usage-broken-'))
+  fs.mkdirSync(path.join(brokenHome, 'channel-pack'), { recursive: true })
+  fs.writeFileSync(path.join(brokenHome, 'channel-pack', 'credit-usage.json'), '{ not json')
+  const warnings = []
+  const store = createCreditUsageStore({ profileContext: { home: brokenHome }, logger: { warn: message => warnings.push(message) } })
+  assert.deepEqual(store.load(), { schema: 'dsh-codearts-auth/credit-usage/v1', providers: {} })
+  assert.equal(warnings.length, 1, '损坏要留日志，不能静默')
 })
 
 console.log(`credit-usage: ${failures === 0 ? 'all ok' : `${failures} failure(s)`}`)

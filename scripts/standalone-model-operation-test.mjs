@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import vm from 'node:vm'
 
 // 执行组件实际的异步操作函数，模拟 Host 返回和状态更新，不复制业务逻辑。
@@ -76,4 +77,17 @@ export async function verifyModelOperation() {
   rejectRefresh(new Error('离开页面后的迟到错误'))
   await running
   assert.equal(cancelled.state.error, '', '离开页面后的错误不得更新状态')
+}
+
+/** 自执行入口（2026-10-19）：只导出的脚本直接 `node` 跑会静默空过（假绿灯）。 */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  try {
+    await verifyModelOperation()
+    console.log('standalone-model-operation: all ok')
+    process.exitCode = 0
+  } catch (error) {
+    console.error(`standalone-model-operation: FAILED — ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }

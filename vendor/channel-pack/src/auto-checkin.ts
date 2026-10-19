@@ -45,7 +45,7 @@
  *
  * 「哪些渠道能签到」的权威是客户端的 `credits-capabilities.js`（12 个渠道逐项
  * 登记）。在本模块再抄一份必然漂移（本仓库已有「两份名单漂移」的真实缺陷）。
- * 故判据交给 `credits.claimAll` 自己：cline / raccoon / **workbuddy** 三条分支
+ * 故判据交给 `credits.claimAll` 自己：cline / **workbuddy** 两条分支
  * **不发任何上游请求**就返回「不支持每日签到」，本模块把这类错误计为**跳过**，
  * 既不算失败也不重试。
  *
@@ -307,8 +307,8 @@ function emptyTotals(): RunTotals {
 }
 
 /**
- * 「不支持每日签到」的判据：`credits.claimAll` 对 cline / raccoon / workbuddy
- * 返回的**显式**错误文案（这三条分支都不发上游请求）。
+ * 「不支持每日签到」的判据：`credits.claimAll` 对 cline / workbuddy
+ * 返回的**显式**错误文案（这两条分支都不发上游请求）。
  *
  * ⚠️ 兜底认 `unsupported provider`：那是 `productById` 找不到产品时的文案，
  * 语义同样是「这个渠道没有可用的签到实现」，计成失败只会制造假警报。
@@ -325,7 +325,7 @@ export function isUnsupportedCheckin(message: string): boolean {
  * ## 为什么不靠「错误文案」判（真实缺陷，2026-10-02 审查 PR !33 定位）
  *
  * 本文件原先的规则是「判据交给 `credits.claimAll` 自己：不支持的渠道会
- * **不发上游请求**就返回错误」。那对 cline / raccoon / workbuddy 成立 ——
+ * **不发上游请求**就返回错误」。那对 cline / workbuddy 成立 ——
  * 它们的守卫在 `claimAll` 里，返回前一个请求都没发。
  *
  * 但**漏了一类**：zcode **有**签到，只是每次领取都要现场产一个阿里云

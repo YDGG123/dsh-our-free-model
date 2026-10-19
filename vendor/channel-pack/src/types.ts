@@ -379,6 +379,32 @@ export interface RpcCreditsAccountStatus {
   nickname: string
   /** 状态查询失败（网络错误/凭据损坏）时为 null */
   status: import('./credits.js').CheckinStatus | null
+  /**
+   * 状态**无法确认**时的原因（`status === null` 时才有）。
+   *
+   * ## 为什么必须有这个字段（真实缺陷，2026-10-19）
+   *
+   * 用户报障：Raccoon 两个账号，一个显示「今晚已领300」、另一个什么都不显示，
+   * 于是以为后者没领到（实际早上自动签到对两个号都完成过账单核实）。
+   *
+   * 根因就在「`status: null` 没有任何解释」：前端只在 `todayCheckedIn === true`
+   * 时渲染徽标，其余一律**静默留白**。而 `null` 的来源有好几种，用户看到的
+   * 却是同一个空白 —— 无法区分「今天没领」「查询失败」「这个渠道没有状态接口」。
+   *
+   * 判据是三态，缺一不可：
+   * - `status` 有值 ⇒ 用它的 `todayCheckedIn` 决定已领/未领；
+   * - `status` 为 null 且**没有** `unsupported` ⇒ 「状态查询失败」（要显示原因）；
+   * - `unsupported === true` ⇒ 「该渠道没有查询接口」（不是故障，是能力缺失）。
+   */
+  error?: string
+  /**
+   * 该渠道**没有**「今日领取状态」可查（不是故障，是能力缺失）。
+   *
+   * 与 `error` 分开的理由：两者对用户的含义完全不同 ——
+   * 一个是「去查了但没查成」（值得重试/排查），一个是「这家根本没有这个接口」
+   * （重试无用，直接看余额即可）。混成一句话会让用户白折腾。
+   */
+  unsupported?: boolean
 }
 /** RPC: 查询签到状态响应 */
 export interface RpcCreditsStatusResponse {
@@ -552,6 +578,39 @@ export interface RpcCreditsBalanceExtra {
    * —— 面板空间只够一个词。
    */
   accountTier?: { label: string; title: string }
+  /**
+   * 上游自报的**已用量累计**（TRAE 独有：`usage.credits_amount` 有真实值，
+   * 其余渠道该字段恒 0，故不传）。
+   *
+   * ## 为什么与差值法同屏显示
+   *
+   * 差值法（本插件记账）与 `used` 的口径**不同**：
+   * - 差值法 = 相邻两次余额读数的差，按 UTC+8 日聚合 ⇒ 可回答「今天用了多少」；
+   * - `used` = 上游按**资源包周期**累计，包轮换会重置、周期边界未知
+   *   ⇒ **不能**当「今日消耗」用（用户会被一个跨越几十天的数字误导）。
+   *
+   * 但两者并排看极有用：`used` 持续增长而差值法几乎不动，说明采样仍然漏
+   *（正是本次修复要消灭的现象）。故这里只透出数字与口径说明，**不做减法、
+   * 不做换算** —— 任何「换算成今日」的尝试都会产出看起来精确的假数字。
+   */
+  upstreamUsed?: {
+    /** 上游自报的已用量（各资源包 `credits_amount` 之和）。 */
+    total: number
+    /** 覆盖了几个资源包（0/1 个时对照价值低，面板可据此弱化展示）。 */
+    packages: number
+    /** 展示用的口径说明（前端不本地化，由后端给全句）。 */
+    note: string
+  }
+  /**
+   * 差值法（本插件记账）**今日**记录到的消耗，与 {@link upstreamUsed} 同屏对照。
+   *
+   * 只透出「今日」而不是历史，是因为对照的意义就在「今天真实花了多少」；
+   * 上游没有可比的日粒度数字，多给几档只会让人误读。
+   */
+  recordedSpent?: {
+    spent: number
+    note: string
+  }
 }
 
 /** RPC: 查询积分余额响应 */

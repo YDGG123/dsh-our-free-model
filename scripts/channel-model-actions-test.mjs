@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 /** 挂载实际共享渠道卡片，检查批量操作及加载、失败、重复点击路径。 */
 export async function verifyChannelModelActions() {
@@ -102,4 +103,17 @@ export async function verifyChannelModelActions() {
   assert.equal(button('全部开启'), undefined, '加载中不能批量修改')
   cells[2] = []
   assert.equal(button('全部关闭'), undefined, '空目录不能批量修改')
+}
+
+/** 自执行入口（2026-10-19）：只导出的脚本直接 `node` 跑会静默空过（假绿灯）。 */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  try {
+    await verifyChannelModelActions()
+    console.log('channel-model-actions: all ok')
+    process.exitCode = 0
+  } catch (error) {
+    console.error(`channel-model-actions: FAILED — ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }

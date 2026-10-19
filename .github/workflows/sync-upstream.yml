@@ -1,0 +1,162 @@
+name: sync-upstream
+
+# 云端把上游 Ebony-Vinyl/dsh-our-free-model 的更新合并进本 fork。
+#
+# 存在的理由：本机 launchd 任务（com.ydgg.ofm-sync-upstream）只在 Mac 开机
+# 且登录时才会跑。托管到 GitHub Actions 后，Mac 关着也照跑。
+#
+# ## 与 release-sign.yml 的分工（**不要重复造签名**）
+#
+# `main` 上已有上游的 `release-sign.yml`：任何 push 到 main 之后，它会
+# 自己判断清单与树的漂移、重建重签、`refresh-revision.mjs`，再推回来。
+# 所以本 workflow 只负责「合并 + 回归 + 推送」，签名交给它。
+#
+# 若本仓库配了 RELEASE_SIGNING_KEY，脚本也会自己签一次（这样推上去的内容
+# 当场自洽）；没配则跳过，由 release-sign.yml 补齐。
+#
+# ## 失败通知：写状态文件，本机读
+#
+# 云端失败时把 .private/sync-failure.json 提交到 fork（`sync-failure` 分支），
+# 本机 launchd 任务随后用 scripts/check-sync-failure.mjs 读它并弹 macOS 通知。
+# 单向、无回调、凭据最少暴露（云端只需 repo 写权限，本机只需读）。
+#
+# ## 停用方法
+#
+# 删掉本文件（或注释掉 `schedule`）即停用；不会影响其他 workflow。
+
+on:
+  schedule:
+    # 03:45 UTC = **11:45 CST**，排在本机 launchd（11:30）**之后**。
+    #
+    # 为什么是「之后」而不是「之前」（2026-10-19 修正）：两者都动同一个远端
+    # 分支，撞在一起时后一个必然 non-fast-forward 失败（两个 runner 从同一
+    # base 各自 merge，都会尝试推 main）。让**本机先跑**有两个好处：
+    #   1. 本机那轮只在本机开机时存在，时间上不确定（launchd 关机就跳过）；
+    #      把它排在前面，它跑完后云端再跑，云端能看到本机刚推的内容并
+    #      走 fast-forward，不会白跑一趟；
+    #   2. 反过来（云端先推）会让本机 11:30 那轮因为基线已过期而 non-ff
+    #      失败 —— 本机是双保险里的人工兜底，不应该天天报错。
+    #
+    # ⚠️ 旧注释写的「错开 13 分钟让本机那轮先跑完」与实际时间（11:17 < 11:30）
+    # 矛盾，属笔误（Tester 复核指出），已连同 cron 一起改正。
+    - cron: '45 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只合并 + 回归，不推送（演练用）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# 同一时间只允许一个同步任务；不要 cancel-in-progress（半途取消可能留下
+# 未推送的中间状态，虽然脚本会自己回滚，但排队更可预测）。
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 是**必须**的：merge 需要与上游的完整历史求 merge-base，
+      # 而 catalog-test 的 revision 校验要 `git log` 走过 package.json 的
+      # files 列表 —— 浅克隆会把这些回答全变成 HEAD。
+      # persist-credentials: false 避免 checkout 植入 GITHUB_TOKEN 的
+      # http extraheader，压制后面用 PAT push 的凭据（release-sign.yml 里
+      # 记过同一个坑）。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: custom-main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      # 依赖：本仓库的套件是纯 Node 脚本，但 channel-pack 构建需要 esbuild，
+      # standalone 前端套件需要 typescript/esbuild。用 --ignore-scripts：
+      # 不跑生命周期脚本（与 test.yml 同口径）。
+      - name: 安装依赖
+        run: npm install --ignore-scripts
+
+      - name: 配置 git 身份与远端
+        env:
+          PUSH_TOKEN: ${{ secrets.OFM_RELEASE_PUSH_TOKEN }}
+        run: |
+          git config user.name "ofm-sync-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 上游：云端直连 github 没问题，直连优先。
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/Ebony-Vinyl/dsh-our-free-model.git
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo '::error::OFM_RELEASE_PUSH_TOKEN 未配置 — 同步结果无法推回 fork'
+            exit 1
+          fi
+          # 推送用带 token 的 https remote（云端跑常规 git push，不用本机的
+          # API squash 通道 —— 那是为本机 git 传输被阻断准备的绕行方案）。
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+      - name: 准备签名密钥（未配置则跳过重签，交由 release-sign.yml）
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          mkdir -p .private
+          if [ -n "$RELEASE_KEY_PEM" ]; then
+            printf '%s' "$RELEASE_KEY_PEM" > .private/ofm-release-key.pem
+            chmod 600 .private/ofm-release-key.pem
+            echo "签名密钥已就位（脚本会在合并后自行重签）"
+          else
+            echo "::notice::未配置 RELEASE_SIGNING_KEY — 跳过重签，由 main 上的 release-sign.yml 补齐"
+          fi
+
+      - name: 同步上游（合并 + 重建 + 回归 + 推送）
+        id: sync
+        env:
+          # 失败时脚本把结构化信息写到这里，下一步提交到 fork。
+          OFM_SYNC_FAIL_FILE: ${{ runner.temp }}/sync-failure.json
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +e
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            node scripts/sync-upstream.mjs --fail-file "$OFM_SYNC_FAIL_FILE"
+          else
+            node scripts/sync-upstream.mjs --ci --fail-file "$OFM_SYNC_FAIL_FILE"
+          fi
+          code=$?
+          echo "sync_exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0   # 失败也要继续走「写状态文件」那一步，最后由 job 整体判红
+
+      - name: 失败时把状态文件写进 fork
+        if: steps.sync.outputs.sync_exit != '0'
+        env:
+          GH_TOKEN: ${{ secrets.OFM_RELEASE_PUSH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          FAIL_FILE: ${{ runner.temp }}/sync-failure.json
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        continue-on-error: true
+        run: |
+          # 状态文件放在独立分支（sync-failure），不污染 main 的历史。
+          # 用 Contents API 提交（不切换分支、不碰当前工作区）—— 逻辑在
+          # scripts/report-sync-failure.mjs 里，可本地单测，不在 YAML 里拼 shell。
+          if [ ! -f "$FAIL_FILE" ]; then
+            node -e '
+              const fs = require("fs")
+              fs.writeFileSync(process.env.FAIL_FILE, JSON.stringify({
+                failedAt: new Date().toISOString(),
+                failedStep: "unknown",
+                message: "同步失败但脚本未产出状态文件",
+                runUrl: process.env.GITHUB_RUN_URL ?? "",
+              }, null, 2) + "\n")
+            '
+          fi
+          node scripts/report-sync-failure.mjs --file "$FAIL_FILE"
+
+      - name: 判定结果
+        run: |
+          if [ "${{ steps.sync.outputs.sync_exit }}" != "0" ]; then
+            echo '::error::上游同步失败 — 冲突或回归未过，未推送。详见上方日志与 sync-failure 分支。'
+            exit 1
+          fi
