@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import vm from 'node:vm'
 
 const source = fs.readFileSync(new URL('../packages/standalone/frontend/components/channel-browser.tsx', import.meta.url), 'utf8')
@@ -39,4 +40,17 @@ export function verifyChannelFilters() {
   assert.deepEqual(Array.from(searched.labels), [4, 1, 2], '分类标签显示全量统计，搜索结果数由结果栏展示')
   assert.deepEqual(Array.from(filterChannels({}, 'all').labels), [4, 0, 0], '未读取的渠道不能计入待接入')
   assert.deepEqual(Array.from(filterChannels(undefined, 'all').labels), [4, '—', '—'], '状态加载前不显示虚构的分类数量')
+}
+
+/** 自执行入口（2026-10-19）：只导出的脚本直接 `node` 跑会静默空过（假绿灯）。 */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  try {
+    verifyChannelFilters()
+    console.log('standalone-channel-filter: all ok')
+    process.exitCode = 0
+  } catch (error) {
+    console.error(`standalone-channel-filter: FAILED — ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }

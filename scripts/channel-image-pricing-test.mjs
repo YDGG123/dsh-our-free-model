@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { pathToFileURL } from 'node:url'
 import { LlmAdapter } from './lib/channel-pack-kernel.mjs'
 
 /** 实际发布渠道包在缺失、继承默认和已有厂商计价时的行为。 */
@@ -38,4 +39,21 @@ export function verifyChannelImagePricing(adapters) {
     if (original) Object.defineProperty(LlmAdapter.prototype, 'imageRequestPricing', original)
     else delete LlmAdapter.prototype.imageRequestPricing
   }
+}
+
+/**
+ * 自执行入口（2026-10-19）。
+ *
+ * 本套件需要一个**已挂载的适配器表**（`adapters` Map），那是
+ * `channel-pack-test.mjs` 挂载真实渠道包之后的产物。单独执行时无法凭空造出
+ * 同等的适配器集合，故如实报「需要宿主上下文」并给非零退出码 ——
+ * 静默 EXIT=0 会让人以为覆盖到了（真实缺陷，假绿灯）。
+ */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  console.error(
+    'channel-image-pricing: 本套件需要挂载好的适配器表（adapters），无法独立执行。\n'
+    + '请运行 `node scripts/channel-pack-test.mjs` 或 `npm run test`。',
+  )
+  process.exitCode = 2
 }

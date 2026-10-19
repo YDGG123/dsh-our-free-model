@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import net from 'node:net'
+import { pathToFileURL } from 'node:url'
 
 const collect = async iterable => {
   const chunks = []
@@ -267,4 +268,24 @@ async function verifyGatewayTeardown() {
     }
   }
   console.log('ok  source PR #405: idle/active/incomplete HTTP connections close within 1s, upstream stream aborted, repeated close safe')
+}
+
+/**
+ * 自执行入口（2026-10-19）：只导出的脚本直接 `node` 跑会静默空过（假绿灯）。
+ *
+ * ⚠️ 但本套件**无法**独立执行：它跑的是 `vendor/channel-pack/src/*.ts`，而那些
+ * TS 之间用 `./x.js` 互相引用 —— 需要 `channel-pack-test.mjs` 里
+ * `registerHooks` 安装的 `.js → .ts` 解析钩子才能加载。没有钩子会抛
+ * `Cannot find module …/message-shape.js`，那条报错**看起来像真缺陷**，
+ * 实际只是缺运行环境（我第一次加入口时就撞上了）。
+ *
+ * 故直接执行时如实说明并给非零退出码，不假装跑过。
+ */
+const invokedDirectly = import.meta.url === pathToFileURL(process.argv[1] ?? '').href
+if (invokedDirectly) {
+  console.error(
+    'channel-pr-fixes: 本套件依赖 channel-pack-test 安装的 .js→.ts 解析钩子，无法独立执行。\n'
+    + '请运行 `node scripts/channel-pack-test.mjs --source --channels-only`。',
+  )
+  process.exitCode = 2
 }
