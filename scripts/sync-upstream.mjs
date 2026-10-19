@@ -25,10 +25,21 @@
  *
  * ## 用法
  *
- *     node scripts/sync-upstream.mjs            # 正常运行（或无事可做）
- *     node scripts/sync-upstream.mjs --dry-run  # 到推送前一步为止，不推送
+ *     node scripts/sync-upstream.mjs             # 同步 + 重建 + 回归，**不推送**
+ *     node scripts/sync-upstream.mjs --push      # 同上，最后再推送到 fork
+ *     node scripts/sync-upstream.mjs --dry-run   # 到推送前一步为止（--push 时才有意义）
  *
- * GH_TOKEN 从环境变量或 `.private/gh-token` 读取（推送需要；拉取不需要）。
+ * ## ⚠️ 默认**不推送**（2026-10-19 改）
+ *
+ * 旧实现无条件 push 到 fork。但「同步上游」与「发布我的 fork」是两件事：
+ * 前者是本地仓库的日常维护（跑完看回归结果就该结束），后者会改变所有安装了
+ * 本 fork 的用户的升级源。把它们绑死意味着**任何一次上游同步都会立刻对外发布**，
+ * 而且推上去之后就没有「先看看合并结果」的机会了。
+ *
+ * 现在推送必须显式 `--push`。launchd 的定时任务若要保留自动发布语义，
+ * 需要在 plist 的 ProgramArguments 里加上 `--push`（不自动改用户的定时任务）。
+ *
+ * GH_TOKEN 从环境变量或 `.private/gh-token` 读取（仅 `--push` 需要；拉取不需要）。
  *
  * ## 状态与日志
  *
@@ -49,6 +60,8 @@ const tokenPath = path.join(root, '.private', 'gh-token')
 const keyPath = process.env.OFM_RELEASE_KEY ?? path.join(root, '.private', 'ofm-release-key.pem')
 
 const dryRun = process.argv.includes('--dry-run')
+/** 只有显式 `--push` 才会推送（见头注「默认不推送」）。 */
+const shouldPush = process.argv.includes('--push')
 
 /** 与 package.json files 列表对应的「发布内容」路径（revision 判据）。 */
 const SHIPPED = ['package.json', 'index.js', 'client.js', 'adapter', 'src',
@@ -73,6 +86,14 @@ const TESTS = [
   'scripts/chan-relay-test.mjs',
   'scripts/feed-test.mjs',
   'scripts/picks-test.mjs',
+  // ⚠️ 补进来的两个：它们跑的是**真实源码/真实产物**，上游一改就会挂 ——
+  // 首次同步演练正是被它们抓到的（上游 2.5.4 给 app.tsx 新引了 SponsorPage /
+  // SponsorNotice，测试桩没跟上；另一条是 catalog 版本号没跟随）。
+  'scripts/standalone-page-lifecycle-test.mjs',
+  'scripts/channel-pack-test.mjs',
+  'scripts/raccoon-daily-grant-test.mjs',
+  'scripts/credit-usage-test.mjs',
+  'scripts/credit-sampling-test.mjs',
 ]
 
 const say = message => console.log(`[${new Date().toISOString()}] ${message}`)
@@ -134,7 +155,14 @@ function main() {
   say(`合并前 HEAD = ${preMergeHead.slice(0, 7)}`)
 
   // ── 4. 合并 ────────────────────────────────────────────────────────────
-  const merged = run('git', ['merge', '--no-edit', upstreamHead], GIT_ENV)
+  // merge commit 信息里写清同步自上游哪个 commit（`--no-edit` 只会给一句
+  // 泛泛的 "Merge remote-tracking branch …"，排障时还得考古）。
+  const mergeMessage = [
+    `Merge upstream/main (${upstreamHead.slice(0, 7)}) into ${git('rev-parse', '--abbrev-ref', 'HEAD').trim()}`,
+    '',
+    '同步上游更新；本 fork 的自有功能以 merge 方式保留（不改写已有 commit）。',
+  ].join('\n')
+  const merged = run('git', ['merge', '--no-ff', '-m', mergeMessage, upstreamHead], GIT_ENV)
   if (merged.code !== 0) {
     const conflicted = git('diff', '--name-only', '--diff-filter=U').split('\n').filter(Boolean)
     const unresolvable = conflicted.filter(file => !GENERATED.has(file))
@@ -181,6 +209,14 @@ function main() {
       const target = file.includes('dsh-plugin') ? doc.source : doc.subject
       target.version = pkg.version
       target[key] = contentRevision
+      /**
+       * ⚠️ **真实缺陷（2026-10-19 首次同步演练踩到）**：`catalog/dsh-plugin.json`
+       * 有**两个** version —— 顶层 `version`（清单自身）与 `source.version`
+       * （指向哪个上游版本）。旧实现只改 `source.version`，于是上游把
+       * package.json 升到 2.5.4 后，`catalog-test` 报
+       * `version tracks package.json — got "2.5.2", want "2.5.4"`。
+       */
+      if (file.includes('dsh-plugin')) doc.version = pkg.version
       fs.writeFileSync(path.join(root, file), JSON.stringify(doc, null, 2) + '\n')
     }
     say(`catalog → ${pkg.version} @ ${contentRevision.slice(0, 7)}`)
@@ -204,9 +240,14 @@ function main() {
     say('  ✅ build-manifest --check')
 
     // ── 8. 推送 + 游标 ────────────────────────────────────────────────────
-    if (dryRun) {
-      say('--dry-run：到推送前为止，不推送')
+    if (dryRun || !shouldPush) {
+      say(dryRun
+        ? '--dry-run：到推送前为止，不推送'
+        : '未指定 --push：同步与回归已完成，**不推送**（看结果满意后再 `--push` 或手动推）')
       say(`本地 HEAD = ${git('rev-parse', 'HEAD').trim().slice(0, 7)}`)
+      // 游标仍要前移：否则下次会把同一批上游提交重新合并一遍（虽然幂等，
+      // 但会多出一次空 merge commit）。
+      writeState({ lastUpstreamSha: upstreamHead })
       return
     }
     const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
