@@ -402,11 +402,72 @@ function main() {
      *   `custom-main`，云端 checkout 的就是它）。
      */
     if (ciMode) {
+      /**
+       * ## 云端：推送 + **二次刷新 revision**
+       *
+       * ### 为什么要推两次（真实故障，2026-10-19 run 39244615254）
+       *
+       * catalog 的 `source.revision` 必须等于「最后一次触碰发布内容的提交」。
+       * 本地算出来的是**本地** commit（如 `524f972`）；推送之后远端多出的是
+       * **新** commit（远端 `main` 是 squash/独立历史，本地 sha 在远端根本
+       * 不存在 —— 实测 `GET /git/commits/524f972` 返回 404）。
+       *
+       * 于是 `main` 上的 `release-sign.yml` 触发后：
+       *   - `build-manifest --check` **通过**（字节一致）⇒ 刷新分支不进入；
+       *   - 紧接着 `test-all --mode release` 的 `catalog-test` 报
+       *     `source revision ... got "524f972…", want "82904ed…"` ⇒ 红。
+       *
+       * 修法：push 之后**再算一次** revision（这时指向的是远端真实 commit），
+       * 写进 catalog 再推一次。第二次推送只改 `catalog/` 与 `feed/`，不会
+       * 移动 revision 指针本身（该指针只统计发布内容），所以不会循环。
+       */
       const branch = process.env.OFM_PUSH_BRANCH ?? 'main'
       say(`推送 HEAD → origin/${branch}（--ci，常规 git push）…`)
       const pushed = run('git', ['push', 'origin', `HEAD:${branch}`])
       say(pushed.output.trim().slice(-1500))
       if (pushed.code !== 0) throw new Error('推送失败')
+
+      // ── 二次刷新：让 catalog 的 revision 指向**远端真实存在**的提交 ──
+      say('二次刷新 catalog revision（指向刚推送的远端提交）…')
+      run('git', ['fetch', 'origin', branch])
+      const remoteHead = git('rev-parse', `origin/${branch}`).trim()
+      say(`  远端 ${branch} = ${remoteHead.slice(0, 7)}`)
+      /**
+       * 直接把 revision 写成**远端 HEAD**，而不是 `reset --hard` 到远端再跑
+       * `refresh-revision.mjs`：
+       *
+       * - 远端 HEAD 就是「最后一次触碰发布内容的提交」（我们刚推上去的那一批
+       *   内容全在它里面）—— 与 `catalog-test` 的判据完全一致；
+       * - `reset --hard origin/<branch>` 会**丢掉本地 merge 历史**，让这次同步
+       *   在本地看起来什么也没发生，日志也会误导（且如果远端被并发改写，
+       *   本地会被静默拉到别人分支上）。
+       *
+       * 写完仍跑一次 `catalog-test`（release 语义）自证，不靠推断。
+       */
+      const refreshed = run('node', ['scripts/set-catalog-revision.mjs', remoteHead])
+      say(refreshed.output.trim().slice(-800))
+      if (refreshed.code !== 0) throw new Error('刷新 revision 失败')
+      // 刷新后必须仍然自洽（catalog-test 的 release 语义）。
+      const catalogCheck = run('node', ['scripts/catalog-test.mjs'])
+      if (catalogCheck.code !== 0) {
+        say(catalogCheck.output.trim().slice(-1200))
+        throw new Error('刷新后的 catalog 校验未通过')
+      }
+      say('  ✅ 刷新后 catalog-test 通过')
+      // 只在真的变了时才第二次推送。
+      const dirtyCatalog = git('status', '--porcelain', '--', 'catalog', 'feed').trim()
+      if (dirtyCatalog !== '') {
+        run('git', ['add', 'catalog', 'feed'])
+        const message = `catalog: refresh revision over ${git('rev-parse', '--short=7', 'HEAD').trim()}`
+        const committed = run('git', ['commit', '-m', message], GIT_ENV)
+        if (committed.code !== 0) throw new Error('revision 刷新提交失败')
+        const repushed = run('git', ['push', 'origin', `HEAD:${branch}`])
+        say(repushed.output.trim().slice(-800))
+        if (repushed.code !== 0) throw new Error('二次推送失败')
+        say('  ✅ revision 已刷新并推送')
+      } else {
+        say('  revision 已正确，无需二次推送')
+      }
     } else {
       const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
       if (token === '') throw new Error('无 GH_TOKEN（环境变量或 .private/gh-token）')

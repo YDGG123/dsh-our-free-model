@@ -60,15 +60,29 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth: 0 是**必须**的：merge 需要与上游的完整历史求 merge-base，
+      # ## ⚠️ checkout 的是 `main`，不是 `custom-main`（2026-10-19 修正）
+      #
+      # 第一版写 `ref: custom-main` ⇒ **云端 checkout 失败**：`custom-main` 是
+      # 本 fork 的本地分支，**远端根本没有**（远端只有 `main`，且是 squash 历史）。
+      # 那次 run 39244642263 在第 2 步就红了。
+      #
+      # 为什么不改用「本机把 custom-main 推到远端、云端 fetch 它」：
+      # 那要求**每次推送都先在云端之外产生一个新分支**，且两个写者（本机
+      # launchd + 云端）会争同一个分支；更麻烦的是 `main` 仍然是 squash 历史，
+      # 云端推完 `custom-main` 还得再转换一次语义才能更新 `main` —— 等于把
+      # 一套逻辑拆成三段，每段都可能漂移。
+      #
+      # 现在沿用**与本机完全一致**的语义：以 `main`（发布分支）为基线，
+      # 合并上游，推送。完整历史仍留在本机 `custom-main`。
+      #
+      # fetch-depth: 0 是**必须**的：merge 需要与上游求 merge-base，
       # 而 catalog-test 的 revision 校验要 `git log` 走过 package.json 的
       # files 列表 —— 浅克隆会把这些回答全变成 HEAD。
       # persist-credentials: false 避免 checkout 植入 GITHUB_TOKEN 的
-      # http extraheader，压制后面用 PAT push 的凭据（release-sign.yml 里
-      # 记过同一个坑）。
+      # http extraheader，压制后面用 PAT push 的凭据（release-sign.yml 记过同一个坑）。
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: custom-main
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
