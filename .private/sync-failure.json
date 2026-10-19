@@ -1,0 +1,20 @@
+{
+  "failedAt": "2026-10-19T12:27:08.532Z",
+  "failedStep": "merge-conflict",
+  "message": "存在需要人工判断的冲突，已回滚合并，留待处理：\nREADME.md\nREADME_EN.md\nclient.js\nfeed/announcements.json\npackage-lock.json\npackage.json\npackages/standalone/web/app.css\npackages/standalone/web/app.js\npackages/standalone/web/assets.json\nsrc/sponsor.js",
+  "upstreamHead": "25151bab43ff28bfc0eef5a3dbec4443ecc6d2f2",
+  "preMergeHead": "",
+  "conflictedFiles": [
+    "README.md",
+    "README_EN.md",
+    "client.js",
+    "feed/announcements.json",
+    "package-lock.json",
+    "package.json",
+    "packages/standalone/web/app.css",
+    "packages/standalone/web/app.js",
+    "packages/standalone/web/assets.json",
+    "src/sponsor.js"
+  ],
+  "runUrl": "https://github.com/YDGG123/dsh-our-free-model/actions/runs/39252130820"
+}
