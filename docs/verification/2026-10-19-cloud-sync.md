@@ -240,6 +240,33 @@ test-all --mode release  ── catalog-test 校验 revision
 - 因此：**两段式推送 + 保留 release-sign 的刷新兜底** 是当前最优组合；
   不要试图在推送脚本里「算出未来那个 sha」（squash 场景算不出来）。
 
+## ⚠️ esbuild / vite 在子包里，云端必须安装独立端依赖
+
+云端 dry-run 报 `build-channel-pack: esbuild is required to rebuild the pack`。
+
+根因不在「没装」，而在**装的不是根依赖**：`esbuild` 与 `vite` 都是
+`packages/standalone` 的 devDependency（那里已钉死 `esbuild: 0.25.9`），
+根 `package.json` 里没有。原实现的解析候选只有
+`[OFM_ESBUILD_DIR, cwd, root]` —— **永远进不到子包**。
+
+两处都要修（缺一不可）：
+
+1. **workflow 装子包依赖**：`( cd packages/standalone && npm ci --ignore-scripts )`
+2. **`build-channel-pack.mjs` 的解析候选加入 `packages/standalone`** ——
+   这样版本自动跟随子包钉定值，**不在本脚本里另写版本号**（两份必然漂移）。
+
+### 顺带查清 `pack.js` 体积差异（不是缺陷）
+
+之前发现「同样源码重建后 2.84 MiB，而仓库里是 3.04 MiB」。查清了：
+
+- **不是 esbuild 版本问题**（0.25.9 → 2970700 字节，0.28.2 → 2975221 字节，
+  两者都远小于 3186433）；
+- **是上游 2.5.4 删掉了 15 个源文件**（`vendor/channel-pack/src` 从 164 → 148），
+  提交版那个产物是在删除之前构建的。
+
+⇒ 体积变化是上游内容变化，**不是产物不可复现**。esbuild 版本已通过
+`packages/standalone` 钉死（0.25.9），云端与本机从此一致。
+
 ## ⚠️ 云端 checkout 后必须还原 `package-lock.json`
 
 `npm install --ignore-scripts` 会重写 lockfile：给若干 peer 依赖补上

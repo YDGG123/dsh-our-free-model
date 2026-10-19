@@ -360,6 +360,26 @@ await checkAsync('sync-upstream 支持 --work-branch 语义（不写死 main）'
   assert.match(source, /build-standalone-ui\.mjs/, '合并后必须重建独立端产物')
 })
 
+await checkAsync('esbuild 解析必须覆盖 packages/standalone（云端构建前提）', async () => {
+  // 真实故障（2026-10-19 dry-run）：干净 checkout 里装完依赖仍报
+  //   `build-channel-pack: esbuild is required to rebuild the pack`
+  // 因为 esbuild 是 packages/standalone 的 devDependency，不在根 package.json，
+  // 而原解析路径只有 [OFM_ESBUILD_DIR, cwd, root] —— 永远进不到子包。
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./build-channel-pack.mjs', import.meta.url), 'utf8')
+  assert.match(source, /'packages', 'standalone'/, '解析候选必须包含 packages/standalone')
+  // 版本不能在两个地方各写一份（本文件的候选即可跟随子包钉定值）。
+  assert.ok(!/from 'esbuild'|"esbuild":\s*"\d/.test(source), '不得在本脚本里另写 esbuild 版本号')
+})
+
+await checkAsync('workflow 必须安装独立端依赖（esbuild / vite 都在那里）', async () => {
+  const fs2 = await import('node:fs')
+  const yamlText = fs2.readFileSync(new URL('../.github/workflows/sync-upstream.yml', import.meta.url), 'utf8')
+  assert.match(yamlText, /packages\/standalone && npm ci/, '必须装独立端依赖')
+  // 两个 lockfile 都要还原（否则脏树检查拒绝，且 manifest digest 会漂移）。
+  assert.match(yamlText, /packages\/standalone\/package-lock\.json/, '独立端 lockfile 也要还原')
+})
+
 await checkAsync('workflow 检出 custom-main（事实源），不是 main', async () => {
   const fs2 = await import('node:fs')
   const yamlText = fs2.readFileSync(new URL('../.github/workflows/sync-upstream.yml', import.meta.url), 'utf8')

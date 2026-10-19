@@ -107,10 +107,20 @@ jobs:
       - name: 安装依赖
         run: |
           npm install --ignore-scripts
-          if ! git diff --quiet -- package-lock.json; then
-            echo "::notice::npm install 改写了 package-lock.json（peer 标记），已还原：lockfile 以仓库为准"
-            git checkout -- package-lock.json
-          fi
+          # ⚠️ 还需要独立端的依赖：`packages/standalone` 里有 esbuild（channel-pack
+          # 构建用）与 vite（独立端产物构建用），二者都不在根 package.json 里。
+          # 2026-10-19 dry-run 实测：缺 esbuild ⇒
+          #   `build-channel-pack: esbuild is required to rebuild the pack`
+          ( cd packages/standalone && npm ci --ignore-scripts )
+          # npm 会重写 lockfile（给 peer 依赖补 `"peer": true`）。两个 lockfile
+          # 都必须还原：发布清单按它们算 digest，改了会让 manifest 漂移，
+          # 而且会让同步脚本的「工作区必须干净」检查直接拒绝。
+          for lock in package-lock.json packages/standalone/package-lock.json; do
+            if ! git diff --quiet -- "$lock"; then
+              echo "::notice::npm 改写了 $lock，已还原（lockfile 以仓库为准）"
+              git checkout -- "$lock"
+            fi
+          done
 
       - name: 配置 git 身份与远端
         env:

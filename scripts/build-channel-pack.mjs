@@ -38,7 +38,23 @@ try {
   // in this package.
   const { createRequire } = await import('node:module')
   const require = createRequire(import.meta.url)
-  const candidates = [process.env.OFM_ESBUILD_DIR, process.cwd(), root].filter(Boolean)
+  /**
+   * ## 解析顺序（2026-10-19 补 `packages/standalone`）
+   *
+   * `esbuild` **不在根 `package.json` 里**，它是 `packages/standalone` 的
+   * devDependency（那里已经钉死版本 `0.25.9`）。原实现只找
+   * `[OFM_ESBUILD_DIR, cwd, root]`，**不会进子包** ⇒ 在干净 checkout 里
+   * 即使装了依赖也报 `esbuild is required`（云端 dry-run 实测）。
+   *
+   * 把子包加进候选，版本就自动跟随 standalone 的钉定值 —— 不在本文件里
+   * 另写一个版本号（两份必然漂移）。
+   */
+  const candidates = [
+    process.env.OFM_ESBUILD_DIR,
+    process.cwd(),
+    root,
+    path.join(root, 'packages', 'standalone'),
+  ].filter(Boolean)
   const resolved = require.resolve('esbuild', { paths: candidates })
   esbuild = await import(pathToFileURL(resolved).href)
 } catch (error) {
