@@ -716,6 +716,80 @@ await checkAsync('apply() drops files the new release removed', async () => {
   fs.rmSync(pkg, { recursive: true, force: true })
   fs.rmSync(data, { recursive: true, force: true })
 })
+for (const rollback of [false, true]) {
+  await checkAsync(`linked development installs never traverse, back up or delete desktop caches (rollback=${rollback})`, async () => {
+    const pkg = makePackage(OLD)
+    const data = makeDataDir()
+    const cache = path.join(pkg, 'packages')
+    const sentinels = {
+      'packages/desktop/src-tauri/target/debug/build/example/build_script_build.pdb': 'rust-cache-must-stay-on-original-drive',
+      'packages/desktop/src-tauri/target/release/ofm-desktop.exe': 'desktop-program',
+      'packages/standalone/service.mjs': 'independent-product-source',
+    }
+    const originalReadDir = fs.readdirSync
+    try {
+      for (const [rel, value] of Object.entries(sentinels)) {
+        const file = path.join(pkg, ...rel.split('/'))
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.writeFileSync(file, value)
+      }
+      fs.readdirSync = (directory, ...args) => {
+        if (path.resolve(String(directory)) === cache || path.resolve(String(directory)).startsWith(cache + path.sep)) {
+          throw new Error('the updater must not even enumerate separate products or Rust cache')
+        }
+        return originalReadDir(directory, ...args)
+      }
+      const updater = fixtureUpdater(pkg, data)
+      if (rollback) {
+        await assert.rejects(() => updater.apply({ activate: async () => ({
+          ok: false, restored: true, error: 'controlled activation refusal',
+        }) }), /controlled activation refusal/)
+        assert.equal(updater.currentVersion(), OLD)
+      } else {
+        await updater.apply({})
+        assert.equal(updater.currentVersion(), NEW)
+      }
+      assert.equal(fs.existsSync(path.join(updater.backupDir, 'packages')), false)
+      for (const [rel, value] of Object.entries(sentinels)) {
+        assert.equal(fs.readFileSync(path.join(pkg, ...rel.split('/')), 'utf8'), value)
+      }
+    } finally {
+      fs.readdirSync = originalReadDir
+      fs.rmSync(pkg, { recursive: true, force: true })
+      fs.rmSync(data, { recursive: true, force: true })
+    }
+  })
+}
+
+await checkAsync('legacy rollback receipts containing Rust caches restore only plugin runtime files', async () => {
+  const pkg = makePackage(OLD)
+  const data = makeDataDir()
+  const backup = path.join(data, 'rollback')
+  const rel = 'packages/desktop/src-tauri/target/debug/legacy-cache.pdb'
+  try {
+    backupPackage(pkg, backup)
+    const cached = Buffer.from('retained historical cache')
+    const backupFile = path.join(backup, ...rel.split('/'))
+    fs.mkdirSync(path.dirname(backupFile), { recursive: true })
+    fs.writeFileSync(backupFile, cached)
+    const receiptFile = path.join(backup, '.ofm-backup.json')
+    const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'))
+    receipt.files.push({ path: rel, size: cached.length, sha256: crypto.createHash('sha256').update(cached).digest('hex') })
+    fs.writeFileSync(receiptFile, JSON.stringify(receipt))
+    const currentCache = path.join(pkg, ...rel.split('/'))
+    fs.mkdirSync(path.dirname(currentCache), { recursive: true })
+    fs.writeFileSync(currentCache, 'current Rust cache must stay untouched')
+    fs.writeFileSync(path.join(pkg, 'index.js'), 'broken candidate')
+    restoreBackup(backup, pkg)
+    assert.equal(fs.readFileSync(path.join(pkg, 'index.js'), 'utf8'), oldFiles['index.js'])
+    assert.equal(fs.readFileSync(currentCache, 'utf8'), 'current Rust cache must stay untouched')
+    assert.deepEqual(fs.readFileSync(backupFile), cached, 'historical cache is retained without deletion or restoration')
+  } finally {
+    fs.rmSync(pkg, { recursive: true, force: true })
+    fs.rmSync(data, { recursive: true, force: true })
+  }
+})
+
 await checkAsync('a failed apply leaves the installed package and history consistent', async () => {
   const pkg = makePackage(OLD)
   const data = makeDataDir()

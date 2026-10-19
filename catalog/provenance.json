@@ -2,9 +2,9 @@
   "subject": {
     "id": "dev.ebony-vinyl.dsh-our-free-model",
     "name": "dsh-our-free-model",
-    "version": "2.5.2",
+    "version": "2.5.4",
     "sourceRepository": "https://github.com/Ebony-Vinyl/dsh-our-free-model",
-    "sourceRevision": "49d4c93b97285b41ac438f7fbf69d6bccf7fe286"
+    "sourceRevision": "dca8d2a2aab977a0faf00ec89dfa59d962a81330"
   },
   "license": {
     "spdx": "MIT",
