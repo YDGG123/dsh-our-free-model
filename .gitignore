@@ -46,5 +46,12 @@ _audit/
 
 # 发布签名私钥 —— 绝不入库（对应 GitHub Actions secret
 # RELEASE_MANIFEST_PRIVATE_KEY）。提交它等于把信任根交给任何人。
-.private/
+# ⚠️ `.private/` 下**只有一个**文件允许入库：云端同步失败的状态文件
+#（sync-failure 分支，本机通知桥靠它得知失败了）。它不含任何密钥，只是失败摘要。
+# 其余（gh-token、release-key.pem、日志、游标）一律忽略。
+#
+# 写法说明：Git 的否定规则**不能**穿透被整体忽略的父目录，所以这里先忽略
+# `.private/*`（而不是 `.private/`），再逐个把要放行的文件用 `!` 提出来。
+.private/*
+!/.private/sync-failure.json
 *.pem

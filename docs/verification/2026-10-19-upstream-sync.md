@@ -221,6 +221,12 @@ git add catalog feed && git commit -m "catalog: refresh release revision over <s
 - 结果：`test:contributor` **72/73**，唯一失败是已知基线 `reload-test`
 - merge commit：`524f972`
 
+## 云端托管（GitHub Actions）
+
+本机 launchd 要求 Mac 开机且登录。要让同步在 Mac 关机时也跑，见
+`docs/verification/2026-10-19-cloud-sync.md`：云端复用**同一份**本脚本
+（`--ci` 开关切换推送方式），失败写状态文件、本机轮询弹通知。
+
 ## 现状与后续建议
 
 - 同步脚本现已幂等：反复跑只会在「上游已在历史中」时更新游标退出。

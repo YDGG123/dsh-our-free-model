@@ -41,6 +41,24 @@
  *
  * GH_TOKEN 从环境变量或 `.private/gh-token` 读取（仅 `--push` 需要；拉取不需要）。
  *
+ * ## `--ci`：给 GitHub Actions 用的模式（Mac 不开机也能跑）
+ *
+ * 与本地模式的差异**只有三处**，其余（合并策略、生成产物取 ours、重建
+ * pack.js、刷新 revision、测试集）**完全共用同一份代码** —— 绝不抄第二份：
+ *
+ * | 方面 | 本地 | `--ci` |
+ * |---|---|---|
+ * | 推送 | `api-push-squash.mjs`（本机 git 传输到 github 被阻断） | 常规 `git push`（runner 直连没问题） |
+ * | 推送目标 | 远端 `main`（squash 成单提交） | 同样 `main`：**保持与本机一致的发布语义** |
+ * | 签名密钥 | `.private/ofm-release-key.pem` | `OFM_RELEASE_KEY` 指向 runner 临时文件 |
+ * | 状态文件 | `.private/upstream-sync-state.json` | 不需要（每次全新 checkout，靠 `merge-base` 判断） |
+ * | 失败 | 回滚本地 | 回滚 + 写 `.private/sync-failure.json` 到 fork（供本机通知桥读） |
+ *
+ * ⚠️ **云端不自己重签**：`main` 上已有上游的 `release-sign.yml`，它在 push 后
+ * 自动重签并刷新 revision。本脚本在 `--ci` 下仍会刷新 revision 与重签（保证
+ * 推上去的内容自洽、测试能过），但如果密钥缺失则**跳过重签**并交给那个
+ * workflow —— 见 `--ci` 下的密钥处理。
+ *
  * ## 状态与日志
  *
  * - 上游游标：`.private/upstream-sync-state.json`（机器状态，不入库）
@@ -62,6 +80,12 @@ const keyPath = process.env.OFM_RELEASE_KEY ?? path.join(root, '.private', 'ofm-
 const dryRun = process.argv.includes('--dry-run')
 /** 只有显式 `--push` 才会推送（见头注「默认不推送」）。 */
 const shouldPush = process.argv.includes('--push')
+/**
+ * `--ci`：GitHub Actions 模式（见头注的差异表）。`--ci` **隐含推送**
+ * —— 云端跑这一趟的意义就是发布；失败路径由 workflow 负责写状态文件。
+ */
+const ciMode = process.argv.includes('--ci')
+const willPush = shouldPush || ciMode
 
 /** ⚠️ 不要在这里手写「发布内容」清单：revision 判据必须与 catalog-test /
  * prepare-release 用同一算法（`package.json` + 其 `files` 列表）。
@@ -118,6 +142,16 @@ function readState() {
 function writeState(state) {
   fs.mkdirSync(path.dirname(statePath), { recursive: true })
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
+}
+
+/** 把失败消息归到「哪一步」——通知里要能一眼看出是冲突还是测试挂。 */
+function classifyFailure(message) {
+  if (/需要人工判断的冲突|CONFLICT|Merge conflict/i.test(message)) return 'merge-conflict'
+  if (/测试失败|[Tt]est failed/i.test(message)) return 'test-failed'
+  if (/签名|sign/i.test(message)) return 'sign-failed'
+  if (/重建|build/i.test(message)) return 'build-failed'
+  if (/推送|push/i.test(message)) return 'push-failed'
+  return 'unknown'
 }
 
 function main() {
@@ -185,6 +219,10 @@ function main() {
   }
   const mergedHead = git('rev-parse', 'HEAD').trim()
   say(`合并完成 → ${mergedHead.slice(0, 7)}`)
+  /** 是否真的重签了（推送段与 --check 段都要用，故提到 try 之外）。 */
+  let signedRelease = false
+  /** 本次失败时的结构化信息（`--ci` 下由 workflow 写成状态文件）。 */
+  let failure = null
 
   try {
     // ── 5. 重建 pack.js（上游改过 vendor 源码时旧产物已过期） ─────────────
@@ -231,12 +269,33 @@ function main() {
       fs.writeFileSync(path.join(root, file), JSON.stringify(doc, null, 2) + '\n')
     }
     say(`catalog → ${pkg.version} @ ${contentRevision.slice(0, 7)}`)
-    const signed = run('node', ['scripts/build-manifest.mjs', '--key', keyPath])
-    if (signed.code !== 0) throw new Error(`manifest 签名失败：${signed.output.slice(0, 300)}`)
-    run('git', ['add', 'feed/manifest.json', 'catalog/integrity.json', 'catalog/dsh-plugin.json', 'catalog/provenance.json'])
-    const signCommit = run('git', ['commit', '-m', `catalog: sign the release over ${contentRevision.slice(0, 7)}`], GIT_ENV)
-    if (signCommit.code !== 0) throw new Error('签名提交失败')
-    say('manifest 已重签并提交')
+    /**
+     * ## 重签：本地必做，云端可交给 `release-sign.yml`
+     *
+     * 本地有私钥文件 ⇒ 直接重签（产物自洽、`catalog-test` 能过）。
+     *
+     * 云端（`--ci`）密钥来自 secret，正常情况下也有；但**若没配密钥**，
+     * 这里不硬失败而是**跳过重签**：`main` 上已有的 `release-sign.yml` 会在
+     * push 后自动重建 + 重签（它自己会跑 `build-manifest --check` 判断漂移，
+     * 并 `refresh-revision.mjs`）。硬失败只会让「没配签名密钥的 fork」完全
+     * 同步不了，收益为负。
+     *
+     * ⚠️ 跳过时**不能**让后续 `build-manifest --check` 变成必过项（旧清单
+     *  describ 的是旧树）—— 见下面测试段的同一开关。
+     */
+    const hasKey = fs.existsSync(keyPath)
+    if (!hasKey && !ciMode) throw new Error(`release signing key not found at ${keyPath} (set OFM_RELEASE_KEY)`)
+    if (!hasKey) {
+      say('⚠️ 未找到签名密钥：跳过重签，交由 main 上的 release-sign.yml 处理')
+    } else {
+      const signed = run('node', ['scripts/build-manifest.mjs', '--key', keyPath])
+      if (signed.code !== 0) throw new Error(`manifest 签名失败：${signed.output.slice(0, 300)}`)
+      run('git', ['add', 'feed/manifest.json', 'catalog/integrity.json', 'catalog/dsh-plugin.json', 'catalog/provenance.json'])
+      const signCommit = run('git', ['commit', '-m', `catalog: sign the release over ${contentRevision.slice(0, 7)}`], GIT_ENV)
+      if (signCommit.code !== 0) throw new Error('签名提交失败')
+      say('manifest 已重签并提交')
+      signedRelease = true
+    }
 
     // ── 7. 测试 ───────────────────────────────────────────────────────────
     say('运行目标测试集 …')
@@ -246,34 +305,83 @@ function main() {
       say(`  ${passed ? '✅' : '❌'} ${path.basename(test)}`)
       if (!passed) throw new Error(`测试失败：${test}\n${result.output.slice(-1500)}`)
     }
-    const check = run('node', ['scripts/build-manifest.mjs', '--check'])
-    if (check.code !== 0) throw new Error(`manifest --check 失败：${check.output.slice(0, 300)}`)
-    say('  ✅ build-manifest --check')
+    // 清单与树的字节一致性：签过名才可校验（跳过重签时旧清单描述的是旧树）。
+    if (signedRelease) {
+      const check = run('node', ['scripts/build-manifest.mjs', '--check'])
+      if (check.code !== 0) throw new Error(`manifest --check 失败：${check.output.slice(0, 300)}`)
+      say('  ✅ build-manifest --check')
+    } else {
+      say('  ⏭  跳过 build-manifest --check（未重签，清单描述的是旧树）')
+    }
 
     // ── 8. 推送 + 游标 ────────────────────────────────────────────────────
-    if (dryRun || !shouldPush) {
+    if (dryRun || !willPush) {
       say(dryRun
         ? '--dry-run：到推送前为止，不推送'
-        : '未指定 --push：同步与回归已完成，**不推送**（看结果满意后再 `--push` 或手动推）')
+        : '未指定 --push/--ci：同步与回归已完成，**不推送**（看结果满意后再 `--push` 或手动推）')
       say(`本地 HEAD = ${git('rev-parse', 'HEAD').trim().slice(0, 7)}`)
       // 游标仍要前移：否则下次会把同一批上游提交重新合并一遍（虽然幂等，
       // 但会多出一次空 merge commit）。
       writeState({ lastUpstreamSha: upstreamHead })
       return
     }
-    const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
-    if (token === '') throw new Error('无 GH_TOKEN（环境变量或 .private/gh-token）')
-    const pushed = run('node', ['scripts/api-push-squash.mjs'], { GH_TOKEN: token })
-    say(pushed.output.trim())
-    if (pushed.code !== 0) throw new Error('推送失败')
+    /**
+     * ## 推送：本地走 API squash，云端走常规 git push
+     *
+     * - **本地**：`github.com:443` 的 git 传输被阻断，只能用
+     *   `api-push-squash.mjs`（逐 blob 走 REST API）。
+     * - **云端（`--ci`）**：runner 直连 github 没问题，用常规 `git push` 更简单
+     *   也更不容易出意外。**目标分支同样是 `main`** —— 与本机推送语义保持一致
+     *   （`main` 是发布分支，内容 = 完整历史压扁成单提交；完整历史留在
+     *   `custom-main`，云端 checkout 的就是它）。
+     */
+    if (ciMode) {
+      const branch = process.env.OFM_PUSH_BRANCH ?? 'main'
+      say(`推送 HEAD → origin/${branch}（--ci，常规 git push）…`)
+      const pushed = run('git', ['push', 'origin', `HEAD:${branch}`])
+      say(pushed.output.trim().slice(-1500))
+      if (pushed.code !== 0) throw new Error('推送失败')
+    } else {
+      const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
+      if (token === '') throw new Error('无 GH_TOKEN（环境变量或 .private/gh-token）')
+      const pushed = run('node', ['scripts/api-push-squash.mjs'], { GH_TOKEN: token })
+      say(pushed.output.trim())
+      if (pushed.code !== 0) throw new Error('推送失败')
+    }
 
     writeState({ lastUpstreamSha: upstreamHead })
     say(`✅ 同步完成：上游 ${upstreamHead.slice(0, 7)} → 本地 ${git('rev-parse', 'HEAD').trim().slice(0, 7)}`)
   } catch (error) {
     // 测试/构建/签名任一失败：回滚到合并前。远端未动，无副作用。
     say(`❌ ${error.message}`)
+    // 冲突文件清单（若非冲突类失败则为空；workflow 用它做通知摘要）。
+    const conflicted = run('git', ['diff', '--name-only', '--diff-filter=U']).output
+      .split('\n').map(line => line.trim()).filter(Boolean)
+    const currentHead = git('rev-parse', 'HEAD').trim()
     run('git', ['reset', '--hard', preMergeHead])
     say(`已回滚到 ${preMergeHead.slice(0, 7)}（远端未受影响）`)
+    /**
+     * `--fail-file <path>`：把结构化失败信息写出来。
+     *
+     * 为什么由**脚本**写而不是 workflow 自己拼：失败步骤与冲突文件只有脚本
+     * 知道（workflow 只看得到 exit code）。写成一个文件后，workflow 只需把它
+     * 提交到 fork，本机通知桥再读。
+     */
+    const failFile = flag('fail-file')
+    if (failFile !== undefined) {
+      const payload = {
+        failedAt: new Date().toISOString(),
+        failedStep: classifyFailure(error.message),
+        message: error.message,
+        upstreamHead,
+        preMergeHead,
+        headAtFailure: currentHead,
+        conflictedFiles: conflicted,
+        runUrl: process.env.GITHUB_RUN_URL ?? '',
+      }
+      fs.writeFileSync(failFile, JSON.stringify(payload, null, 2) + '\n')
+      say(`失败信息已写入 ${failFile}`)
+    }
     process.exit(1)
   }
 }
