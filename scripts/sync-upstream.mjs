@@ -63,10 +63,9 @@ const dryRun = process.argv.includes('--dry-run')
 /** 只有显式 `--push` 才会推送（见头注「默认不推送」）。 */
 const shouldPush = process.argv.includes('--push')
 
-/** 与 package.json files 列表对应的「发布内容」路径（revision 判据）。 */
-const SHIPPED = ['package.json', 'index.js', 'client.js', 'adapter', 'src',
-  'vendor/channel-pack/pack.js', 'vendor/channel-pack/qoder-auth-wasm.wasm',
-  'locale', 'icon.svg', 'cordis.patch.yml', 'LICENSE']
+/** ⚠️ 不要在这里手写「发布内容」清单：revision 判据必须与 catalog-test /
+ * prepare-release 用同一算法（`package.json` + 其 `files` 列表）。
+ * 手写清单会与 `package.json.files` 漂移，release 模式的 catalog-test 立刻变红。 */
 
 /** 冲突时可以安全「取 ours」的生成产物（随后重建/重签，内容总是正确的）。 */
 const GENERATED = new Set([
@@ -203,7 +202,19 @@ function main() {
 
     // ── 6. catalog revision + 重签 ────────────────────────────────────────
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-    const contentRevision = git('log', '-1', '--format=%H', '--', ...SHIPPED).trim()
+    /**
+     * `contentRevision` 必须与 **catalog-test / prepare-release 用同一算法**：
+     * 「最后一次触碰发布内容（`package.json` + 其 `files` 列表）的提交」。
+     *
+     * ⚠️ 不能自己另列一份手写清单 —— 上游一改
+     * `package.json` 的 `files`，两份就会漂移，`catalog-test`（release 模式）
+     * 立刻报 `source revision is the last commit that touched the release
+     * content`。首次同步演练正是踩了类似的坑（漏刷新整个 revision）。
+     *
+     * 只统计发布内容、**不含** `catalog/` 与 `feed/` ⇒ 本脚本随后的签名提交
+     * 不会移动这个指针，不存在「永远追不上自己」的循环。
+     */
+    const contentRevision = git('log', '-1', '--format=%H', '--', 'package.json', ...(pkg.files ?? [])).trim()
     for (const [file, key] of [['catalog/dsh-plugin.json', 'revision'], ['catalog/provenance.json', 'sourceRevision']]) {
       const doc = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'))
       const target = file.includes('dsh-plugin') ? doc.source : doc.subject

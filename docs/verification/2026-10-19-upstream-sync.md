@@ -74,7 +74,9 @@ git fetch upstream
                           │
                           ├── 重建 pack.js（上游动 vendor 源码时旧产物必然过期）
                           ├── catalog 版本/修订号跟随 package.json → 重签 manifest
+                          ├── 刷新 catalog revision + 重签（merge 动了发布内容时）
                           ├── 跑目标测试集（失败则 reset 回合并前）
+                          │   ⚠️ 含 catalog-test；用 release 语义校验 revision
                           └── ┬ 默认：不推送，报本地 HEAD
                              └ --push：推送到 origin
 ```
@@ -101,6 +103,7 @@ git add <file>
 # 5. 全部解决后：重建 + 回归（**必做**，冲突解决得对不对比语法错误难发现）
 npm run channel-pack
 npm run typecheck
+npm test                      # ⚠️ 用 **release 模式**，别只用 contributor（见下）
 npm run test:contributor      # 已知基线：reload-test 失败，与合并不相关
 
 # 6. 提交
@@ -138,6 +141,54 @@ git commit
 **`scripts/test-all.mjs`** —— 我们加了 `credit-sampling` 套件、移除了三个
 永不能独立执行的假绿灯条目。上游若整段重排套件表，把这些改动带过去，
 别让假绿灯条目回来。
+
+## ⚠️ merge 动了发布内容 ⇒ 必须刷新发布清单 revision（release 模式是门禁）
+
+**真实缺陷（2026-10-19 首次同步演练被 Tester 抓到）**：merge commit `524f972`
+改动了发布内容（`client.js`、`vendor/channel-pack/pack.js`、`package.json` 等），
+但 `catalog/dsh-plugin.json` 的 `source.revision` 与
+`catalog/provenance.json` 的 `subject.sourceRevision` 仍指向 merge 前的
+`dca8d2a`。重建重签只保证**字节**一致，**不**刷新这个指针。
+
+- **contributor 模式会跳过这条检查**（只打印一行 `pending release: …`）⇒
+  只跑 `npm run test:contributor` 会得到一片绿，把问题掩盖掉。
+- **release 模式（`npm test`）是门禁**：
+
+  ```text
+  FAIL source revision is the last commit that touched the release content
+       got "dca8d2a…", want "524f972…"
+  ```
+
+### 为什么不会「永远追不上自己」
+
+`contentRevision` 的定义是「**最后一次触碰发布内容**的提交」，发布内容 =
+`package.json` 的 `files` 列表里的路径（**不含** `catalog/` 与 `feed/`）。
+刷新提交只改 `catalog/`，所以它不会移动这个指针 —— 刷新完指针依然成立。
+仓库既有提交（`catalog: sign the release over <sha>`）正是这个形态，照做即可。
+
+### 刷新步骤
+
+```bash
+# 1. 算 contentRevision（与 catalog-test 完全同一算法）
+REV=$(git log -1 --format=%H -- package.json $(node -p "require('./package.json').files.join(' ')"))
+
+# 2. 写进两处（注意 dsh-plugin.json 有**两个** version）
+#    catalog/dsh-plugin.json : version + source.version + source.revision
+#    catalog/provenance.json : subject.version + subject.sourceRevision
+
+# 3. 重签
+node scripts/build-manifest.mjs --key .private/ofm-release-key.pem
+
+# 4. 验证（必须 release 模式）
+node scripts/catalog-test.mjs     # 期望 exit 0
+npm test
+
+# 5. 提交（只含 catalog/ 与 feed/，信息写清刷新到哪个 sha）
+git add catalog feed && git commit -m "catalog: refresh release revision over <sha>"
+```
+
+⚠️ **顺序很重要**：先刷新 + 重签 + **验证通过**，再提交。提交本身不会移动
+指针，所以不需要再来一轮。
 
 ## 回滚
 
