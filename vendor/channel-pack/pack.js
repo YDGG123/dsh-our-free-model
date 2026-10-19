@@ -51152,9 +51152,286 @@ var LoomyAuth = class extends Service7 {
 import { Service as Service8 } from "@deepseek-ai/cordis";
 import { credentialRef as credentialRef9 } from "@deepseek-ai/dsh-credentials";
 
+// vendor/channel-pack/src/credit-usage-ledger.ts
+var MAX_SAMPLES = 2e3;
+var MAX_DAYS = 90;
+function utc8DayKey2(ts) {
+  const shifted = new Date(ts + 8 * 60 * 60 * 1e3);
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${shifted.getUTCFullYear()}-${month}-${day}`;
+}
+var CreditUsageLedger = class {
+  constructor(now = Date.now, persistence, flushDebounceMs = 3e4) {
+    this.now = now;
+    this.persistence = persistence;
+    this.flushDebounceMs = flushDebounceMs;
+    if (persistence !== void 0) {
+      try {
+        const loaded = persistence.load();
+        if (loaded !== void 0 && loaded !== null) this.persisted = loaded;
+      } catch (error) {
+        this.log(`load failed (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+  }
+  now;
+  persistence;
+  flushDebounceMs;
+  /** provider → accountId → 各池上次已知余额。 */
+  baselines = /* @__PURE__ */ new Map();
+  /** 原始采样（用于最近明细）；超出上限时最老的先丢（按日汇总已保留）。 */
+  samples = [];
+  /** provider → 日键 → 汇总。 */
+  days = /* @__PURE__ */ new Map();
+  /** provider → 日键 → accountId → 明细。 */
+  accountDays = /* @__PURE__ */ new Map();
+  /** 已落盘的文档（增量 flush 的基线；内存态与磁盘态的差只来自本轮）。 */
+  persisted = { providers: {} };
+  /** 节流：落盘定时器。 */
+  flushTimer;
+  /** 日志出口（默认静默；宿主注入）。 */
+  onLog;
+  /**
+   * 用**刚读到的余额**更新基线并记一笔。
+   *
+   * @param provider provider id
+   * @param accountId 账号池条目 id
+   * @param nickname 账号昵称（写进当日明细，便于展示）
+   * @param balances 本次读到的「池名 → 剩余」。首次见到该账号时只建基线、不记账
+   *   （没有上一次可比，无法知道消耗）；之后每次与基线求差。
+   * @returns 本次记下的采样（首次建基线或余额未变时返回空数组）
+   */
+  record(provider, accountId, nickname, balances) {
+    const ts = this.now();
+    const day = utc8DayKey2(ts);
+    let perProvider = this.baselines.get(provider);
+    if (perProvider === void 0) {
+      perProvider = /* @__PURE__ */ new Map();
+      this.baselines.set(provider, perProvider);
+    }
+    const previous = perProvider.get(accountId);
+    perProvider.set(accountId, { ...balances });
+    if (previous === void 0) return [];
+    const written = [];
+    for (const [pool, current] of Object.entries(balances)) {
+      const before = previous[pool];
+      if (before === void 0) continue;
+      const delta = before - current;
+      if (delta === 0) continue;
+      const sample = {
+        ts,
+        provider,
+        accountId,
+        pool,
+        spent: delta > 0 ? delta : 0,
+        gained: delta < 0 ? -delta : 0
+      };
+      this.pushSample(sample);
+      this.accumulate(sample, day, nickname);
+      written.push(sample);
+    }
+    return written;
+  }
+  pushSample(sample) {
+    this.samples.push(sample);
+    if (this.samples.length > MAX_SAMPLES) this.samples.splice(0, this.samples.length - MAX_SAMPLES);
+  }
+  accumulate(sample, day, nickname) {
+    let perProvider = this.days.get(sample.provider);
+    if (perProvider === void 0) {
+      perProvider = /* @__PURE__ */ new Map();
+      this.days.set(sample.provider, perProvider);
+    }
+    const row = perProvider.get(day) ?? { day, spent: 0, gained: 0, accounts: 0 };
+    row.spent += sample.spent;
+    row.gained += sample.gained;
+    perProvider.set(day, row);
+    this.pruneDays(perProvider);
+    let perDay = this.accountDays.get(sample.provider);
+    if (perDay === void 0) {
+      perDay = /* @__PURE__ */ new Map();
+      this.accountDays.set(sample.provider, perDay);
+    }
+    let accounts = perDay.get(day);
+    if (accounts === void 0) {
+      accounts = /* @__PURE__ */ new Map();
+      perDay.set(day, accounts);
+    }
+    const account = accounts.get(sample.accountId) ?? { accountId: sample.accountId, nickname, spent: 0, gained: 0, pools: {} };
+    account.spent += sample.spent;
+    account.gained += sample.gained;
+    if (nickname !== void 0 && nickname.length > 0) account.nickname = nickname;
+    if (sample.spent > 0) account.pools[sample.pool] = (account.pools[sample.pool] ?? 0) + sample.spent;
+    accounts.set(sample.accountId, account);
+    row.accounts = accounts.size;
+  }
+  /** 只保留最近 {@link MAX_DAYS} 天（日键可字典序比较）。 */
+  pruneDays(perProvider) {
+    if (perProvider.size <= MAX_DAYS) return;
+    const keys = [...perProvider.keys()].sort();
+    for (const key of keys.slice(0, keys.length - MAX_DAYS)) perProvider.delete(key);
+  }
+  /**
+   * 全渠道概览：遍历账本里**实际有数据的 provider**（内存 ∪ 磁盘），
+   * 逐个取快照并按日汇总。
+   *
+   * ⚠️ 不维护一份手工的 provider 清单 —— 那会和记账面漂移（新增/停用渠道
+   * 时忘改这里，tab 就会出现「点了全 0」的死入口）。「有数据才出现」
+   * 的语义由数据本身保证。
+   *
+   * @returns providers 按名字排序的各渠道快照；days 是全部渠道按日合并的
+   *   总消耗；samples 是全部渠道的采样总数。
+   */
+  allSnapshot(days = 30) {
+    const today = utc8DayKey2(this.now());
+    const providerIds = /* @__PURE__ */ new Set([
+      ...this.days.keys(),
+      ...Object.keys(this.persisted.providers)
+    ]);
+    const providers = [...providerIds].sort().map((id) => this.snapshot(id, days));
+    const byDay = /* @__PURE__ */ new Map();
+    for (const entry of providers) {
+      for (const row of entry.days) {
+        const existing = byDay.get(row.day);
+        byDay.set(row.day, existing === void 0 ? { ...row } : {
+          day: row.day,
+          spent: existing.spent + row.spent,
+          gained: existing.gained + row.gained,
+          accounts: existing.accounts + row.accounts
+        });
+      }
+    }
+    const allDays = [...byDay.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
+    return {
+      providers,
+      today: byDay.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 },
+      days: allDays.slice(0, Math.max(1, Math.trunc(days))),
+      samples: providers.reduce((sum, entry) => sum + entry.samples, 0)
+    };
+  }
+  /**
+   * 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。
+   *
+   * 「最近 N 天」是**内存与磁盘的并集**：历史日桶已 flush 到盘上，今日的数字
+   * 还在内存里。只看一边都会漏（只看磁盘＝今天全是 0；只看内存＝重启后历史
+   * 全丢）。合并规则：同一天取**较大值**（内存 ≥ 磁盘，两者同源）。
+   */
+  snapshot(provider, days = 30) {
+    const today = utc8DayKey2(this.now());
+    const merged = /* @__PURE__ */ new Map();
+    for (const row of this.persisted.providers[provider]?.days ?? []) merged.set(row.day, { ...row });
+    for (const row of (this.days.get(provider) ?? /* @__PURE__ */ new Map()).values()) {
+      const existing = merged.get(row.day);
+      merged.set(row.day, existing === void 0 ? { ...row } : {
+        day: row.day,
+        spent: Math.max(existing.spent, row.spent),
+        gained: Math.max(existing.gained, row.gained),
+        accounts: Math.max(existing.accounts, row.accounts)
+      });
+    }
+    const sorted = [...merged.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
+    const todayRow = merged.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 };
+    const accounts = [...this.accountDays.get(provider)?.get(today)?.values() ?? []].sort((a, b) => b.spent - a.spent);
+    return {
+      provider,
+      today: todayRow,
+      days: sorted.slice(0, Math.max(1, Math.trunc(days))),
+      accounts,
+      samples: this.samples.filter((sample) => sample.provider === provider).length
+    };
+  }
+  /** 立即落盘。失败只记日志：记账绝不能反噬选号路径。 */
+  async flush() {
+    if (this.persistence === void 0) return;
+    if (this.flushTimer !== void 0) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = void 0;
+    }
+    try {
+      const daysByProvider = /* @__PURE__ */ new Map();
+      for (const [provider, entry] of Object.entries(this.persisted.providers)) {
+        const map = /* @__PURE__ */ new Map();
+        for (const row of entry.days) map.set(row.day, { ...row });
+        daysByProvider.set(provider, map);
+      }
+      for (const [provider, perDay] of this.days) {
+        const map = daysByProvider.get(provider) ?? /* @__PURE__ */ new Map();
+        for (const row of perDay.values()) {
+          const existing = map.get(row.day);
+          map.set(row.day, existing === void 0 ? { ...row } : {
+            day: row.day,
+            spent: Math.max(existing.spent, row.spent),
+            gained: Math.max(existing.gained, row.gained),
+            accounts: Math.max(existing.accounts, row.accounts)
+          });
+        }
+        daysByProvider.set(provider, map);
+      }
+      const providers = {};
+      for (const [provider, map] of daysByProvider) {
+        providers[provider] = { days: [...map.values()].sort((a, b) => a.day < b.day ? 1 : -1) };
+      }
+      this.persisted = { providers };
+      await this.persistence.save(this.persisted);
+    } catch (error) {
+      this.log(`flush failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  /** 节流落盘（防抖窗口内的多次记账只写一次盘）。 */
+  scheduleFlush() {
+    if (this.persistence === void 0 || this.flushTimer !== void 0) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = void 0;
+      void this.flush();
+    }, this.flushDebounceMs);
+    this.flushTimer.unref?.();
+  }
+  /**
+   * 采样入口（供 RPC 层直接使用；不需要构造新的闭包）。
+   *
+   * 与 {@link record} 的差别：本方法自带异常吞噬（记账是尽力而为），
+   * 并在记账后安排节流落盘 —— 调用方无需关心这两件事。
+   */
+  sample(provider, accountId, balances) {
+    try {
+      this.record(provider, accountId, void 0, balances);
+      this.scheduleFlush();
+    } catch {
+    }
+  }
+  /** 安装日志出口（宿主侧调用）。 */
+  setLogger(logger3) {
+    this.onLog = logger3;
+  }
+  log(message2) {
+    this.onLog?.(message2);
+  }
+  /** 清空某 provider 的全部记账（测试与「重置统计」用）。 */
+  reset(provider) {
+    if (provider === void 0) {
+      this.baselines.clear();
+      this.days.clear();
+      this.accountDays.clear();
+      this.samples.length = 0;
+      return;
+    }
+    this.baselines.delete(provider);
+    this.days.delete(provider);
+    this.accountDays.delete(provider);
+    for (let index = this.samples.length - 1; index >= 0; index -= 1) {
+      if (this.samples[index].provider === provider) this.samples.splice(index, 1);
+    }
+  }
+};
+
 // vendor/channel-pack/src/raccoon-credits.ts
 var RACCOON_LOGIN_REWARD_POINTS = 3e3;
 var RACCOON_LOGIN_REWARD_EVENT_NAME = "\u684C\u9762\u7AEF\u767B\u5F55\u5956\u52B1";
+var RACCOON_DAILY_GRANT_TRIGGER_PATH = "/api/web/office/v3/setting_info";
+var RACCOON_DAILY_GRANT_BILL_LIMIT = 100;
+var RACCOON_DAILY_GRANT_MAX_PAGES = 3;
+var RACCOON_DAILY_GRANT_BILL_TIMEOUT_MS = 25e3;
 function parseEnvelope(payload, status) {
   const record = typeof payload === "object" && payload !== null && !Array.isArray(payload) ? payload : {};
   const code = typeof record.code === "number" ? record.code : status >= 400 ? status : 0;
@@ -51165,7 +51442,7 @@ function parseEnvelope(payload, status) {
 function readNumber2(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : void 0;
 }
-async function requestJson(url, credential, product, init, fetcher) {
+async function requestJson(url, credential, product, init, fetcher, timeoutMs = RACCOON_REQUEST_TIMEOUT_MS) {
   try {
     const response = await fetcher(url, {
       method: init.method,
@@ -51174,7 +51451,7 @@ async function requestJson(url, credential, product, init, fetcher) {
         version: product.clientVersion
       }),
       ...init.body === void 0 ? {} : { body: init.body },
-      signal: AbortSignal.timeout(RACCOON_REQUEST_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const parsed = await response.json();
     return parseEnvelope(parsed, response.status);
@@ -51277,6 +51554,115 @@ async function fetchRaccoonOnboardingStatus(product, credential, fetcher = fetch
     break;
   }
   return { claimed, points };
+}
+function billDayKey(createdAt) {
+  if (createdAt.length === 0) return void 0;
+  const parsed = Date.parse(createdAt);
+  if (!Number.isFinite(parsed)) return void 0;
+  return utc8DayKey2(parsed);
+}
+async function checkTodayGrantBills(product, credential, fetcher, warn) {
+  const today = utc8DayKey2(Date.now());
+  const entries = [];
+  let granted = 0;
+  let pages = 0;
+  let sawAnyPage = false;
+  for (let page = 0; page < RACCOON_DAILY_GRANT_MAX_PAGES; page += 1) {
+    const offset = page * RACCOON_DAILY_GRANT_BILL_LIMIT;
+    const url = `${product.apiBase}${RACCOON_POINTS_PREFIX}/bills?paging.limit=${RACCOON_DAILY_GRANT_BILL_LIMIT}&paging.offset=${offset}`;
+    const envelope = await requestJson(url, credential, product, { method: "GET" }, fetcher, RACCOON_DAILY_GRANT_BILL_TIMEOUT_MS);
+    if (!envelope.ok || envelope.data === void 0) {
+      if (!sawAnyPage) return null;
+      break;
+    }
+    sawAnyPage = true;
+    pages += 1;
+    const items = Array.isArray(envelope.data.items) ? envelope.data.items : [];
+    if (items.length === 0) break;
+    let oldestDay;
+    for (const raw of items) {
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
+      const item = raw;
+      const createdAt = typeof item.created_at === "string" ? item.created_at : "";
+      const day = billDayKey(createdAt);
+      if (day !== void 0 && (oldestDay === void 0 || day < oldestDay)) oldestDay = day;
+      if (day !== today) continue;
+      const points = readNumber2(item.points);
+      if (points === void 0 || points <= 0) continue;
+      const name2 = typeof item.event_name === "string" && item.event_name.length > 0 ? item.event_name : "\u79EF\u5206\u53D1\u653E";
+      const at = createdAt.replace("T", " ").slice(11, 19);
+      entries.push({ name: name2, points, at });
+      granted += points;
+    }
+    if (items.length < RACCOON_DAILY_GRANT_BILL_LIMIT) break;
+    if (oldestDay !== void 0 && oldestDay < today) break;
+  }
+  if (granted === 0 && pages >= RACCOON_DAILY_GRANT_MAX_PAGES) {
+    warn?.(`[channel-pack] raccoon \u8D26\u5355\u5DF2\u7FFB ${pages} \u9875\uFF08${pages * RACCOON_DAILY_GRANT_BILL_LIMIT} \u6761\uFF09\u4ECD\u672A\u627E\u5230\u4ECA\u65E5\u5165\u8D26\uFF0C\u6309\u300C\u672A\u627E\u5230\u300D\u5904\u7406`);
+  }
+  return { granted, entries, pages };
+}
+async function fetchRaccoonDailyGrantStatus(product, credential, fetcher = fetch, warn) {
+  const result = await checkTodayGrantBills(product, credential, fetcher, warn);
+  if (result === null) return null;
+  const todayCheckedIn = result.granted > 0;
+  return {
+    active: true,
+    todayCheckedIn,
+    streakDays: 0,
+    dailyCredit: 300,
+    todayCredit: todayCheckedIn ? result.granted : 0,
+    isStreakDay: false,
+    totalCredits: 0,
+    checkinDates: todayCheckedIn ? [utc8DayKey2(Date.now())] : [],
+    activityName: "\u6BCF\u65E5\u79EF\u5206",
+    themeName: "\u6BCF\u65E5\u79EF\u5206",
+    endTime: ""
+  };
+}
+async function claimRaccoonDailyGrant(product, credential, fetcher = fetch) {
+  const firstCheck = await checkTodayGrantBills(product, credential, fetcher);
+  if (firstCheck !== null && firstCheck.granted > 0) {
+    return {
+      kind: "already-claimed",
+      message: `\u4ECA\u65E5\u5DF2\u9886\u53D6 ${firstCheck.granted} \u79EF\u5206`
+    };
+  }
+  const trigger = await requestJson(
+    `${product.apiBase}${RACCOON_DAILY_GRANT_TRIGGER_PATH}`,
+    credential,
+    product,
+    { method: "GET" },
+    fetcher
+  );
+  const secondCheck = await checkTodayGrantBills(product, credential, fetcher);
+  if (secondCheck === null) {
+    return {
+      kind: "failed",
+      code: -1,
+      message: "\u672A\u80FD\u786E\u8BA4\u4ECA\u65E5\u5165\u8D26"
+    };
+  }
+  if (secondCheck.granted > 0) {
+    return {
+      kind: "claimed",
+      credit: secondCheck.granted,
+      streakDays: 0,
+      isStreakDay: false
+    };
+  }
+  if (!trigger.ok) {
+    return {
+      kind: "failed",
+      code: trigger.code,
+      message: `\u89E6\u53D1\u5668\u8C03\u7528\u5931\u8D25\uFF1A${trigger.message}`
+    };
+  }
+  return {
+    kind: "failed",
+    code: 0,
+    message: "\u672A\u80FD\u786E\u8BA4\u4ECA\u65E5\u5165\u8D26"
+  };
 }
 
 // vendor/channel-pack/src/raccoon-oauth.ts
@@ -52572,6 +52958,19 @@ var RaccoonAuth = class extends Service8 {
   async fetchOnboardingStatus(credential) {
     return fetchRaccoonOnboardingStatus(this.product, credential, this.fetchImpl);
   }
+  /** 领取每日积分（setting_info 触发 + 账单核对）。 */
+  async claimDailyGrant(credential) {
+    return claimRaccoonDailyGrant(this.product, credential, this.fetchImpl);
+  }
+  /** 查询每日积分领取状态（账单口径）。 */
+  async fetchDailyGrantStatus(credential) {
+    return fetchRaccoonDailyGrantStatus(
+      this.product,
+      credential,
+      this.fetchImpl,
+      (message2) => this.ctx.logger?.warn?.(message2)
+    );
+  }
   /**
    * 一次性修复**老账号**的昵称与凭据字段（启动时调用）。
    *
@@ -52815,279 +53214,6 @@ function positiveNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
-
-// vendor/channel-pack/src/credit-usage-ledger.ts
-var MAX_SAMPLES = 2e3;
-var MAX_DAYS = 90;
-function utc8DayKey2(ts) {
-  const shifted = new Date(ts + 8 * 60 * 60 * 1e3);
-  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${shifted.getUTCFullYear()}-${month}-${day}`;
-}
-var CreditUsageLedger = class {
-  constructor(now = Date.now, persistence, flushDebounceMs = 3e4) {
-    this.now = now;
-    this.persistence = persistence;
-    this.flushDebounceMs = flushDebounceMs;
-    if (persistence !== void 0) {
-      try {
-        const loaded = persistence.load();
-        if (loaded !== void 0 && loaded !== null) this.persisted = loaded;
-      } catch (error) {
-        this.log(`load failed (${error instanceof Error ? error.message : String(error)})`);
-      }
-    }
-  }
-  now;
-  persistence;
-  flushDebounceMs;
-  /** provider → accountId → 各池上次已知余额。 */
-  baselines = /* @__PURE__ */ new Map();
-  /** 原始采样（用于最近明细）；超出上限时最老的先丢（按日汇总已保留）。 */
-  samples = [];
-  /** provider → 日键 → 汇总。 */
-  days = /* @__PURE__ */ new Map();
-  /** provider → 日键 → accountId → 明细。 */
-  accountDays = /* @__PURE__ */ new Map();
-  /** 已落盘的文档（增量 flush 的基线；内存态与磁盘态的差只来自本轮）。 */
-  persisted = { providers: {} };
-  /** 节流：落盘定时器。 */
-  flushTimer;
-  /** 日志出口（默认静默；宿主注入）。 */
-  onLog;
-  /**
-   * 用**刚读到的余额**更新基线并记一笔。
-   *
-   * @param provider provider id
-   * @param accountId 账号池条目 id
-   * @param nickname 账号昵称（写进当日明细，便于展示）
-   * @param balances 本次读到的「池名 → 剩余」。首次见到该账号时只建基线、不记账
-   *   （没有上一次可比，无法知道消耗）；之后每次与基线求差。
-   * @returns 本次记下的采样（首次建基线或余额未变时返回空数组）
-   */
-  record(provider, accountId, nickname, balances) {
-    const ts = this.now();
-    const day = utc8DayKey2(ts);
-    let perProvider = this.baselines.get(provider);
-    if (perProvider === void 0) {
-      perProvider = /* @__PURE__ */ new Map();
-      this.baselines.set(provider, perProvider);
-    }
-    const previous = perProvider.get(accountId);
-    perProvider.set(accountId, { ...balances });
-    if (previous === void 0) return [];
-    const written = [];
-    for (const [pool, current] of Object.entries(balances)) {
-      const before = previous[pool];
-      if (before === void 0) continue;
-      const delta = before - current;
-      if (delta === 0) continue;
-      const sample = {
-        ts,
-        provider,
-        accountId,
-        pool,
-        spent: delta > 0 ? delta : 0,
-        gained: delta < 0 ? -delta : 0
-      };
-      this.pushSample(sample);
-      this.accumulate(sample, day, nickname);
-      written.push(sample);
-    }
-    return written;
-  }
-  pushSample(sample) {
-    this.samples.push(sample);
-    if (this.samples.length > MAX_SAMPLES) this.samples.splice(0, this.samples.length - MAX_SAMPLES);
-  }
-  accumulate(sample, day, nickname) {
-    let perProvider = this.days.get(sample.provider);
-    if (perProvider === void 0) {
-      perProvider = /* @__PURE__ */ new Map();
-      this.days.set(sample.provider, perProvider);
-    }
-    const row = perProvider.get(day) ?? { day, spent: 0, gained: 0, accounts: 0 };
-    row.spent += sample.spent;
-    row.gained += sample.gained;
-    perProvider.set(day, row);
-    this.pruneDays(perProvider);
-    let perDay = this.accountDays.get(sample.provider);
-    if (perDay === void 0) {
-      perDay = /* @__PURE__ */ new Map();
-      this.accountDays.set(sample.provider, perDay);
-    }
-    let accounts = perDay.get(day);
-    if (accounts === void 0) {
-      accounts = /* @__PURE__ */ new Map();
-      perDay.set(day, accounts);
-    }
-    const account = accounts.get(sample.accountId) ?? { accountId: sample.accountId, nickname, spent: 0, gained: 0, pools: {} };
-    account.spent += sample.spent;
-    account.gained += sample.gained;
-    if (nickname !== void 0 && nickname.length > 0) account.nickname = nickname;
-    if (sample.spent > 0) account.pools[sample.pool] = (account.pools[sample.pool] ?? 0) + sample.spent;
-    accounts.set(sample.accountId, account);
-    row.accounts = accounts.size;
-  }
-  /** 只保留最近 {@link MAX_DAYS} 天（日键可字典序比较）。 */
-  pruneDays(perProvider) {
-    if (perProvider.size <= MAX_DAYS) return;
-    const keys = [...perProvider.keys()].sort();
-    for (const key of keys.slice(0, keys.length - MAX_DAYS)) perProvider.delete(key);
-  }
-  /**
-   * 全渠道概览：遍历账本里**实际有数据的 provider**（内存 ∪ 磁盘），
-   * 逐个取快照并按日汇总。
-   *
-   * ⚠️ 不维护一份手工的 provider 清单 —— 那会和记账面漂移（新增/停用渠道
-   * 时忘改这里，tab 就会出现「点了全 0」的死入口）。「有数据才出现」
-   * 的语义由数据本身保证。
-   *
-   * @returns providers 按名字排序的各渠道快照；days 是全部渠道按日合并的
-   *   总消耗；samples 是全部渠道的采样总数。
-   */
-  allSnapshot(days = 30) {
-    const today = utc8DayKey2(this.now());
-    const providerIds = /* @__PURE__ */ new Set([
-      ...this.days.keys(),
-      ...Object.keys(this.persisted.providers)
-    ]);
-    const providers = [...providerIds].sort().map((id) => this.snapshot(id, days));
-    const byDay = /* @__PURE__ */ new Map();
-    for (const entry of providers) {
-      for (const row of entry.days) {
-        const existing = byDay.get(row.day);
-        byDay.set(row.day, existing === void 0 ? { ...row } : {
-          day: row.day,
-          spent: existing.spent + row.spent,
-          gained: existing.gained + row.gained,
-          accounts: existing.accounts + row.accounts
-        });
-      }
-    }
-    const allDays = [...byDay.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
-    return {
-      providers,
-      today: byDay.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 },
-      days: allDays.slice(0, Math.max(1, Math.trunc(days))),
-      samples: providers.reduce((sum, entry) => sum + entry.samples, 0)
-    };
-  }
-  /**
-   * 数据看板读取：今日汇总 + 最近 N 天 + 今日按账号明细。
-   *
-   * 「最近 N 天」是**内存与磁盘的并集**：历史日桶已 flush 到盘上，今日的数字
-   * 还在内存里。只看一边都会漏（只看磁盘＝今天全是 0；只看内存＝重启后历史
-   * 全丢）。合并规则：同一天取**较大值**（内存 ≥ 磁盘，两者同源）。
-   */
-  snapshot(provider, days = 30) {
-    const today = utc8DayKey2(this.now());
-    const merged = /* @__PURE__ */ new Map();
-    for (const row of this.persisted.providers[provider]?.days ?? []) merged.set(row.day, { ...row });
-    for (const row of (this.days.get(provider) ?? /* @__PURE__ */ new Map()).values()) {
-      const existing = merged.get(row.day);
-      merged.set(row.day, existing === void 0 ? { ...row } : {
-        day: row.day,
-        spent: Math.max(existing.spent, row.spent),
-        gained: Math.max(existing.gained, row.gained),
-        accounts: Math.max(existing.accounts, row.accounts)
-      });
-    }
-    const sorted = [...merged.values()].sort((a, b) => a.day < b.day ? 1 : a.day > b.day ? -1 : 0);
-    const todayRow = merged.get(today) ?? { day: today, spent: 0, gained: 0, accounts: 0 };
-    const accounts = [...this.accountDays.get(provider)?.get(today)?.values() ?? []].sort((a, b) => b.spent - a.spent);
-    return {
-      provider,
-      today: todayRow,
-      days: sorted.slice(0, Math.max(1, Math.trunc(days))),
-      accounts,
-      samples: this.samples.filter((sample) => sample.provider === provider).length
-    };
-  }
-  /** 立即落盘。失败只记日志：记账绝不能反噬选号路径。 */
-  async flush() {
-    if (this.persistence === void 0) return;
-    if (this.flushTimer !== void 0) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = void 0;
-    }
-    try {
-      const daysByProvider = /* @__PURE__ */ new Map();
-      for (const [provider, entry] of Object.entries(this.persisted.providers)) {
-        const map = /* @__PURE__ */ new Map();
-        for (const row of entry.days) map.set(row.day, { ...row });
-        daysByProvider.set(provider, map);
-      }
-      for (const [provider, perDay] of this.days) {
-        const map = daysByProvider.get(provider) ?? /* @__PURE__ */ new Map();
-        for (const row of perDay.values()) {
-          const existing = map.get(row.day);
-          map.set(row.day, existing === void 0 ? { ...row } : {
-            day: row.day,
-            spent: Math.max(existing.spent, row.spent),
-            gained: Math.max(existing.gained, row.gained),
-            accounts: Math.max(existing.accounts, row.accounts)
-          });
-        }
-        daysByProvider.set(provider, map);
-      }
-      const providers = {};
-      for (const [provider, map] of daysByProvider) {
-        providers[provider] = { days: [...map.values()].sort((a, b) => a.day < b.day ? 1 : -1) };
-      }
-      this.persisted = { providers };
-      await this.persistence.save(this.persisted);
-    } catch (error) {
-      this.log(`flush failed (${error instanceof Error ? error.message : String(error)})`);
-    }
-  }
-  /** 节流落盘（防抖窗口内的多次记账只写一次盘）。 */
-  scheduleFlush() {
-    if (this.persistence === void 0 || this.flushTimer !== void 0) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = void 0;
-      void this.flush();
-    }, this.flushDebounceMs);
-    this.flushTimer.unref?.();
-  }
-  /**
-   * 采样入口（供 RPC 层直接使用；不需要构造新的闭包）。
-   *
-   * 与 {@link record} 的差别：本方法自带异常吞噬（记账是尽力而为），
-   * 并在记账后安排节流落盘 —— 调用方无需关心这两件事。
-   */
-  sample(provider, accountId, balances) {
-    try {
-      this.record(provider, accountId, void 0, balances);
-      this.scheduleFlush();
-    } catch {
-    }
-  }
-  /** 安装日志出口（宿主侧调用）。 */
-  setLogger(logger3) {
-    this.onLog = logger3;
-  }
-  log(message2) {
-    this.onLog?.(message2);
-  }
-  /** 清空某 provider 的全部记账（测试与「重置统计」用）。 */
-  reset(provider) {
-    if (provider === void 0) {
-      this.baselines.clear();
-      this.days.clear();
-      this.accountDays.clear();
-      this.samples.length = 0;
-      return;
-    }
-    this.baselines.delete(provider);
-    this.days.delete(provider);
-    this.accountDays.delete(provider);
-    for (let index = this.samples.length - 1; index >= 0; index -= 1) {
-      if (this.samples[index].provider === provider) this.samples.splice(index, 1);
-    }
-  }
-};
 
 // vendor/channel-pack/src/credit-usage-store.ts
 import { existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync6, writeFileSync as writeFileSync6 } from "node:fs";
@@ -65197,13 +65323,13 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           };
         }
         if (req.provider === RACCOON.id) {
-          return {
-            ok: false,
-            error: {
-              code: "bad-request",
-              message: "Raccoon Work \u4E0D\u652F\u6301\u6BCF\u65E5\u7B7E\u5230\uFF08\u6BCF\u65E5\u79EF\u5206\u7531\u670D\u52A1\u7AEF\u81EA\u52A8\u53D1\u653E\uFF1B\u767B\u5F55\u5956\u52B1\u8BF7\u5728\u300C\u65B0\u624B\u4EFB\u52A1\u300D\u4E2D\u9886\u53D6\uFF09"
-            }
-          };
+          const value2 = await collectClaimResults(accounts, RACCOON, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            fetchStatus: (credential) => raccoon.fetchDailyGrantStatus(credential),
+            claim: (credential) => raccoon.claimDailyGrant(credential),
+            warn: (msg) => ctx.logger?.warn?.(msg)
+          });
+          return { ok: true, value: value2 };
         }
         if (req.provider === MINIMAX.id) {
           const value2 = await collectClaimResults(accounts, void 0, {

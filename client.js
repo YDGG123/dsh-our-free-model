@@ -4040,7 +4040,7 @@ window.__ModuleLoader__.load({
       trae: { claim: true },
       cline: { unit: 'dollars' },
       loomy: { claim: true, lock: true },
-      raccoon: { lock: true, preferred: true },
+      raccoon: { claim: true, status: true, lock: true, preferred: true },
       minimax: { claim: true, status: true },
       zcode: { claim: true, unit: 'tokens' },
       gemini: { unit: 'quota', quota: true },

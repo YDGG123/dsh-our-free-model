@@ -33,8 +33,10 @@ import {
   type RaccoonModelMeta,
 } from './raccoon.js'
 import {
+  claimRaccoonDailyGrant,
   claimRaccoonLoginReward,
   fetchRaccoonCreditBalance,
+  fetchRaccoonDailyGrantStatus,
   fetchRaccoonOnboardingStatus,
 } from './raccoon-credits.js'
 import {
@@ -530,6 +532,21 @@ export class RaccoonAuth extends Service {
     credential: RaccoonCredential,
   ): Promise<{ claimed: boolean; points: number }> {
     return fetchRaccoonOnboardingStatus(this.product, credential, this.fetchImpl)
+  }
+
+  /** 领取每日积分（setting_info 触发 + 账单核对）。 */
+  async claimDailyGrant(credential: RaccoonCredential): Promise<ClaimOutcome> {
+    return claimRaccoonDailyGrant(this.product, credential, this.fetchImpl)
+  }
+
+  /** 查询每日积分领取状态（账单口径）。 */
+  async fetchDailyGrantStatus(credential: RaccoonCredential): Promise<import('./credits.js').CheckinStatus | null> {
+    // 翻满页数上限仍未找到今日入账时留一行诊断（否则「显示未领」无从排查
+    // 是「真没领」还是「流水超过上限」）。
+    return fetchRaccoonDailyGrantStatus(
+      this.product, credential, this.fetchImpl,
+      message => this.ctx.logger?.warn?.(message),
+    )
   }
 
   /**

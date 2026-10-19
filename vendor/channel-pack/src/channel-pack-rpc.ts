@@ -2892,20 +2892,16 @@ function registerChannelPackEndpoints(
           }
         }
         if (req.provider === RACCOON.id) {
-          // raccoon **没有签到端点**：每日 300 积分由服务端按日自动发放
-          //（账单里的 `daily_grant`，实测注册后 1 分钟即到账），
-          // 客户端按能力矩阵（`raccoon: { balance: true, onboardingTasks: true }`，
-          // **无** `dailyCheckin`）根本不会渲染「一键领取积分」按钮、也不会发起本调用。
-          // 这里显式返回可读错误，而不是落到下面 `productById` 的
-          // `unsupported provider` 泛化文案 —— 后者会让排查者以为是
-          //「provider 没注册」，而真相是「该产品无此能力」。
-          return {
-            ok: false,
-            error: {
-              code: 'bad-request',
-              message: 'Raccoon Work 不支持每日签到（每日积分由服务端自动发放；登录奖励请在「新手任务」中领取）',
-            },
-          }
+          // Raccoon 每日积分由 `GET /office/v3/setting_info` 触发，按天幂等；
+          // 权威结果靠账单核对。走 `collectClaimResults` 预检 → 领取，
+          // 逐账号顺序执行，单账号失败不中断整体。
+          const value = await collectClaimResults<RaccoonCredential, RaccoonProduct>(accounts, RACCOON, {
+            resolve: (ref) => ctx.credentials.resolve(ref),
+            fetchStatus: (credential) => raccoon.fetchDailyGrantStatus(credential),
+            claim: (credential) => raccoon.claimDailyGrant(credential),
+            warn: (msg) => ctx.logger?.warn?.(msg),
+          })
+          return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
         }
         if (req.provider === MINIMAX.id) {
           // ⚠️ **必须开启状态预检**（`precheckStatus` 默认为 true，不要传 false）。
