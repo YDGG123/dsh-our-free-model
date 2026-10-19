@@ -3004,11 +3004,14 @@ function registerChannelPackEndpoints(
        * 余额读数的差值得到。含义与精度：
        *
        * - `spent` 是**真实扣费**（差值），不是按 token 推算的估计；
-       * - 采样发生在每次真实查询余额之后，缓存命中会跨过多笔请求，那一段
-       *   消耗合并成一条 —— 金额准确、时间粒度粗（宁可粗，不要假）；
+       * - 采样发生在**两条路径**上：每次真实查询余额之后（面板 / 选号器），
+       *   以及发消息路径的节流采样（`credit-usage-sampler.ts`，按账号默认
+       *   60 秒一次）。缓存命中会跨过多笔请求，那一段消耗合并成一条 ——
+       *   金额准确、时间粒度粗（宁可粗，不要假）；
        * - 首次见到某账号只建基线、不记账（没有上一次可比）；
-       * - 服务重启后内存账本清空，重新从基线开始（历史按日落盘由
-       *   `creditUsage` 的持有方决定，当前为进程内）。
+       * - 服务重启后**内存基线**清空，重新从基线开始；日聚合**已落盘**到
+       *   `channel-pack/credit-usage.json`（按 UTC+8 日、保留 90 天，增量合并写），
+       *   明细与基线仍在进程内。重启前的历史可在看板读到。
        *
        * 未注入账本时返回空快照而不是报错：面板据此显示「暂无数据」，
        * 比一个「未知故障」有用。
@@ -3207,6 +3210,48 @@ function registerChannelPackEndpoints(
             fetchBalance: (credential, product) => fetchTraeCreditBalance(credential as TraeCredential, product),
             warn: (msg) => ctx.logger?.warn?.(msg),
           })
+          /**
+           * **上游 `used` 与差值法同屏对照**（任务 D）。
+           *
+           * TRAE 是全部渠道里**唯一** `used` 有真实值的（`trae-credits.ts:347`
+           * 从 `usage.credits_amount` 读已用）；其余渠道该字段恒 0，故不传。
+           *
+           * ⚠️ 两个数字**口径不同，不能相减算什么「漏记量」**：
+           * - `upstreamUsed` 按**资源包周期**累计（包轮换会重置、周期边界未知）；
+           * - `recordedSpent` 是差值法按 **UTC+8 今日**聚合。
+           * 它们并排的意义是「趋势对照」：上游持续增长而差值法几乎不动
+           * ⇒ 采样仍在漏。任何换算成「今日漏了 X」的尝试都会产出假精度。
+           */
+          const usage = config.creditUsage?.snapshot('trae', 1)
+          const withCrossCheck = values.map((row) => {
+            const balance = row.balance
+            if (balance === null || balance === undefined) return row
+            let upstreamTotal = 0
+            let upstreamPackages = 0
+            for (const pkg of balance.packages) {
+              if (typeof pkg.used !== 'number' || !Number.isFinite(pkg.used)) continue
+              upstreamTotal += pkg.used
+              upstreamPackages += 1
+            }
+            const recorded = usage?.accounts.find(entry => entry.accountId === row.accountId)?.spent
+            const extra: RpcCreditsBalanceExtra = {
+              ...row.extra,
+              ...upstreamPackages > 0
+                ? {
+                    upstreamUsed: {
+                      total: Math.round(upstreamTotal * 100) / 100,
+                      packages: upstreamPackages,
+                      note: '上游自报已用量：按资源包周期累计，包轮换会重置。仅供与下方今日记录对照，不是今日消耗。',
+                    },
+                  }
+                : {},
+              recordedSpent: {
+                spent: Math.round((recorded ?? 0) * 100) / 100,
+                note: '本插件按余额差值记录的今日消耗（UTC+8）。与上游累计口径不同，两者差异大说明采样有遗漏。',
+              },
+            }
+            return { ...row, extra }
+          })
           // ⚠️ TRAE 也回传窗口天数：它的资源包现在带 `deductionEndTime`
           // （条目级 `expire_time`，秒→毫秒），面板要按「长期 / 临时」分桶显示。
           // 没有窗口天数前端会拒绝渲染分类行（见 credit-expiry.js 的
@@ -3216,7 +3261,7 @@ function registerChannelPackEndpoints(
           return {
             ok: true,
             value: {
-              accounts: values,
+              accounts: withCrossCheck,
               windowDays: buddyExpiringWindowDays(),
             } satisfies RpcCreditsBalancesResponse,
           }
