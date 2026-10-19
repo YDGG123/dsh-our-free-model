@@ -423,6 +423,31 @@ function main() {
        */
       const branch = process.env.OFM_PUSH_BRANCH ?? 'main'
       say(`推送 HEAD → origin/${branch}（--ci，常规 git push）…`)
+      /**
+       * 推送前先看一眼「远端分支是否存在、HEAD 是否是它的后代」。
+       *
+       * 云端 runner 是全新 checkout（`HEAD` 就是 `main` 的检出），这是快进推送。
+       * 但在**本机**用 `--ci` 试跑时，`HEAD` 是 `custom-main` 而目标是 `main`
+       * （squash 历史）⇒ 必然 non-fast-forward。那种失败信息（"failed to push
+       * some refs"）不会告诉用户「这是模式用错了」，只会让人以为同步坏了。
+       *
+       * 所以这里显式判定并给出**可照做**的提示；真正的推送逻辑不变。
+       */
+      const remoteRef = run('git', ['rev-parse', '--verify', '--quiet', `origin/${branch}`])
+      if (remoteRef.code === 0) {
+        const remoteSha = remoteRef.output.trim()
+        const behind = run('git', ['merge-base', '--is-ancestor', remoteSha, 'HEAD'])
+        if (behind.code !== 0) {
+          say(
+            `⚠️ 本地 HEAD 不是 origin/${branch} 的后代（远端 ${remoteSha.slice(0, 7)}）。\n`
+            + '  云端 runner 每次都是全新 checkout（HEAD 即该分支），故那里是快进推送；\n'
+            + '  在本机用 --ci 试跑时 HEAD 是 custom-main、目标是 squash 历史的 main，\n'
+            + '  必然 non-fast-forward —— 这不是同步失败，是模式与本机分支布局不匹配。\n'
+            + '  本机要发布请用 `node scripts/sync-upstream.mjs --push`（走 API squash 通道）。',
+          )
+          throw new Error(`HEAD 不是 origin/${branch} 的后代，拒绝推送（--ci 只能用于云端全新 checkout）`)
+        }
+      }
       const pushed = run('git', ['push', 'origin', `HEAD:${branch}`])
       say(pushed.output.trim().slice(-1500))
       if (pushed.code !== 0) throw new Error('推送失败')

@@ -386,6 +386,10 @@ await checkAsync('sync-upstream 的 --ci 推送是**两段式**（推完再刷�
   assert.ok(pushes.length >= 2, `--ci 分支应有两次 push（实际 ${pushes.length}）`)
   // 刷新后要自证，不靠推断。
   assert.match(ciBlock, /catalog-test\.mjs/, '刷新后必须跑 catalog-test 自证')
+  // 推送前必须有「祖先检查」，否则本机用 --ci 试跑只会得到一句
+  // "failed to push some refs"，看不出是模式与本机分支布局不匹配。
+  assert.match(ciBlock, /merge-base.*--is-ancestor/, '推送前必须检查 HEAD 是否为远端后代')
+  assert.match(ciBlock, /只能用于云端全新 checkout/, '拒绝时必须说明原因与替代做法')
   // ⚠️ 不能用 reset --hard 到远端：会丢掉本地 merge 历史。
   // 只看**非注释行**（注释里会引用这句话作为反例说明）。
   const ciCode = ciBlock.split('\n').filter(line => !/^\s*(\/\/|\*|\/\*|\*\/)/.test(line)).join('\n')
