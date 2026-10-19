@@ -58,6 +58,7 @@ const suites = [
   ['credit-usage', 'credit-usage-test.mjs', []],
   ['credit-sampling', 'credit-sampling-test.mjs', []],
   ['cloud-sync', 'cloud-sync-test.mjs', []],
+  ['api-push', 'api-push-test.mjs', []],
   // ⚠️ `channel-credits-rpc` / `channel-model-actions` **不列为独立套件**：
   // 它们需要 `channel-pack-test.mjs` 挂载出来的宿主上下文（ctx / call / creds /
   // adapters），单独 spawn 一个进程没有那些东西。曾经它们也在表里，于是
