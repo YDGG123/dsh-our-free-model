@@ -149,6 +149,67 @@ node scripts/check-sync-failure.mjs --force     # 忽略去重，无条件弹一
 Label 建议 `com.ydgg.ofm-check-sync-failure`，装好 `launchctl load` 即可。
 （plist 由 Chief 执行，本任务只产出脚本与这段配置。）
 
+## ⚠️ squash 推送后的 revision 口径（今天踩了三轮的教训）
+
+`catalog.source.revision` 的定义是「**最后一次触碰发布内容的提交**」。
+在**普通 git 历史**下这很直观，但本 fork 的 `main` 是 **squash 历史**
+（每次推送生成一个新提交，父提交是远端 main），于是有三个 sha 同时存在、
+**只有一个是正确的**：
+
+| 候选 | 是什么 | 对不对 |
+|---|---|---|
+| 本地 `HEAD` / 本地算出 `git log -1 -- <pkg.files>` | 本机最后一次触碰发布内容的提交 | ❌ **远端不存在**（实测 `GET /git/commits/<local>` → 404） |
+| 推送当次 API 返回的 `commit.sha` | 刚 push 上去的那个提交 | ⚠️ **暂时对，但下一次推送就过期** |
+| **远端发布内容最后触碰提交** | 远端 `git log -1 -- <发布内容>` 的结果 | ✅ **这才是校验口径** |
+
+### 它怎么失败（release-sign 的三个阶段）
+
+`release-sign.yml` 的判定顺序是：
+
+```text
+build-manifest --check   ── 通过 ⇒ 跳过重签/刷新
+                         └─ 不通过 ⇒ 重签 + refresh-revision.mjs
+        ↓
+test-all --mode release  ── catalog-test 校验 revision
+```
+
+于是有三种典型失败：
+
+1. **只推一次（单段）**：远端写了本期内容，但 revision 还是本地 sha ⇒
+   `--check` 通过（字节一致）⇒ 不刷新 ⇒ catalog-test 报
+   `got "<local>", want "<remote>"` ⇒ 红。
+2. **推两次（两段式）**：第二段把 revision 写成「刚推上去的 sha」⇒ 远端此刻自洽，
+   `--check` 可能通过 ⇒ **这次能绿**。但**下一次推送又会把它变成过期值**。
+3. **两段式让字节与清单不一致**：`--check` 不通过 ⇒ 走重签 +
+   `refresh-revision.mjs` ⇒ revision 被改成**远端真实值** ⇒ 通过。
+   （实测 run 39249176669 就是这样变绿的。）
+
+### 结论（写死在这里，别再猜）
+
+- **权威值只有一个**：在**远端分支上**跑
+  `git log -1 --format=%H -- package.json <pkg.files…>`。
+- 本机算出来的值**不能**直接用（远端根本没那个提交）。
+- 推送当次的 sha **只是权宜**，下一次推送就会过期 —— 这也是为什么
+  `release-sign` 必须保留「`--check` 失败就刷新」这条兜底路径：
+  **它是最终的纠偏机制**，比我们自己猜 sha 可靠。
+- 因此：**两段式推送 + 保留 release-sign 的刷新兜底** 是当前最优组合；
+  不要试图在推送脚本里「算出未来那个 sha」（squash 场景算不出来）。
+
+## ⚠️ 云端 checkout 后必须还原 `package-lock.json`
+
+`npm install --ignore-scripts` 会重写 lockfile：给若干 peer 依赖补上
+`"peer": true`（runner 上的 npm 与本地 npmmirror 镜像行为不同，**本地复现不到**）。
+同步脚本第一步「工作区必须干净」于是拒绝：`M package-lock.json`。
+
+正确修法是**装完还原**，而不是放宽脏树检查（那会掩盖真实脏树）：
+
+```bash
+npm install --ignore-scripts
+git diff --quiet -- package-lock.json || git checkout -- package-lock.json
+```
+
+lockfile 还必须以仓库为准：发布清单按它算 digest，改了会让 manifest 漂移。
+
 ## 失败处理 SOP
 
 云端失败时 Actions 会红，`sync-failure` 分支有 `.private/sync-failure.json`：
