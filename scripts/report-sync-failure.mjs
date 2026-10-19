@@ -78,6 +78,8 @@ export async function reportSyncFailure({
   owner,
   repo,
   branch = SYNC_FAILURE_BRANCH,
+  /** 新建分支时用哪个分支的 HEAD 作为起点。 */
+  baseBranch = 'main',
   path = SYNC_FAILURE_PATH,
   fetchImpl = fetch,
 }) {
@@ -96,7 +98,21 @@ export async function reportSyncFailure({
       const body = await existing.json()
       if (typeof body?.sha === 'string') sha = body.sha
     }
-  } catch { /* 分支不存在 = 首次写入，忽略 */ }
+  } catch { /* 读不到 = 首次写入，忽略 */ }
+
+  /**
+   * ⚠️ **分支不存在时 Contents API 不会自动创建它**（真实故障，2026-10-19
+   * run 39246861262）：PUT 直接返回
+   * `404 Branch sync-failure not found` —— 而这条 404 很容易被误读成
+   * 「token 没权限」，实际只是分支还没建。
+   *
+   * 故先确保分支存在：拿 `baseBranch`（默认 `main`）的 HEAD 建一个新 ref。
+   * 已存在时 422（"Reference already exists"），那是正常情况，忽略即可。
+   */
+  const apiBase = `https://api.github.com/repos/${owner}/${repo}`
+  const ensured = await ensureBranch({ fetchImpl, headers, branch, baseBranch, apiBase })
+  // 建分支失败不立即返回：仍试一次 PUT（也许分支其实已存在、只是探测被限流）。
+  // 但把原因带进最终错误里，否则「404 Branch not found」会让人以为是权限问题。
 
   const body = {
     message: 'chore(sync): record upstream sync failure',
@@ -106,13 +122,67 @@ export async function reportSyncFailure({
   }
   const response = await fetchImpl(api, { method: 'PUT', headers, body: JSON.stringify(body) })
   const text = await response.text()
+  /**
+   * 兜底：即便上面已建分支，仍可能撞到 404（分支刚被删 / 并发）。再试一次，
+   * 仍失败就如实返回 —— 通知链路宁可有明确错误，也不要静默成功。
+   */
+  if (response.status === 404) {
+    const retried = await ensureBranch({ fetchImpl, headers, branch, baseBranch, apiBase })
+    if (retried.ok) {
+      const again = await fetchImpl(api, { method: 'PUT', headers, body: JSON.stringify(body) })
+      const againText = await again.text()
+      return {
+        ok: again.ok,
+        status: again.status,
+        message: again.ok ? 'written' : againText.slice(0, 300),
+      }
+    }
+  }
   return {
     ok: response.ok,
     status: response.status,
-    message: response.ok ? 'written' : text.slice(0, 300),
+    message: response.ok
+      ? 'written'
+      : `${text.slice(0, 300)}${ensured.ok ? '' : `（分支准备失败：${ensured.reason ?? '未知'}）`}`,
   }
 }
 
+/**
+ * 确保目标分支存在（不存在就从 `baseBranch` 的 HEAD 建一个）。
+ *
+ * 只做两件事，直白、可测：
+ * 1. `GET /git/ref/heads/<branch>` —— 存在就返回；
+ * 2. 不存在 ⇒ `POST /git/refs` 用 base 分支的 sha 建；422（已存在）也算成。
+ *
+ * @returns `{ ok: boolean, created: boolean, reason?: string }`
+ */
+export async function ensureBranch({ fetchImpl, headers, branch, baseBranch, apiBase }) {
+  const refUrl = name => `${apiBase}/git/ref/heads/${name}`
+  // ① 目标分支已在？
+  const existing = await fetchImpl(refUrl(branch), { headers })
+  if (existing.ok) return { ok: true, created: false }
+  if (existing.status !== 404) {
+    return { ok: false, created: false, reason: `探测分支失败：HTTP ${existing.status}` }
+  }
+  // ② 取 base 分支的 sha 作为起点
+  const base = await fetchImpl(refUrl(baseBranch), { headers })
+  if (!base.ok) {
+    return { ok: false, created: false, reason: `取 ${baseBranch} 的 HEAD 失败：HTTP ${base.status}` }
+  }
+  const sha = (await base.json())?.object?.sha
+  if (typeof sha !== 'string' || sha.length === 0) {
+    return { ok: false, created: false, reason: `${baseBranch} 没有可用的 HEAD sha` }
+  }
+  // ③ 建分支
+  const create = await fetchImpl(`${apiBase}/git/refs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+  })
+  // 422 = 已存在（并发场景），同样可用。
+  if (create.ok || create.status === 422) return { ok: true, created: create.ok }
+  return { ok: false, created: false, reason: `建分支失败：HTTP ${create.status}` }
+}
 /**
  * 是否被直接执行。用 `pathToFileURL` 而不是字符串拼接：本仓库路径含空格，
  * 手工拼 `file://` 会与 `import.meta.url` 的百分号编码形式不相等

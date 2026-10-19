@@ -185,6 +185,60 @@ async function uploadBlob(sha) {
   return payload.sha
 }
 
+/**
+ * 以 `baseSha` 为远端基线，把**本地工作树的内容**推成**一个**提交。
+ *
+ * 抽成函数只为一件事：两段式推送的第二段要复用同一套差异推送（第二次
+ * 差异只含 catalog/feed）。原先是内联在 `main()` 里的一大段，没法复用。
+ *
+ * @returns 新提交的 sha；内容已一致时返回 `null`（无需推送）。
+ */
+async function pushOneCommit({ baseSha, message, verbose = true }) {
+  const say = verbose ? console.log : () => {}
+  const remoteCommit = await api('GET', `/git/commits/${baseSha}`)
+  const remoteTree = remoteCommit.tree.sha
+  const localTree = git('rev-parse', 'HEAD^{tree}').trim()
+  if (localTree === remoteTree) return null
+
+  // 差异清单（-z 格式：":oldmode newmode oldsha newsha status\0path\0"）。
+  const raw = git('diff-tree', '-r', '-z', '--no-commit-id', remoteTree, 'HEAD')
+  const entries = parseDiffTree(raw)
+  const items = []
+  for (const entry of entries) {
+    if (entry.status === 'D') {
+      // 删除条目：见 parseDiffTree 的注释（mode 必须是合法值且 sha 为 null）。
+      items.push({ path: entry.path, mode: entry.mode, type: 'blob', sha: null })
+      say(`  D ${entry.path}`)
+    } else {
+      const sha = await uploadBlob(entry.newSha)
+      items.push({ path: entry.path, mode: entry.mode, type: 'blob', sha })
+      if (verbose) {
+        const kilobytes = Math.round(Number(execFileSync('git', ['cat-file', '-s', sha], { cwd: root })) / 1024)
+        say(`  ${entry.status} ${entry.path} (${kilobytes} KB)`)
+      }
+    }
+  }
+  if (items.length === 0) return null
+  say(`共 ${items.length} 个差异条目`)
+
+  const tree = (await api('POST', '/git/trees', { base_tree: remoteTree, tree: items })).sha
+  say(`新 tree: ${tree.slice(0, 7)}`)
+
+  const now = new Date().toISOString()
+  const commit = await api('POST', '/git/commits', {
+    message,
+    tree,
+    parents: [baseSha],
+    author: { name: 'YDGG123', email: 'YDGG123@users.noreply.github.com', date: now },
+    committer: { name: 'YDGG123', email: 'YDGG123@users.noreply.github.com', date: now },
+  })
+  say(`新提交: ${commit.sha.slice(0, 7)}`)
+
+  // 移动引用（指向自己刚建的提交；force 以防推送竞态覆盖中间提交）。
+  await api('PATCH', `/git/refs/heads/${BRANCH}`, { sha: commit.sha, force: true })
+  return commit.sha
+}
+
 async function main() {
   // 1. 发现远端现状（无硬编码 —— 反复运行安全）。
   const ref = await api('GET', `/git/refs/heads/${BRANCH}`)
@@ -202,58 +256,80 @@ async function main() {
     return
   }
 
-  // 2. 差异清单（-z 格式：":oldmode newmode oldsha newsha status\0path\0"）。
-  const raw = git('diff-tree', '-r', '-z', '--no-commit-id', remoteTree, 'HEAD')
-  const entries = parseDiffTree(raw)
-  const items = []
-  for (const entry of entries) {
-    if (entry.status === 'D') {
-      // 删除条目：见 parseDiffTree 的注释（mode 必须是合法值且 sha 为 null）。
-      items.push({ path: entry.path, mode: entry.mode, type: 'blob', sha: null })
-      console.log(`  D ${entry.path}`)
-    } else {
-      const sha = await uploadBlob(entry.newSha)
-      items.push({ path: entry.path, mode: entry.mode, type: 'blob', sha })
-      const kilobytes = Math.round(Number(execFileSync('git', ['cat-file', '-s', sha], { cwd: root })) / 1024)
-      console.log(`  ${entry.status} ${entry.path} (${kilobytes} KB)`)
-    }
-  }
-  if (items.length === 0) {
-    console.log('✅ 无差异条目')
-    return
-  }
-  console.log(`共 ${items.length} 个差异条目`)
-
   if (checkOnly) {
+    // `--check` 只列差异，不写任何东西（沿用原来的行为）。
+    const entries = parseDiffTree(git('diff-tree', '-r', '-z', '--no-commit-id', remoteTree, 'HEAD'))
+    for (const entry of entries) {
+      const note = entry.status === 'D' ? `mode ${entry.mode}` : `${Math.round(Number(execFileSync('git', ['cat-file', '-s', entry.newSha], { cwd: root })) / 1024)} KB`
+      console.log(`  ${entry.status} ${entry.path} (${note})`)
+    }
+    console.log(`共 ${entries.length} 个差异条目`)
     console.log('--check：未写入任何东西')
     return
   }
 
-  // 3. 新 tree（base_tree = 远端，只发差异）。
-  const tree = (await api('POST', '/git/trees', { base_tree: remoteTree, tree: items })).sha
-  console.log(`新 tree: ${tree.slice(0, 7)}`)
-
-  // 4. 单个提交，父 = 远端 main。
+  // 2. 第一段：推内容。
   const message = messageFile !== undefined
     ? fs.readFileSync(messageFile, 'utf8')
-    : `chore(fork): 同步本地内容（${items.length} 个文件差异）
+    : `chore(fork): 同步本地内容
 
 本地 HEAD ${localHead.slice(0, 7)}；远端基线 ${remoteSha.slice(0, 7)}。
-由 scripts/api-push-squash.mjs 生成：内容与本地逐字节一致（tree
-${tree.slice(0, 7)}），历史压扁，完整提交历史在本地仓库。`
-  const now = new Date().toISOString()
-  const commit = await api('POST', '/git/commits', {
-    message,
-    tree,
-    parents: [remoteSha],
-    author: { name: 'YDGG123', email: 'YDGG123@users.noreply.github.com', date: now },
-    committer: { name: 'YDGG123', email: 'YDGG123@users.noreply.github.com', date: now },
-  })
-  console.log(`新提交: ${commit.sha.slice(0, 7)}`)
+由 scripts/api-push-squash.mjs 生成：内容与本地逐字节一致，历史压扁，
+完整提交历史在本地仓库。`
+  const pushedSha = await pushOneCommit({ baseSha: remoteSha, message })
+  if (pushedSha === null) {
+    console.log('✅ 无差异条目')
+    return
+  }
+  console.log(`✅ 远端 ${BRANCH} -> ${pushedSha.slice(0, 7)}（共 ${calls} 次 API 调用）`)
 
-  // 5. 移动引用（指向自己刚建的提交；force 以防推送竞态覆盖中间提交）。
-  await api('PATCH', `/git/refs/heads/${BRANCH}`, { sha: commit.sha, force: true })
-  console.log(`✅ 远端 ${BRANCH} -> ${commit.sha.slice(0, 7)}（共 ${calls} 次 API 调用）`)
+  /**
+   * ## 第二段：把 catalog 的 revision 指向**刚推上去的远端提交**
+   *
+   * ### 为什么必须推两次（真实故障，2026-10-19 release-sign run 39244615254）
+   *
+   * catalog 的 `source.revision` 必须是「最后一次触碰发布内容的提交」。
+   * squash 推送后远端多出的是**新**提交，而本地记录的是本地 commit ——
+   * 那个 sha 在远端**根本不存在**（实测 `GET /git/commits/<local>` → 404）。
+   * 于是 `main` 上的 `release-sign.yml` 触发后：
+   *
+   *   - `build-manifest --check` **通过**（字节一致）⇒ 刷新分支不进入；
+   *   - 紧接着 release 套件的 `catalog-test` 报
+   *     `source revision ... got "<local>", want "<remote>"` ⇒ 红。
+   *
+   * 修法：写进 catalog，再按**同一套差异推送**推一次。第二次只改
+   * `catalog/` 与 `feed/`，不移动 revision 指针本身（该指针只统计发布内容），
+   * 所以不会循环。
+   */
+  const changed = refreshCatalogRevision(pushedSha)
+  if (!changed) {
+    console.log('✅ catalog revision 已指向远端提交，无需第二段推送')
+    return
+  }
+  console.log('第二段：推送刷新后的 catalog（revision → 远端提交）…')
+  const secondSha = await pushOneCommit({
+    baseSha: pushedSha,
+    message: `catalog: refresh revision over ${pushedSha.slice(0, 7)}`,
+  })
+  if (secondSha === null) {
+    console.log('✅ 第二段无差异（revision 已是目标值）')
+    return
+  }
+  console.log(`✅ 远端 ${BRANCH} -> ${secondSha.slice(0, 7)}（两段推送完成）`)
+}
+
+/**
+ * 用 `set-catalog-revision.mjs` 把两处 revision 写成给定 sha。
+ *
+ * @returns 是否真的改了文件（没变就不需要第二段推送）。
+ */
+function refreshCatalogRevision(revision) {
+  // ⚠️ ESM 里没有 `require` —— 原来写 `const { execFileSync } = require(...)`
+  // 会直接抛 `require is not defined`（本文件顶部已 import execFileSync）。
+  const before = git('diff', '--name-only').trim()
+  execFileSync('node', ['scripts/set-catalog-revision.mjs', revision], { cwd: root, stdio: 'inherit' })
+  const after = git('diff', '--name-only').trim()
+  return before !== after
 }
 
 /**
