@@ -93,8 +93,24 @@ jobs:
       # 依赖：本仓库的套件是纯 Node 脚本，但 channel-pack 构建需要 esbuild，
       # standalone 前端套件需要 typescript/esbuild。用 --ignore-scripts：
       # 不跑生命周期脚本（与 test.yml 同口径）。
+      # ## ⚠️ 装完必须还原 package-lock.json（真实故障，2026-10-19 run 39246861262）
+      #
+      # `npm install` 会重写 lockfile：给若干 peer 依赖补上 `"peer": true`
+      # 标记（本地 npmmirror 镜像与 runner 上的 npm 行为不同，本地复现不到）。
+      # 于是同步脚本第一步的「工作区必须干净」检查直接拒绝：
+      #
+      #     M package-lock.json
+      #
+      # 这不是脏树、也不该让脚本为此放宽检查（那会掩盖真实脏树）。正确做法是
+      # **装完把 lockfile 还原**：我们要的只是 node_modules，lockfile 的内容
+      # 以仓库为准（发布清单也按它算 digest，改了反而会让 manifest 漂移）。
       - name: 安装依赖
-        run: npm install --ignore-scripts
+        run: |
+          npm install --ignore-scripts
+          if ! git diff --quiet -- package-lock.json; then
+            echo "::notice::npm install 改写了 package-lock.json（peer 标记），已还原：lockfile 以仓库为准"
+            git checkout -- package-lock.json
+          fi
 
       - name: 配置 git 身份与远端
         env:

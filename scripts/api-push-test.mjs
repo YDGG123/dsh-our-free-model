@@ -123,5 +123,28 @@ check('其它状态码原样透出，不编造提示', () => {
   assert.equal(text, 'GET /x -> HTTP 500: Server Error')
 })
 
+// ── 两段式推送（真实故障：release-sign 因 revision 失效变红） ──────────────
+
+await (async () => {
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./api-push-squash.mjs', import.meta.url), 'utf8')
+  check('api-push-squash 推完必须刷新 revision 并二次推送（两段式）', () => {
+    // 2026-10-19 release-sign run 39244615254：squash 推送后远端是新提交，
+    // catalog 里记的本地 sha 在远端不存在（GET /git/commits/<local> → 404），
+    // 于是 release 套件的 catalog-test 报 got/want 不一致。
+    assert.match(source, /set-catalog-revision\.mjs/, '必须复用 set-catalog-revision')
+    assert.match(source, /pushOneCommit/, '推送逻辑要可复用（两段各推一次）')
+    const callSites = source.match(/await pushOneCommit\(/g) ?? []
+    assert.ok(callSites.length >= 2, `必须有两段推送（实际 ${callSites.length} 处调用）`)
+    assert.match(source, /refreshCatalogRevision\(pushedSha\)/, '第二段的 revision 必须是刚推上去的 sha')
+  })
+
+  check('按同一套差异推送：删除条目 mode 仍走 DELETED_ENTRY_MODE', () => {
+    // 两段式重构后，删除条目的归一必须在**共用的** pushOneCommit 里，
+    // 否则第二段（只推 catalog/feed）虽不受影响，但第一段会退回 422。
+    assert.match(source, /status === 'D'[\s\S]{0,80}entry\.mode/, '删除条目必须用 parseDiffTree 归一后的 mode')
+  })
+})()
+
 console.log(`api-push: ${failures === 0 ? 'all ok' : `${failures} failure(s)`}`)
 process.exitCode = failures > 0 ? 1 : 0

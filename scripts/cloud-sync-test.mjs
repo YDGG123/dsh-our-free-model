@@ -93,6 +93,86 @@ await checkAsync('写失败时如实返回 ok=false 与状态码', async () => {
   assert.match(result.message, /not accessible/)
 })
 
+// ── 分支自动创建（真实故障：404 Branch sync-failure not found） ───────────────
+
+const apiBaseOf = (owner, repo) => `https://api.github.com/repos/${owner}/${repo}`
+
+await checkAsync('目标分支不存在 ⇒ 自动从 base 分支的 HEAD 建出来', async () => {
+  const calls = []
+  const shaMain = 'f'.repeat(40)
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method ?? 'GET'
+    calls.push({ url, method, body: init.body })
+    if (url.includes('/git/ref/heads/sync-failure')) return new Response('{}', { status: 404 })
+    if (url.includes('/git/ref/heads/main')) return Response.json({ object: { sha: shaMain } })
+    if (url.endsWith('/git/refs') && method === 'POST') return Response.json({ ref: 'refs/heads/sync-failure' }, { status: 201 })
+    throw new Error(`unexpected ${method} ${url}`)
+  }
+  const result = await report.ensureBranch({
+    fetchImpl, headers: {}, branch: 'sync-failure', baseBranch: 'main', apiBase: apiBaseOf('o', 'r'),
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.created, true, '应真的创建了分支')
+  const create = calls.find(call => call.method === 'POST')
+  assert.deepEqual(JSON.parse(create.body), { ref: 'refs/heads/sync-failure', sha: shaMain })
+})
+
+await checkAsync('分支已存在 ⇒ 不重复创建', async () => {
+  const calls = []
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, method: init.method ?? 'GET' })
+    if (url.includes('/git/ref/heads/sync-failure')) return Response.json({ object: { sha: 'a'.repeat(40) } })
+    throw new Error(`unexpected ${url}`)
+  }
+  const result = await report.ensureBranch({
+    fetchImpl, headers: {}, branch: 'sync-failure', baseBranch: 'main', apiBase: apiBaseOf('o', 'r'),
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.created, false)
+  assert.equal(calls.filter(call => call.method === 'POST').length, 0, '不该发创建请求')
+})
+
+await checkAsync('创建时撞 422（并发已建）⇒ 视为可用', async () => {
+  const fetchImpl = async (url, init = {}) => {
+    if (url.includes('/git/ref/heads/sync-failure')) return new Response('{}', { status: 404 })
+    if (url.includes('/git/ref/heads/main')) return Response.json({ object: { sha: 'b'.repeat(40) } })
+    return new Response('{"message":"Reference already exists"}', { status: 422 })
+  }
+  const result = await report.ensureBranch({
+    fetchImpl, headers: {}, branch: 'sync-failure', baseBranch: 'main', apiBase: apiBaseOf('o', 'r'),
+  })
+  assert.equal(result.ok, true, '422 = 已存在，不是失败')
+})
+
+await checkAsync('reportSyncFailure：分支不存在时先建分支再 PUT（端到端契约）', async () => {
+  const calls = []
+  let branchExists = false
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method ?? 'GET'
+    calls.push({ url, method })
+    // 探测目标分支
+    if (url.includes('/git/ref/heads/sync-failure')) {
+      return branchExists ? Response.json({ object: { sha: 'c'.repeat(40) } }) : new Response('{}', { status: 404 })
+    }
+    if (url.includes('/git/ref/heads/main')) return Response.json({ object: { sha: 'd'.repeat(40) } })
+    if (url.endsWith('/git/refs') && method === 'POST') { branchExists = true; return Response.json({}, { status: 201 }) }
+    // 内容读写
+    if (url.includes('/contents/')) {
+      if (method === 'GET') return branchExists ? new Response('{}', { status: 404 }) : new Response('{}', { status: 404 })
+      // 关键：分支不存在时 GitHub 返回 404（这正是原始故障）
+      if (!branchExists) return new Response('{"message":"Branch sync-failure not found"}', { status: 404 })
+      return Response.json({ content: { sha: 'e' } }, { status: 201 })
+    }
+    throw new Error(`unexpected ${method} ${url}`)
+  }
+  const result = await report.reportSyncFailure({
+    payload: report.normalizeFailure({ failedStep: 'test-failed' }),
+    token: 't', owner: 'o', repo: 'r', fetchImpl,
+  })
+  assert.equal(result.ok, true, `首次写入应成功（此前这里是 404）：${result.message}`)
+  assert.ok(calls.some(call => call.method === 'POST' && call.url.endsWith('/git/refs')), '必须先建分支')
+})
+
 // ── 载荷归一化 ───────────────────────────────────────────────────────────────
 
 check_('缺字段的载荷被补齐（通知里不能出现 undefined）', () => {
