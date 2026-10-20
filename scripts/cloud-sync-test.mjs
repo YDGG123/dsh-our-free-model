@@ -185,16 +185,43 @@ await checkAsync('--ci 刷新 revision 必须用「最后触碰发布内容的�
   const fs2 = await import('node:fs')
   const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
   const startAt = source.indexOf('if (ciMode)')
-  const ciBlock = source.slice(startAt, startAt + 12000)
+  const ciBlock = source.slice(startAt, startAt + 14000)
 
-  // 必须出现「按 package.json + files 重算」的调用。
-  assert.match(ciBlock, /git\('log', '-1', '--format=%H', '--', \.\.\.filesForRevision\)/,
-    '必须重算「最后触碰发布内容的提交」')
-  // 且不能把 workHead 直接喂给 set-catalog-revision。
+  // ⚠️ 2026-10-20 收尾：算法收进 scripts/lib/catalog-revision.mjs（唯一实现）。
+  //    这里断言的是「调用共用 helper，且在**远端**分支上算」，而不是某行 regex
+  //    —— 后者只能证明写了什么，证明不了算得对（算法正确性由
+  //    scripts/catalog-revision-test.mjs 用真实 git 仓库验证）。
+  //
+  // ⚠️ 切片必须卡在「写 catalog 之前」：自证段后面也会调 remoteContentRevision，
+  //    否则把第一段改回 contentRevisionAt('HEAD') 仍然能匹配上（变异测试实测漏过）。
+  const writeAt = ciBlock.indexOf('set-catalog-revision.mjs')
+  const beforeWrite = ciBlock.slice(0, writeAt === -1 ? undefined : writeAt)
+  assert.match(beforeWrite, /remoteContentRevision\(\s*workBranch/,
+    '写入 catalog 之前必须在远端工作分支上重算 revision（本地 HEAD 不算）')
+  assert.ok(!/contentRevisionAt\(\s*'HEAD'\s*,[^)]*\)\s*$/m.test(beforeWrite)
+    || /const contentRevision = remoteContentRevision/.test(beforeWrite),
+    '写 catalog 用的 contentRevision 不能取自本地 HEAD')
+  // 且不能把 workHead / 推送前 sha 直接喂给 set-catalog-revision。
   assert.ok(!/set-catalog-revision\.mjs', workHead/.test(ciBlock),
     '不能用推送后的 HEAD 充当 revision（那会把正确的值改错）')
+  assert.ok(!/set-catalog-revision\.mjs', preMergeHead/.test(ciBlock),
+    '不能用推送前的 sha 充当 revision（远端根本不存在这个提交）')
+  // 写完必须自证：catalog 记录值 == 远端重算值。
+  assert.match(ciBlock, /catalogRevision\(\s*\{\s*root\s*\}\s*\)/, '必须读取 catalog 现值做自证')
+  assert.match(ciBlock, /自证通过/, '自证失败要红，不能静默通过')
   // 提交信息也应引用重算值。
   assert.match(ciBlock, /refresh revision over \$\{contentRevision\.slice/, '提交信息应使用重算值')
+})
+
+await checkAsync('投影发布分支后也要在远端分支上自证 revision', async () => {
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
+  const ciBlock = source.slice(source.indexOf('if (ciMode)'), source.indexOf('if (ciMode)') + 14000)
+  // history 模式：main 与工作分支同提交 ⇒ 两边的远端重算值必须相等。
+  assert.match(ciBlock, /remoteContentRevision\(\s*releaseBranch/,
+    `投影后必须在 ${'${releaseBranch}'} 上重算并比对`)
+  assert.match(ciBlock, /投影后 .* 的 revision 与工作分支不一致|revision 与工作分支不一致/,
+    '不一致必须报错')
 })
 
 // ── 成功后清除失败记录（真实缺陷：同步成功却还在弹旧失败） ────────────────
@@ -540,7 +567,12 @@ await checkAsync('--fail-file 在失败时真的写出状态文件（端到端�
   // ⚠️ clone 拿到的是 **HEAD 里的脚本**，而本用例要测的是**当前工作区**的版本
   //（改动可能还没提交）。把工作区文件覆盖进去，否则测的是旧代码 —— 这正是
   // 第一次跑这条用例时它「通过不了」的原因：clone 里还是没定义 `flag` 的旧版。
-  for (const rel of ['scripts/sync-upstream.mjs']) {
+  //
+  // ⚠️ 新增的模块文件（如 `scripts/lib/catalog-revision.mjs`）也必须一起复制：
+  // 同步脚本现在 import 它，缺了就在 clone 里报 ERR_MODULE_NOT_FOUND，而症状是
+  // 「状态文件没写出来」—— 看起来像 failOut 的 bug，实际是夹具缺文件。
+  for (const rel of ['scripts/sync-upstream.mjs', 'scripts/lib/catalog-revision.mjs']) {
+    fs2.mkdirSync(path.dirname(path.join(clone, rel)), { recursive: true })
     fs2.copyFileSync(path.join(repo, rel), path.join(clone, rel))
   }
   // 一个必定失败的测试脚本。

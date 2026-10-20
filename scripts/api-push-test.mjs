@@ -136,7 +136,46 @@ await (async () => {
     assert.match(source, /pushOneCommit/, '推送逻辑要可复用（两段各推一次）')
     const callSites = source.match(/await pushOneCommit\(/g) ?? []
     assert.ok(callSites.length >= 2, `必须有两段推送（实际 ${callSites.length} 处调用）`)
-    assert.match(source, /refreshCatalogRevision\(pushedSha\)/, '第二段的 revision 必须是刚推上去的 sha')
+    /**
+     * ⚠️ 2026-10-20 收尾：第二段的 revision **不能**就是刚推上去的 sha。
+     * 若这次推送没碰发布内容（例如上游只改 README），「最后触碰发布内容的
+     * 提交」是更早的某个提交 —— 拿 push 出来的新提交去写，等于让 catalog
+     * 说了句假话。判据必须来自 `lib/catalog-revision.mjs`。
+     *
+     * ⚠️ 断言要卡在**调用点**：只匹配 `resolveRemoteRevision(` 会被函数定义
+     * 本身命中，于是 `const revision = pushedSha` 的变异照样全绿（实测漏过）。
+     */
+    assert.match(source, /const resolved = await resolveRemoteRevision\(\{/,
+      '第二段 revision 必须由远端重算决定（调用点，非定义）')
+    assert.match(source, /remoteContentRevision\(/, '必须复用 lib/catalog-revision（唯一实现）')
+    assert.ok(!/refreshCatalogRevision\(pushedSha\)/.test(source),
+      '不能把刚推上去的 sha 直接当 revision（它可能没碰发布内容）')
+    assert.ok(!/const revision = pushedSha/.test(source),
+      '不能把刚推上去的 sha 直接当 revision（同上一行的等价写法）')
+  })
+
+  check('api-push-squash 写完必须自证：catalog 值 == 远端重算值', () => {
+    assert.match(source, /catalogRevision\(/, '必须读取 catalog 现值做自证')
+    assert.match(source, /自证通过/, '自证失败要红，不能静默通过')
+    // 第二段只该动 catalog/feed；真动了发布内容说明混入了别的差异。
+    assert.match(source, /touchedReleaseContent/, '必须判断这次推送动没动发布内容')
+  })
+
+  check('降级基线必须是**推送前**读到的（推送后读会读到我们自己的内容）', () => {
+    // ⚠️ 真实缺陷（2026-10-20 收尾时自查发现）：第一版降级路径在写完 catalog
+    // 之后才去读远端 catalog 现值。但那时远端已经是我们刚推上去的内容 ——
+    // 于是「保持现值」变成「把过期值原样写回去」，等于什么都没修。
+    const pushAt = source.indexOf('const pushed = await pushOneCommit(')
+    const baselineAt = source.indexOf('const baselineRevision = await readRemoteCatalogRevision()')
+    assert.ok(baselineAt !== -1, '必须在推送前读远端 catalog 基线')
+    assert.ok(baselineAt < pushAt, '基线必须早于第一段推送（否则读到的是自己刚推的内容）')
+    assert.match(source, /baselineRevision,/, '基线必须传给 revision 判定')
+  })
+
+  check('git 传输不可用只判定一次（不重复等 75 秒）', () => {
+    // 本机 github:443 被阻断，单次失败要等 75 秒。判定过就记住，别再试。
+    assert.match(source, /gitTransportUnavailable/, '必须有「传输不可用」的记忆标志')
+    assert.match(source, /if \(!gitTransportUnavailable\)/, '第一次之后不应再尝试 fetch')
   })
 
   check('按同一套差异推送：删除条目 mode 仍走 DELETED_ENTRY_MODE', () => {

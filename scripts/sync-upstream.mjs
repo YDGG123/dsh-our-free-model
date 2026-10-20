@@ -71,6 +71,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import {
+  catalogRevision,
+  contentRevisionAt,
+  remoteContentRevision,
+} from './lib/catalog-revision.mjs'
 
 const root = path.join(fileURLToPath(new URL('..', import.meta.url)))
 const statePath = path.join(root, '.private', 'upstream-sync-state.json')
@@ -363,10 +368,14 @@ async function main() {
      * 立刻报 `source revision is the last commit that touched the release
      * content`。首次同步演练正是踩了类似的坑（漏刷新整个 revision）。
      *
+     * 这里是**合并后、推送前**的值：它描述「本地 HEAD 上的真相」，用于让推上去
+     * 的那一版当场自洽（`--ci` 下还会在推送后**换成远端重算值**，见第 8 段）。
+     * 算法统一走 `scripts/lib/catalog-revision.mjs`，不再在脚本里各写一份。
+     *
      * 只统计发布内容、**不含** `catalog/` 与 `feed/` ⇒ 本脚本随后的签名提交
      * 不会移动这个指针，不存在「永远追不上自己」的循环。
      */
-    const contentRevision = git('log', '-1', '--format=%H', '--', 'package.json', ...(pkg.files ?? [])).trim()
+    const contentRevision = contentRevisionAt('HEAD', { root })
     for (const [file, key] of [['catalog/dsh-plugin.json', 'revision'], ['catalog/provenance.json', 'sourceRevision']]) {
       const doc = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'))
       const target = file.includes('dsh-plugin') ? doc.source : doc.subject
@@ -513,35 +522,24 @@ async function main() {
       const workHead = run('git', ['rev-parse', `origin/${workBranch}`]).output.trim()
       say(`  ✅ ${workBranch} -> ${workHead.slice(0, 7)}`)
 
-      // ── ② 刷新 revision：**重算**「最后触碰发布内容的提交」 ──
+      // ── ② 刷新 revision：**在远端分支上**重算「最后触碰发布内容的提交」 ──
       //
-      // ## ⚠️ 不能用推送后的 HEAD（真实缺陷，2026-10-20 云端正式跑撞出）
+      // ## ⚠️ 这条口径踩了三次，每次都是「在别的对象上算」（2026-10-19/20）
       //
-      // 旧实现把 revision 设成 `workHead`（刚推上去的那个提交）。但那一轮里
-      // 我们**先**有 `build(channel-pack): 重建…`（碰了 `pack.js` = 发布内容），
-      // **之后**才提交 catalog（只碰 `catalog/`）。于是：
+      //   用本地 HEAD        ⇒ squash 推送后该 sha 在远端不存在（API 404）
+      //   用推送后的 HEAD    ⇒ 那个提交只碰 catalog，真正碰发布内容的是它前面
+      //                        的产物重建提交（c85e27e vs b005cb2）⇒ 写进去
+      //                        当场就是错值，effce98 又把对的改错了
+      //   用推送前的 sha     ⇒ 同上，只是换了时机
       //
-      //   c85e27e  build(channel-pack): 重建上游合并后的产物   ← 真正碰了发布内容
-      //   b005cb2  catalog: sign the release over c85e27e      ← 只碰 catalog
-      //   workHead = b005cb2  ⇒ 写成 revision 后**立刻就是错值**
-      //   effce98  catalog: refresh revision over b005cb2      ← 这一笔把对的改错了
+      // 唯一正确的对象是**远端分支上**的提交。所以这里 fetch 远端后，在
+      // `origin/<workBranch>` 上跑 `catalog-test` 的同一条 `git log`。
       //
-      // 云端报 `got "b005cb2", want "c85e27e"` 正是这个。
-      //
-      // 修法：**必须与 catalog-test 用同一算法**——在该分支上跑
-      // `git log -1 -- <package.json + pkg.files>`。HEAD 是不是那个提交无关紧要。
-      say('刷新 catalog revision（重算「最后触碰发布内容的提交」）…')
-      const filesForRevision = (() => {
-        try {
-          const manifestPkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-          return ['package.json', ...(manifestPkg.files ?? [])]
-        } catch { return ['package.json'] }
-      })()
-      const contentRevision = git('log', '-1', '--format=%H', '--', ...filesForRevision).trim()
-      if (!/^[0-9a-f]{40}$/.test(contentRevision)) {
-        throw new Error('无法解析「最后触碰发布内容的提交」，拒绝写入猜测值')
-      }
-      say(`  最后触碰发布内容 = ${contentRevision.slice(0, 7)}（HEAD 是 ${workHead.slice(0, 7)}）`)
+      // 算法本身收在 `scripts/lib/catalog-revision.mjs`：本脚本、`api-push-squash.mjs`
+      // 与任何未来的推送通道共用一份，不再各写一套（两次漂移都是这么来的）。
+      say('刷新 catalog revision（在远端分支上重算）…')
+      const contentRevision = remoteContentRevision(workBranch, { root })
+      say(`  最后触碰发布内容 = ${contentRevision.slice(0, 7)}（${workBranch} HEAD 是 ${workHead.slice(0, 7)}）`)
       const refreshed = run('node', ['scripts/set-catalog-revision.mjs', contentRevision])
       say(refreshed.output.trim().slice(-800))
       if (refreshed.code !== 0) throw new Error('刷新 revision 失败')
@@ -559,6 +557,26 @@ async function main() {
       } else {
         say('  revision 已正确，无需二次推送')
       }
+
+      /**
+       * ── ②b 自证：写完的值必须等于**远端重算值** ──
+       *
+       * 这一条是「不要再靠人工纠偏」的实际执行者：如果某个未来的改动让
+       * revision 与远端真相不一致，**在这里报错变红**，而不是推出去等
+       * `release-sign.yml` 用 `got/want` 报出来、再靠人手改。
+       *
+       * 为什么刷新提交本身不会让这里失败：它只碰 `catalog/` 与 `feed/`，
+       * 不属于发布内容 ⇒ 远端重算值不变（幂等）。
+       */
+      const verifyRevision = remoteContentRevision(workBranch, { root })
+      const recordedRevision = catalogRevision({ root })
+      if (recordedRevision !== verifyRevision) {
+        throw new Error(
+          `catalog revision 与远端真相不一致：catalog 写的是 ${String(recordedRevision).slice(0, 7)}，`
+          + `远端 ${workBranch} 重算得到 ${verifyRevision.slice(0, 7)}`,
+        )
+      }
+      say(`  ✅ 自证通过：catalog revision = ${verifyRevision.slice(0, 7)}（${workBranch} 远端重算）`)
 
       if (!pushBranch) {
         say(`OFM_PUSH_BRANCH_ONLY=1：跳过 ${releaseBranch} 的投影推送`)
@@ -584,6 +602,22 @@ async function main() {
         say(projected.output.trim().slice(-1500))
         if (projected.code !== 0) throw new Error(`投影 ${releaseBranch} 失败`)
         say(`  ✅ ${releaseBranch} 已与 ${workBranch} 同历史`)
+        /**
+         * ── ④b 发布分支上也自证一次 ──
+         *
+         * `history` 模式下 `main` 与工作分支同提交，重算值理应相同；但这条断言
+         * 是**给未来的自己留的安全网**：万一以后又出现「某次推送让 main 比
+         * 工作分支多出一个碰了发布内容的提交」，这里会立刻红，而不是让
+         * `release-sign.yml` 去发现。
+         */
+        const releaseRevision = remoteContentRevision(releaseBranch, { root })
+        if (releaseRevision !== contentRevision) {
+          throw new Error(
+            `投影后 ${releaseBranch} 的 revision 与工作分支不一致：`
+            + `${releaseRevision.slice(0, 7)} ≠ ${contentRevision.slice(0, 7)}`,
+          )
+        }
+        say(`  ✅ ${releaseBranch} revision 自证通过：${releaseRevision.slice(0, 7)}`)
       } else {
         say(`投影 HEAD → origin/${releaseBranch}（squash，单提交）…`)
         const tokenForPush = process.env.GH_TOKEN

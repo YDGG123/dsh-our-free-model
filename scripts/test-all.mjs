@@ -58,6 +58,9 @@ const suites = [
   ['credit-usage', 'credit-usage-test.mjs', []],
   ['credit-sampling', 'credit-sampling-test.mjs', []],
   ['cloud-sync', 'cloud-sync-test.mjs', []],
+  // revision 口径的**算法本身**（真实 git 仓库验证，不是正则断源码）。
+  // 与 cloud-sync / api-push 分开：那两个测的是调用点，这个测的是「算得对」。
+  ['catalog-revision', 'catalog-revision-test.mjs', []],
   ['api-push', 'api-push-test.mjs', []],
   // ⚠️ `channel-credits-rpc` / `channel-model-actions` **不列为独立套件**：
   // 它们需要 `channel-pack-test.mjs` 挂载出来的宿主上下文（ctx / call / creds /

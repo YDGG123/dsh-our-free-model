@@ -34,6 +34,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import {
+  catalogRevision,
+  readReleaseContentPaths,
+  remoteContentRevision,
+} from './lib/catalog-revision.mjs'
 
 const root = path.join(fileURLToPath(new URL('..', import.meta.url)))
 const OWNER = 'YDGG123'
@@ -191,7 +196,10 @@ async function uploadBlob(sha) {
  * 抽成函数只为一件事：两段式推送的第二段要复用同一套差异推送（第二次
  * 差异只含 catalog/feed）。原先是内联在 `main()` 里的一大段，没法复用。
  *
- * @returns 新提交的 sha；内容已一致时返回 `null`（无需推送）。
+ * @returns `null`（内容已一致，无需推送）或
+ *   `{ sha, touchedReleaseContent }` —— 后者告诉调用方这次推送**有没有动
+ *   发布内容**，是「远端 revision 到底是谁」的判据之一（见
+ *   {@link resolveRemoteRevision} 的降级路径）。
  */
 async function pushOneCommit({ baseSha, message, verbose = true }) {
   const say = verbose ? console.log : () => {}
@@ -203,6 +211,8 @@ async function pushOneCommit({ baseSha, message, verbose = true }) {
   // 差异清单（-z 格式：":oldmode newmode oldsha newsha status\0path\0"）。
   const raw = git('diff-tree', '-r', '-z', '--no-commit-id', remoteTree, 'HEAD')
   const entries = parseDiffTree(raw)
+  const releasePaths = readReleaseContentPaths({ root })
+  const touchedReleaseContent = entries.some(entry => isReleaseContentPath(entry.path, releasePaths))
   const items = []
   for (const entry of entries) {
     if (entry.status === 'D') {
@@ -236,7 +246,93 @@ async function pushOneCommit({ baseSha, message, verbose = true }) {
 
   // 移动引用（指向自己刚建的提交；force 以防推送竞态覆盖中间提交）。
   await api('PATCH', `/git/refs/heads/${BRANCH}`, { sha: commit.sha, force: true })
-  return commit.sha
+  return { sha: commit.sha, touchedReleaseContent }
+}
+
+/** 读远端 catalog 里当前记录的 revision（降级路径用；读不到返回 `undefined`）。 */
+async function readRemoteCatalogRevision() {
+  try {
+    const payload = await api('GET', `/contents/catalog/dsh-plugin.json?ref=${BRANCH}`)
+    const text = payload.content === undefined
+      ? ''
+      : Buffer.from(payload.content, payload.encoding === 'base64' ? 'base64' : 'utf8').toString('utf8')
+    if (text === '') return undefined
+    return JSON.parse(text)?.source?.revision
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 本进程内 git 传输是否已被判定不可用。
+ *
+ * ## 为什么需要它（本机实测，2026-10-20）
+ *
+ * 本机到 `github.com:443` 的 git 传输是被**阻断**的：三次实测分别 2 分 06 秒
+ * （HTTP2 framing）、1 分 15 秒 ×2（连不上），单次要等 75 秒才超时 —— 这正是
+ * 本脚本走 API 通道的原因。于是「远端重算」在本机几乎必然失败，而
+ * `resolveRemoteRevision` 与推送后的自证会**各试一次**：两次 75 秒的等待纯属
+ * 浪费，还会拖长 launchd 的定时任务。
+ *
+ * 第一次判定失败后就记住，后续调用直接走降级判据，不再重试。
+ */
+let gitTransportUnavailable = false
+
+/**
+ * 决定第二段该把 catalog 的 revision 写成什么 —— **只认远端真相**。
+ *
+ * ## 主路径（云端 runner / git 传输可用时）
+ *
+ * `git fetch` 远端分支，在 `origin/<branch>` 上跑 `catalog-test` 的同一条
+ * `git log`。算法收在 `scripts/lib/catalog-revision.mjs`，与 `sync-upstream.mjs`
+ * 共用一份 —— 两次口径漂移都是「各写一套」造成的。
+ *
+ * ## 为什么要有降级路径
+ *
+ * 本机走 API 通道的**原因**就是 `github.com:443` 的 git 传输被阻断（见
+ * `api-fetch.mjs` 头注）。所以这里不能假定 fetch 一定可用：
+ *
+ * - 这次推送**碰了发布内容** ⇒ squash 出来的那个提交本身就是「最后触碰
+ *   发布内容的提交」，远端重算值必然等于它；
+ * - 这次推送**没碰发布内容** ⇒ 远端 revision 不变，沿用**推送前**读到的
+ *   远端 catalog 现值。
+ *
+ * ⚠️ `baselineRevision` 必须是**第一段推送之前**读到的值。第二段推送完再读
+ * 远端 catalog 是错的 —— 那时读到的已经是我们自己刚推上去的内容，于是
+ * 「保持现值」变成「把过期值原样写回去」，等于什么都没修（一开始就写错了）。
+ *
+ * 两条都拿不到 ⇒ **报错**，绝不猜一个 sha 写进去。
+ *
+ * @param {{ pushedSha: string, touchedReleaseContent: boolean,
+ *           baselineRevision?: string }} input
+ *   `baselineRevision` 是推送前远端 catalog 的 revision（读不到则 `undefined`）。
+ * @returns {Promise<{ revision: string, source: 'remote'|'pushed'|'baseline' }>}
+ */
+async function resolveRemoteRevision({ pushedSha, touchedReleaseContent, baselineRevision }) {
+  if (!gitTransportUnavailable) {
+    try {
+      // 本机连不上 github 时单次要等 75 秒 ⇒ 只给一次机会、20 秒上限。
+      // 云端（runner 直连）正常是秒级，这个上限也够。
+      const computed = remoteContentRevision(BRANCH, { root, attempts: 1, timeout: 20_000 })
+      console.log(`  远端重算 revision = ${computed.slice(0, 7)}（git fetch）`)
+      return { revision: computed, source: 'remote' }
+    } catch (error) {
+      gitTransportUnavailable = true
+      console.log(`⚠️ git fetch 不可用（${String(error.message).split('\n')[0]}），改走 API 判据`)
+    }
+  }
+  if (touchedReleaseContent) {
+    console.log(`  本次推送动了发布内容 ⇒ revision = ${pushedSha.slice(0, 7)}（squash 提交本身）`)
+    return { revision: pushedSha, source: 'pushed' }
+  }
+  if (typeof baselineRevision === 'string' && /^[0-9a-f]{40}$/.test(baselineRevision)) {
+    console.log(`  本次推送未动发布内容 ⇒ revision 保持推送前现值 ${baselineRevision.slice(0, 7)}`)
+    return { revision: baselineRevision, source: 'baseline' }
+  }
+  throw new Error(
+    '无法确定远端 revision：git fetch 不可用，且既没动发布内容、也没读到推送前的 catalog 现值。'
+    + '拒绝写入猜测值（宁可失败，也不留一个说谎的发布）。',
+  )
 }
 
 async function main() {
@@ -269,6 +365,10 @@ async function main() {
   }
 
   // 2. 第一段：推内容。
+  //
+  // ⚠️ 推送**之前**先记下远端 catalog 的现值：这是降级路径唯一的真相来源。
+  // 推完再读就晚了 —— 读到的会是刚推上去的我们自己那份内容。
+  const baselineRevision = await readRemoteCatalogRevision()
   const message = messageFile !== undefined
     ? fs.readFileSync(messageFile, 'utf8')
     : `chore(fork): 同步本地内容
@@ -276,15 +376,16 @@ async function main() {
 本地 HEAD ${localHead.slice(0, 7)}；远端基线 ${remoteSha.slice(0, 7)}。
 由 scripts/api-push-squash.mjs 生成：内容与本地逐字节一致，历史压扁，
 完整提交历史在本地仓库。`
-  const pushedSha = await pushOneCommit({ baseSha: remoteSha, message })
-  if (pushedSha === null) {
+  const pushed = await pushOneCommit({ baseSha: remoteSha, message })
+  if (pushed === null) {
     console.log('✅ 无差异条目')
     return
   }
+  const pushedSha = pushed.sha
   console.log(`✅ 远端 ${BRANCH} -> ${pushedSha.slice(0, 7)}（共 ${calls} 次 API 调用）`)
 
   /**
-   * ## 第二段：把 catalog 的 revision 指向**刚推上去的远端提交**
+   * ## 第二段：把 catalog 的 revision 指向**远端真相**
    *
    * ### 为什么必须推两次（真实故障，2026-10-19 release-sign run 39244615254）
    *
@@ -297,25 +398,76 @@ async function main() {
    *   - 紧接着 release 套件的 `catalog-test` 报
    *     `source revision ... got "<local>", want "<remote>"` ⇒ 红。
    *
-   * 修法：写进 catalog，再按**同一套差异推送**推一次。第二次只改
-   * `catalog/` 与 `feed/`，不移动 revision 指针本身（该指针只统计发布内容），
-   * 所以不会循环。
+   * ### ⚠️ 但「刚推上去的提交」也不是答案（2026-10-20 云端正式跑，第二次撞）
+   *
+   * 第一段 squash 出来的提交里，如果**发布内容**（`package.json` + `files`）
+   * 已经没变（例如上游只改了 README），那「最后触碰发布内容的提交」就不是
+   * 它，而是**更早**的某个提交。把 `pushedSha` 一律当 revision 写进去，
+   * 等于把一个不碰发布内容的提交说成「最后触碰发布内容的提交」。
+   *
+   * 所以 revision 必须由 {@link resolveRemoteRevision} 决定：**远端分支上
+   * 重算**（与 `catalog-test` 同一算法），拿不到时才按「这次动没动发布内容」
+   * 走 API 判据。绝不猜。
+   *
+   * 第二段只改 `catalog/` 与 `feed/`，不移动 revision 指针本身（该指针只统计
+   * 发布内容），所以不会循环 —— 写完再自证一次。
    */
-  const changed = refreshCatalogRevision(pushedSha)
+  const resolved = await resolveRemoteRevision({
+    pushedSha,
+    touchedReleaseContent: pushed.touchedReleaseContent,
+    baselineRevision,
+  })
+  const revision = resolved.revision
+  const changed = refreshCatalogRevision(revision)
   if (!changed) {
-    console.log('✅ catalog revision 已指向远端提交，无需第二段推送')
+    console.log('✅ catalog revision 已指向远端真相，无需第二段推送')
     return
   }
-  console.log('第二段：推送刷新后的 catalog（revision → 远端提交）…')
-  const secondSha = await pushOneCommit({
+  console.log(`第二段：推送刷新后的 catalog（revision → ${revision.slice(0, 7)}）…`)
+  const second = await pushOneCommit({
     baseSha: pushedSha,
-    message: `catalog: refresh revision over ${pushedSha.slice(0, 7)}`,
+    message: `catalog: refresh revision over ${revision.slice(0, 7)}`,
   })
-  if (secondSha === null) {
+  if (second === null) {
     console.log('✅ 第二段无差异（revision 已是目标值）')
     return
   }
-  console.log(`✅ 远端 ${BRANCH} -> ${secondSha.slice(0, 7)}（两段推送完成）`)
+  console.log(`✅ 远端 ${BRANCH} -> ${second.sha.slice(0, 7)}（两段推送完成）`)
+
+  /**
+   * 自证：写完的值必须等于**远端重算值**。
+   *
+   * 这是「不再靠人工纠偏」的落地点 —— 不一致就在这里红，而不是推出去让
+   * `release-sign.yml` 用 `got/want` 报出来、再靠人手动改 catalog。
+   */
+  if (second.touchedReleaseContent) {
+    // 第二段理论上只动 catalog/feed；真动了发布内容说明有别的差异混进来了，
+    // 此时 revision 必然已经过期 ⇒ 直接报错，不留下一个说谎的发布。
+    throw new Error('第二段推送意外改动了发布内容，revision 已失效（应只有 catalog/feed 变更）')
+  }
+  let verified
+  if (resolved.source === 'remote' && !gitTransportUnavailable) {
+    try {
+      verified = remoteContentRevision(BRANCH, { root, attempts: 1, timeout: 20_000 })
+    } catch (error) {
+      gitTransportUnavailable = true
+      console.log(`⚠️ 推送后自证跳过（git fetch 不可用：${String(error.message).split('\n')[0]}）`)
+      return
+    }
+  } else {
+    // 降级路径下没有远端历史可算 ⇒ 自证退化为「本地写进去的值 == 远端刚推的内容」
+    // 这一条由第二段的 `touchedReleaseContent` 检查兜住（第二段只该动 catalog/feed）。
+    console.log(`⚠️ 推送后自证跳过（git 传输不可用 ⇒ revision 取自 ${resolved.source} 判据）`)
+    return
+  }
+  const recorded = catalogRevision({ root })
+  if (recorded !== verified) {
+    throw new Error(
+      `catalog revision 与远端真相不一致：catalog 写的是 ${String(recorded).slice(0, 7)}，`
+      + `远端 ${BRANCH} 重算得到 ${verified.slice(0, 7)}`,
+    )
+  }
+  console.log(`✅ 自证通过：远端 ${BRANCH} 的 revision = ${verified.slice(0, 7)}`)
 }
 
 /**
