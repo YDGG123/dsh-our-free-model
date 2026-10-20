@@ -199,6 +199,18 @@ jobs:
           fi
           node scripts/report-sync-failure.mjs --file "$FAIL_FILE"
 
+      - name: 成功时清除失败记录
+        if: steps.sync.outputs.sync_exit == '0'
+        env:
+          GH_TOKEN: ${{ secrets.OFM_RELEASE_PUSH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        continue-on-error: true
+        run: |
+          # ⚠️ 同步成功必须删掉 sync-failure 分支上的状态文件（真实缺陷，2026-10-20）：
+          # 状态文件只被失败覆写、成功时没人删 ⇒ 本机通知桥永远读到旧失败，
+          # 于是「同步已成功却还在弹昨天的错误」。通知说反了比不通知更糟。
+          node scripts/report-sync-failure.mjs --clear
+
       - name: 判定结果
         run: |
           if [ "${{ steps.sync.outputs.sync_exit }}" != "0" ]; then

@@ -173,6 +173,110 @@ await checkAsync('reportSyncFailure：分支不存在时先建分支再 PUT（�
   assert.ok(calls.some(call => call.method === 'POST' && call.url.endsWith('/git/refs')), '必须先建分支')
 })
 
+// ── revision 必须重算，不能用推送后的 HEAD（真实故障：云端正式跑红） ──────
+
+await checkAsync('--ci 刷新 revision 必须用「最后触碰发布内容的提交」，不是 HEAD', async () => {
+  // 2026-10-20 云端正式跑：
+  //   c85e27e  build(channel-pack): 重建上游合并后的产物   ← 碰了发布内容
+  //   b005cb2  catalog: sign the release over c85e27e      ← 只碰 catalog
+  //   HEAD = b005cb2 ⇒ 旧实现把它写成 revision ⇒ 立刻就是错值
+  //   effce98  catalog: refresh revision over b005cb2      ← 把对的改成错的
+  // release-sign 报 `got "b005cb2", want "c85e27e"`。
+  const fs2 = await import('node:fs')
+  const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
+  const startAt = source.indexOf('if (ciMode)')
+  const ciBlock = source.slice(startAt, startAt + 12000)
+
+  // 必须出现「按 package.json + files 重算」的调用。
+  assert.match(ciBlock, /git\('log', '-1', '--format=%H', '--', \.\.\.filesForRevision\)/,
+    '必须重算「最后触碰发布内容的提交」')
+  // 且不能把 workHead 直接喂给 set-catalog-revision。
+  assert.ok(!/set-catalog-revision\.mjs', workHead/.test(ciBlock),
+    '不能用推送后的 HEAD 充当 revision（那会把正确的值改错）')
+  // 提交信息也应引用重算值。
+  assert.match(ciBlock, /refresh revision over \$\{contentRevision\.slice/, '提交信息应使用重算值')
+})
+
+// ── 成功后清除失败记录（真实缺陷：同步成功却还在弹旧失败） ────────────────
+
+await checkAsync('clearSyncFailure：有记录时删除（带 sha）', async () => {
+  const calls = []
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method ?? 'GET'
+    calls.push({ url, method, body: init.body })
+    if (method === 'GET') return Response.json({ sha: 'deadbeef' })
+    return new Response(null, { status: 200 })
+  }
+  const result = await report.clearSyncFailure({ token: 't', owner: 'o', repo: 'r', fetchImpl })
+  assert.equal(result.ok, true)
+  assert.equal(result.deleted, true, '应真的删掉')
+  const del = calls.find(call => call.method === 'DELETE')
+  assert.equal(JSON.parse(del.body).sha, 'deadbeef', '删除必须带当前 sha')
+})
+
+await checkAsync('clearSyncFailure：404 视为「本来就没有」', async () => {
+  const fetchImpl = async () => new Response('{"message":"Not Found"}', { status: 404 })
+  const result = await report.clearSyncFailure({ token: 't', owner: 'o', repo: 'r', fetchImpl })
+  assert.equal(result.ok, true)
+  assert.equal(result.deleted, false)
+})
+
+await checkAsync('clearSyncFailure：401/403 必须报错（不能当成「没有记录」）', async () => {
+  // 真实风险：把「清除失败」静默当成「本来就没有」⇒ 旧失败记录永远留着，
+  // 通知桥继续弹过期消息 —— 正是本次要修的缺陷的翻版。
+  for (const status of [401, 403, 500]) {
+    const fetchImpl = async () => new Response('{}', { status })
+    const result = await report.clearSyncFailure({ token: 't', owner: 'o', repo: 'r', fetchImpl })
+    assert.equal(result.ok, false, `HTTP ${status} 必须报错`)
+    assert.match(result.reason, new RegExp(String(status)))
+  }
+})
+
+await checkAsync('workflow：成功路径必须清除失败记录', async () => {
+  const fs2 = await import('node:fs')
+  const yamlText = fs2.readFileSync(new URL('../.github/workflows/sync-upstream.yml', import.meta.url), 'utf8')
+  assert.match(yamlText, /report-sync-failure\.mjs --clear/, '成功时必须清除状态文件')
+  // 条件必须是「sync_exit == 0」，否则会在失败时把刚写的记录删掉。
+  const clearStep = yamlText.slice(yamlText.indexOf('报告') >= 0 ? yamlText.indexOf('报告') : yamlText.indexOf('清除失败记录'))
+  assert.match(yamlText, /sync_exit == '0'/, '清除步骤的条件应为成功')
+})
+
+// ── 通知多通道（真实缺陷：launchd 的 osascript 被系统丢弃） ────────────────
+
+await checkAsync('deliverNotification：osascript 被丢弃时，文件兜底仍算送达', async () => {
+  const fs2 = await import('node:fs')
+  const os2 = await import('node:os')
+  const run = () => ({ status: 1, stderr: 'not authorized' })   // osascript 失败
+  const calls = []
+  const result = check.deliverNotification(
+    { title: 'T', message: 'm', url: '' },
+    {
+      platform: 'darwin',
+      run,
+      // 模拟 macOS 但没装 terminal-notifier
+      exists: path2 => path2.includes('terminal-notifier') ? false : fs2.existsSync(path2),
+    },
+  )
+  assert.equal(result.ok, true, '至少 file 通道应当成功')
+  const channels = result.attempted.map(entry => entry.channel)
+  assert.ok(channels.includes('file'), '必须有文件兜底（必然成功的通道）')
+  assert.ok(channels.includes('osascript'), '仍应尝试 osascript')
+  // 文件通道必须真的写了东西（用户能 cat 到）。
+  const alertLog = new URL('../.private/sync-alert.log', import.meta.url)
+  assert.ok(fs2.existsSync(alertLog), '应生成 .private/sync-alert.log')
+  assert.match(fs2.readFileSync(alertLog, 'utf8'), /T: m/)
+})
+
+await checkAsync('deliverNotification：非 macOS 退化为 stdout，不调系统通知', async () => {
+  let called = false
+  const result = check.deliverNotification(
+    { title: 'T', message: 'm', url: '' },
+    { platform: 'linux', run: () => { called = true; return { status: 0 } } },
+  )
+  assert.equal(called, false)
+  assert.equal(result.attempted[0].channel, 'stdout')
+})
+
 // ── 载荷归一化 ───────────────────────────────────────────────────────────────
 
 check_('缺字段的载荷被补齐（通知里不能出现 undefined）', () => {
@@ -212,6 +316,35 @@ await checkAsync('远端 5xx ⇒ 抛错（不能当成「没有失败」）', as
     check.fetchFailureState({ fetchImpl: async () => new Response('boom', { status: 503 }) }),
     /503/,
   )
+})
+
+await checkAsync('有 token 时走 API（无 CDN 缓存）并解包 base64 信封', async () => {
+  // 真实缺陷（2026-10-20）：raw.githubusercontent 有 CDN 缓存，云端清除状态
+  // 文件后本机仍读到旧失败 ⇒ 通知继续误报。
+  const payload = { failedAt: '2026-10-20T00:00:00Z', failedStep: 'test-failed', conflictedFiles: [] }
+  const calls = []
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, headers: init.headers ?? {} })
+    return Response.json({ content: Buffer.from(JSON.stringify(payload)).toString('base64'), encoding: 'base64' })
+  }
+  const result = await check.fetchFailureState({ token: 't', fetchImpl })
+  assert.equal(result.exists, true)
+  assert.equal(result.payload.failedStep, 'test-failed')
+  const call = calls[0]
+  assert.match(call.url, /api\.github\.com/, '有 token 时必须走 API 而不是 raw')
+  assert.ok(!call.url.includes('raw.githubusercontent.com'))
+  assert.equal(call.headers['cache-control'], 'no-cache', '必须请求不缓存')
+})
+
+await checkAsync('无 token 时退回 raw（公开仓库）', async () => {
+  const calls = []
+  const fetchImpl = async (url, init = {}) => {
+    calls.push(url)
+    return new Response(JSON.stringify({ failedStep: 'merge-conflict' }), { status: 200 })
+  }
+  const result = await check.fetchFailureState({ token: '', fetchImpl })
+  assert.equal(result.exists, true)
+  assert.match(calls[0], /raw\.githubusercontent\.com/)
 })
 
 // ── 去重指纹 ─────────────────────────────────────────────────────────────────

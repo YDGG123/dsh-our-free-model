@@ -184,6 +184,76 @@ export async function ensureBranch({ fetchImpl, headers, branch, baseBranch, api
   return { ok: false, created: false, reason: `建分支失败：HTTP ${create.status}` }
 }
 /**
+ * 清除 fork 上的失败状态文件（同步成功后调用）。
+ *
+ * ## 为什么必须清（真实缺陷，2026-10-20）
+ *
+ * 状态文件每次失败都被**覆写**，但**成功时没人删它** ⇒ 本机通知桥永远读到
+ * 那条旧失败，于是「今天同步明明成功了，却在弹昨天的 esbuild 失败」。
+ * 通知说反了比不通知更糟：用户会去排查一个已经不存在的问题。
+ *
+ * 删除走 Contents API（`DELETE /contents/<path>`，需带当前 `sha`）。
+ * 分支/文件不存在（404）是**正常情况**（从未失败过），不算错误。
+ *
+ * @returns `{ ok: boolean, deleted: boolean, reason?: string }`
+ *   `deleted: false` 且 `ok: true` = 本来就没有失败记录。
+ */
+export async function clearSyncFailure({
+  token,
+  owner,
+  repo,
+  branch = SYNC_FAILURE_BRANCH,
+  path = SYNC_FAILURE_PATH,
+  message = 'chore(sync): clear upstream sync failure (the run succeeded)',
+  fetchImpl = fetch,
+}) {
+  const api = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'content-type': 'application/json',
+    'user-agent': 'ofm-clear-sync-failure',
+  }
+  let sha
+  try {
+    const existing = await fetchImpl(`${api}?ref=${branch}`, { headers })
+    /**
+     * ⚠️ **只有 404 才算「没有失败记录」**。
+     *
+     * 其它非 2xx（401 token 失效 / 403 无权限 / 5xx 上游抖动）必须**报错**——
+     * 否则「清除失败」会被静默当成「本来就没有」，于是旧失败记录永远留着，
+     * 通知桥继续弹过期消息（正是本次要修的缺陷的翻版）。
+     */
+    if (existing.status === 404) return { ok: true, deleted: false }
+    if (!existing.ok) {
+      return { ok: false, deleted: false, reason: `读取状态文件失败：HTTP ${existing.status}` }
+    }
+    const body = await existing.json()
+    if (typeof body?.sha === 'string') sha = body.sha
+  } catch (error) {
+    return { ok: false, deleted: false, reason: `读取状态文件失败：${error instanceof Error ? error.message : String(error)}` }
+  }
+  if (sha === undefined) return { ok: true, deleted: false }
+  const response = await fetchImpl(api, {
+    method: 'DELETE',
+    headers,
+    body: JSON.stringify({ message, sha, branch }),
+  })
+  if (response.ok) return { ok: true, deleted: true }
+  const text = await response.text()
+  return { ok: false, deleted: false, reason: `删除失败：HTTP ${response.status} ${text.slice(0, 200)}` }
+}
+
+/** 清除失败状态的 CLI 入口（workflow 成功路径调用）。 */
+export async function clearSyncFailureCli(argv = process.argv.slice(2)) {
+  const [owner, repo] = (process.env.GITHUB_REPOSITORY ?? 'YDGG123/dsh-our-free-model').split('/')
+  const token = process.env.GH_TOKEN ?? ''
+  if (token === '') throw new Error('需要环境变量 GH_TOKEN（repo 写权限）')
+  const result = await clearSyncFailure({ token, owner, repo })
+  return result
+}
+
+/**
  * 是否被直接执行。用 `pathToFileURL` 而不是字符串拼接：本仓库路径含空格，
  * 手工拼 `file://` 会与 `import.meta.url` 的百分号编码形式不相等
  *（同类坑见 `check-sync-failure.mjs` 的注释）。
@@ -193,8 +263,23 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   const flag = name => { const i = argv.indexOf(`--${name}`); return i === -1 ? undefined : argv[i + 1] }
   const file = flag('file')
   const dryRun = argv.includes('--dry-run')
+  const clear = argv.includes('--clear')
   const [owner, repo] = (process.env.GITHUB_REPOSITORY ?? 'YDGG123/dsh-our-free-model').split('/')
   try {
+    /**
+     * `--clear`：同步成功时清除失败记录（见 {@link clearSyncFailure} 的说明）。
+     *
+     * 放在这里而不是另写脚本：两者共用同一份路径/分支常量与鉴权约定，
+     * 分开写必然漂移（本项目已吃过「两份清单漂移」的亏）。
+     */
+    if (clear) {
+      const cleared = await clearSyncFailureCli()
+      if (!cleared.ok) throw new Error(cleared.reason ?? '清除失败记录失败')
+      console.log(cleared.deleted
+        ? 'report-sync-failure: 已清除失败记录（本次同步成功）'
+        : 'report-sync-failure: 没有失败记录需要清除')
+      process.exitCode = 0
+    } else {
     const parsed = file === undefined ? {} : JSON.parse(fs.readFileSync(file, 'utf8'))
     const payload = normalizeFailure(parsed)
     if (dryRun) {
@@ -206,6 +291,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
       const result = await reportSyncFailure({ payload, token, owner, repo, branch: flag('branch') ?? SYNC_FAILURE_BRANCH })
       console.log(`report-sync-failure: HTTP ${result.status} ${result.message}`)
       process.exitCode = result.ok ? 0 : 1
+    }
     }
   } catch (error) {
     console.error(`report-sync-failure: ${error instanceof Error ? error.message : String(error)}`)

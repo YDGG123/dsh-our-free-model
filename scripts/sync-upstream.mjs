@@ -513,15 +513,36 @@ async function main() {
       const workHead = run('git', ['rev-parse', `origin/${workBranch}`]).output.trim()
       say(`  ✅ ${workBranch} -> ${workHead.slice(0, 7)}`)
 
-      // ── ② 刷新 revision 指向**远端 custom-main 的 HEAD** ──
+      // ── ② 刷新 revision：**重算**「最后触碰发布内容的提交」 ──
       //
-      // 为什么是 custom-main 而不是 main：发布内容（`package.json` + files）
-      // 的「最后触碰提交」在 **custom-main 的完整历史**里才有意义。
-      // `main` 是 squash 投影，它的提交 sha 不是发布内容的真实历史节点。
-      // `release-sign.yml` 在 main 上算的是「main 分支上的最后一次触碰」，
-      // 所以两边算法不同 —— 但那正是它的职责：**它是最终纠偏机制**。
-      say('刷新 catalog revision（指向远端工作分支 HEAD）…')
-      const refreshed = run('node', ['scripts/set-catalog-revision.mjs', workHead])
+      // ## ⚠️ 不能用推送后的 HEAD（真实缺陷，2026-10-20 云端正式跑撞出）
+      //
+      // 旧实现把 revision 设成 `workHead`（刚推上去的那个提交）。但那一轮里
+      // 我们**先**有 `build(channel-pack): 重建…`（碰了 `pack.js` = 发布内容），
+      // **之后**才提交 catalog（只碰 `catalog/`）。于是：
+      //
+      //   c85e27e  build(channel-pack): 重建上游合并后的产物   ← 真正碰了发布内容
+      //   b005cb2  catalog: sign the release over c85e27e      ← 只碰 catalog
+      //   workHead = b005cb2  ⇒ 写成 revision 后**立刻就是错值**
+      //   effce98  catalog: refresh revision over b005cb2      ← 这一笔把对的改错了
+      //
+      // 云端报 `got "b005cb2", want "c85e27e"` 正是这个。
+      //
+      // 修法：**必须与 catalog-test 用同一算法**——在该分支上跑
+      // `git log -1 -- <package.json + pkg.files>`。HEAD 是不是那个提交无关紧要。
+      say('刷新 catalog revision（重算「最后触碰发布内容的提交」）…')
+      const filesForRevision = (() => {
+        try {
+          const manifestPkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+          return ['package.json', ...(manifestPkg.files ?? [])]
+        } catch { return ['package.json'] }
+      })()
+      const contentRevision = git('log', '-1', '--format=%H', '--', ...filesForRevision).trim()
+      if (!/^[0-9a-f]{40}$/.test(contentRevision)) {
+        throw new Error('无法解析「最后触碰发布内容的提交」，拒绝写入猜测值')
+      }
+      say(`  最后触碰发布内容 = ${contentRevision.slice(0, 7)}（HEAD 是 ${workHead.slice(0, 7)}）`)
+      const refreshed = run('node', ['scripts/set-catalog-revision.mjs', contentRevision])
       say(refreshed.output.trim().slice(-800))
       if (refreshed.code !== 0) throw new Error('刷新 revision 失败')
 
@@ -529,7 +550,7 @@ async function main() {
       const dirtyCatalog = git('status', '--porcelain', '--', 'catalog', 'feed').trim()
       if (dirtyCatalog !== '') {
         run('git', ['add', 'catalog', 'feed'])
-        const committed = run('git', ['commit', '-m', `catalog: refresh revision over ${workHead.slice(0, 7)}`], GIT_ENV)
+        const committed = run('git', ['commit', '-m', `catalog: refresh revision over ${contentRevision.slice(0, 7)}`], GIT_ENV)
         if (committed.code !== 0) throw new Error('revision 刷新提交失败')
         const repushedWork = run('git', ['push', 'origin', `HEAD:${workBranch}`])
         say(repushedWork.output.trim().slice(-800))

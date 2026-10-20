@@ -94,15 +94,44 @@ export async function fetchFailureState({
   token = '',
   fetchImpl = fetch,
 } = {}) {
-  const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
-  const headers = { 'user-agent': 'ofm-check-sync-failure' }
-  if (token !== '') headers.authorization = `Bearer ${token}`
+  /**
+   * ## 优先走 **API**，不用 raw（真实缺陷，2026-10-20）
+   *
+   * `raw.githubusercontent.com` 有 CDN 缓存：云端成功清除状态文件后，本机仍
+   * 读到**已删除的旧失败**（实测：API 与 raw 都 404 之后，桥还在报昨天的错）。
+   * 那会让通知继续误报 —— 比不通知更糟。
+   *
+   * API 有正经的 `no-store` 语义，且带 token 时还能避开匿名限流。
+   * 没有 token 时（公开仓库）退回 raw，但加 `no-cache` 请求头。
+   */
+  const headers = {
+    'user-agent': 'ofm-check-sync-failure',
+    'cache-control': 'no-cache',
+    pragma: 'no-cache',
+  }
+  const useApi = token !== ''
+  let url
+  if (useApi) {
+    url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(filePath).replace(/%2F/g, '/')}?ref=${branch}`
+    headers.authorization = `Bearer ${token}`
+    headers.accept = 'application/vnd.github+json'
+  } else {
+    url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
+  }
   const response = await fetchImpl(url, { headers })
   // 404 = 从未失败过（或该分支还没建），这是正常状态，不是错误。
   if (response.status === 404) return { exists: false, payload: null }
   if (!response.ok) throw new Error(`读取状态文件失败：HTTP ${response.status}`)
   const text = await response.text()
   if (text.trim() === '') return { exists: false, payload: null }
+  if (useApi) {
+    // API 的 Contents 响应是信封：真实文件内容在 base64 的 `content` 里。
+    const envelope = JSON.parse(text)
+    if (typeof envelope?.content !== 'string') return { exists: false, payload: null }
+    const decoded = Buffer.from(envelope.content, 'base64').toString('utf8')
+    if (decoded.trim() === '') return { exists: false, payload: null }
+    return { exists: true, payload: JSON.parse(decoded) }
+  }
   return { exists: true, payload: JSON.parse(text) }
 }
 
@@ -114,33 +143,86 @@ function writeState(state) {
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
 }
 
-/** macOS 系统通知。非 macOS 或 osascript 不可用时退化为打印（不失败）。 */
+/** 本次通知投递到了哪些通道（诊断用；写进日志，用户可自查）。 */
+export function deliverNotification({ title, message, url }, options = {}) {
+  const platform = options.platform ?? process.platform
+  const run = options.run ?? spawnSync
+  const exists = options.exists ?? fs.existsSync
+  const attempted = []
+
+  /**
+   * ## 为什么需要多条通道（真实缺陷，2026-10-20）
+   *
+   * 用户反馈「Mac 没有通知」，而 notify.log 里明明写了「已通知」。
+   * 原因是 **launchd 后台进程调 `osascript display notification` 经常被
+   * 通知中心静默丢弃**（无 GUI 会话上下文 / 权限未授予 / 被当作后台噪音）。
+   * 脚本无法分辨「发出去了」与「用户看到了」—— 所以不能只依赖它。
+   *
+   * 现在的策略：**并行尝试多条通道，只要一条成功就算送达**，并把每条的结果
+   * 写进日志。任何一条都不成功时返回 ok=false，让日志至少能说明白。
+   */
+  if (platform !== 'darwin') {
+    attempted.push({ channel: 'stdout', ok: true })
+    console.log(`[notify:${platform}] ${title}: ${message}${url === '' ? '' : ` (${url})`}`)
+    return { ok: true, attempted }
+  }
+
+  // ① terminal-notifier（若装了）—— 它比 osascript 稳定得多，且支持点击跳转。
+  const terminalNotifier = ['/opt/homebrew/bin/terminal-notifier', '/usr/local/bin/terminal-notifier']
+    .find(candidate => exists(candidate))
+  if (terminalNotifier !== undefined) {
+    const args = ['-title', title, '-message', message]
+    if (url !== '') args.push('-open', url)
+    const result = run(terminalNotifier, args, { encoding: 'utf8' })
+    attempted.push({ channel: 'terminal-notifier', ok: result.status === 0 })
+  }
+
+  // ② osascript（内置，但后台进程下可能被系统丢弃）。
+  const quote = value => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
+  const script = `display notification "${quote(message)}" with title "${quote(title)}"`
+  const osa = run('osascript', ['-e', script], { encoding: 'utf8' })
+  attempted.push({ channel: 'osascript', ok: osa.status === 0 })
+
+  // ③ 落一份本地文件 + stdout：**必然成功**的兜底。
+  //    用户能 `cat .private/sync-alert.log` 看到，DSH 面板/终端也能读到。
+  const logLine = `[${new Date().toISOString()}] ${title}: ${message}${url === '' ? '' : ` <${url}>`}\n`
+  try {
+    const alertLog = path.join(root, '.private', 'sync-alert.log')
+    fs.mkdirSync(path.dirname(alertLog), { recursive: true })
+    fs.appendFileSync(alertLog, logLine)
+    attempted.push({ channel: 'file', ok: true })
+  } catch (error) {
+    attempted.push({ channel: 'file', ok: false })
+  }
+  process.stdout.write(logLine)
+
+  const ok = attempted.some(entry => entry.ok)
+  return { ok, attempted }
+}
+
+/**
+ * 兼容旧名 `notify()`（`cloud-sync-test` 与旧调用方用它）。
+ *
+ * 语义：**只走 osascript**（保持历史行为与测试契约），投递失败不抛错。
+ * 新的可靠投递请用 {@link deliverNotification}（多通道 + 文件兜底）。
+ */
 export function notify({ title, message, url }, { platform = process.platform, run = spawnSync } = {}) {
   if (platform !== 'darwin') {
     console.log(`[notify:${platform}] ${title}: ${message}${url === '' ? '' : ` (${url})`}`)
     return { shown: false, reason: 'not-macos' }
   }
-  // osascript 的字符串字面量：先转义反斜杠与双引号，避免用户内容里的引号
+  // osascript 的字符串字面量：先转义反斜杠与双引号，避免内容里的引号
   // 把脚本提前闭合（冲突文件名可能含引号）。
   const quote = value => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
   const script = `display notification "${quote(message)}" with title "${quote(title)}"`
   const result = run('osascript', ['-e', script], { encoding: 'utf8' })
   if (result.status !== 0) {
-    // 通知失败不该让检查流程变红：把原因打到日志即可。
     console.log(`⚠️ 通知弹出失败（${result.status}）：${(result.stderr ?? '').slice(0, 200)}`)
     return { shown: false, reason: 'osascript-failed' }
   }
   return { shown: true }
 }
 
-/**
- * 是否被直接执行。
- *
- * ⚠️ **不能用** `` `file://${process.argv[1]}` `` 拼接：`import.meta.url` 里的
- * 路径是**百分号编码**的（空格 → `%20`），而本仓库路径正好含空格
- *（`/Volumes/办公/IDM下载/…`）⇒ 两者永不相等，脚本会静默什么都不做。
- * 必须用 `pathToFileURL` 归一。
- */
 const invokedDirectly = process.argv[1] !== undefined
   && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invokedDirectly) {
@@ -165,9 +247,17 @@ if (invokedDirectly) {
         console.log(`check-sync-failure: 这条失败已通知过（${fingerprint}），跳过`)
         process.exitCode = 0
       } else {
-        notify(text)
-        writeState({ lastNotifiedFingerprint: fingerprint, lastNotifiedAt: new Date().toISOString() })
-        console.log(`check-sync-failure: 已通知 — ${text.title}：${text.message}`)
+        const delivered = deliverNotification(text)
+        const channels = delivered.attempted.filter(entry => entry.ok).map(entry => entry.channel).join(',')
+        writeState({
+          lastNotifiedFingerprint: fingerprint,
+          lastNotifiedAt: new Date().toISOString(),
+          // 记录真实投递通道：下次排查「我为什么没看到」时有据可查。
+          lastChannels: delivered.attempted,
+        })
+        console.log(delivered.ok
+          ? `check-sync-failure: 已通知（通道：${channels}）— ${text.title}：${text.message}`
+          : `check-sync-failure: ⚠️ 所有通道都失败，请查看 .private/sync-alert.log`)
         process.exitCode = 0
       }
     }

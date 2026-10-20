@@ -240,6 +240,59 @@ test-all --mode release  ── catalog-test 校验 revision
 - 因此：**两段式推送 + 保留 release-sign 的刷新兜底** 是当前最优组合；
   不要试图在推送脚本里「算出未来那个 sha」（squash 场景算不出来）。
 
+## ⚠️ revision 必须**重算**，不能用推送后的 HEAD（2026-10-20 云端正式跑）
+
+云端第一轮正式同步后 fork CI 双红，`release-sign` 报：
+
+```
+got "b005cb2…"  want "c85e27e…"
+```
+
+提交链一目了然：
+
+```
+3bfd685  Merge upstream/main
+c85e27e  build(channel-pack): 重建上游合并后的产物   ← 真正碰了发布内容
+b005cb2  catalog: sign the release over c85e27e      ← 只碰 catalog
+effce98  catalog: refresh revision over b005cb2      ← 把对的值改错了
+```
+
+**根因**：我在 `--ci` 推送段把 `workHead`（刚推上去的那个提交）直接当成 revision。
+可那一轮的 HEAD（`b005cb2`）**只碰了 `catalog/`**，真正碰发布内容的是它前面的
+`c85e27e`。于是写进去的值**当场就是错的**。
+
+**修法**：revision 必须用与 `catalog-test` **完全相同的算法**重算 ——
+在该分支上 `git log -1 -- <package.json + pkg.files>`，HEAD 是谁无关紧要。
+
+⚠️ 别想着「预知未来的 sha」：squash 投影后 sha 会变，只能**算当前真实值**。
+刷新提交只碰 `catalog/` 与 `feed/`，不移动该指针 ⇒ 不会循环（已验证：
+`package.json.files` 里没有任何 `catalog/` 或 `feed/` 项）。
+
+## ⚠️ 同步成功必须清除失败状态文件
+
+状态文件只被**失败覆写**、成功时没人删 ⇒ 本机通知桥永远读到旧失败。
+2026-10-20 实测：云端同步**已成功**，桥还在弹 10-19 的 esbuild 失败。
+
+修法：workflow 成功路径调用 `report-sync-failure.mjs --clear`（Contents API
+删除，带 sha）。⚠️ 只有 **404** 才算「本来就没有记录」；401/403/5xx 必须报错
+—— 否则「清除失败」会被静默当成「没有」，旧记录永远留着。
+
+## ⚠️ 通知投递：osascript 在 launchd 下不可靠
+
+用户反馈「Mac 没有通知」，而 `notify.log` 明明写了「已通知」。原因是
+**launchd 后台进程调 `osascript display notification` 经常被通知中心静默丢弃**。
+
+现在的策略是**多通道并行，任一成功即算送达**，并把每条的成败写进日志：
+
+| 通道 | 说明 |
+|---|---|
+| `terminal-notifier` | 若已安装（`brew install terminal-notifier`），最可靠，支持点击跳转 |
+| `osascript` | 内置，后台进程下可能被丢弃 |
+| **文件兜底** | 追加到 `.private/sync-alert.log` + stdout，**必然成功** |
+
+⚠️ 读状态文件也改走 **API**（不用 `raw.githubusercontent.com`）：后者有 CDN 缓存，
+云端清除后本机仍读到旧值（实测：API 与 raw 都 404 了，桥还在报旧失败）。
+
 ## ⚠️ esbuild / vite 在子包里，云端必须安装独立端依赖
 
 云端 dry-run 报 `build-channel-pack: esbuild is required to rebuild the pack`。
