@@ -1,9 +1,0 @@
-{
-  "failedAt": "2026-10-19T12:45:56.794Z",
-  "failedStep": "build-failed",
-  "message": "pack 重建失败：build-channel-pack: esbuild is required to rebuild the pack.\n  install it (npm i -D esbuild), or point OFM_ESBUILD_DIR at a directory that has it.\n  (Cannot find module 'esbuild'\nRequire stack:\n- /home/runner/work/dsh-our-free-model/dsh-our-free-model/scripts/build-channel-pack.mjs)\n",
-  "upstreamHead": "25151bab43ff28bfc0eef5a3dbec4443ecc6d2f2",
-  "preMergeHead": "743b4675b25711d600919a7a5bf8eaa4081c3b3d",
-  "conflictedFiles": [],
-  "runUrl": "https://github.com/YDGG123/dsh-our-free-model/actions/runs/39254584839"
-}
