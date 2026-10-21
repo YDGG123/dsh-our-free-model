@@ -41,1848 +41,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/jose/dist/webapi/lib/buffer_utils.js
-function concat(...buffers) {
-  const size = buffers.reduce((acc, { length }) => acc + length, 0);
-  const buf = new Uint8Array(size);
-  let i = 0;
-  for (const buffer of buffers) {
-    buf.set(buffer, i);
-    i += buffer.length;
-  }
-  return buf;
-}
-function encode(string) {
-  const bytes = new Uint8Array(string.length);
-  for (let i = 0; i < string.length; i++) {
-    const code = string.charCodeAt(i);
-    if (code > 127) {
-      throw new TypeError("non-ASCII string encountered in encode()");
-    }
-    bytes[i] = code;
-  }
-  return bytes;
-}
-var encoder, decoder, MAX_INT32;
-var init_buffer_utils = __esm({
-  "node_modules/jose/dist/webapi/lib/buffer_utils.js"() {
-    encoder = new TextEncoder();
-    decoder = new TextDecoder();
-    MAX_INT32 = 2 ** 32;
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/base64.js
-function encodeBase64(input) {
-  if (Uint8Array.prototype.toBase64) {
-    return input.toBase64();
-  }
-  const CHUNK_SIZE = 32768;
-  const arr = [];
-  for (let i = 0; i < input.length; i += CHUNK_SIZE) {
-    arr.push(String.fromCharCode.apply(null, input.subarray(i, i + CHUNK_SIZE)));
-  }
-  return btoa(arr.join(""));
-}
-function decodeBase64(encoded) {
-  if (Uint8Array.fromBase64) {
-    return Uint8Array.fromBase64(encoded);
-  }
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-var init_base64 = __esm({
-  "node_modules/jose/dist/webapi/lib/base64.js"() {
-  }
-});
-
-// node_modules/jose/dist/webapi/util/base64url.js
-function decode(input) {
-  if (Uint8Array.fromBase64) {
-    return Uint8Array.fromBase64(typeof input === "string" ? input : decoder.decode(input), {
-      alphabet: "base64url"
-    });
-  }
-  let encoded = input;
-  if (encoded instanceof Uint8Array) {
-    encoded = decoder.decode(encoded);
-  }
-  encoded = encoded.replace(/-/g, "+").replace(/_/g, "/");
-  try {
-    return decodeBase64(encoded);
-  } catch {
-    throw new TypeError("The input to be decoded is not correctly encoded.");
-  }
-}
-function encode2(input) {
-  let unencoded = input;
-  if (typeof unencoded === "string") {
-    unencoded = encoder.encode(unencoded);
-  }
-  if (Uint8Array.prototype.toBase64) {
-    return unencoded.toBase64({ alphabet: "base64url", omitPadding: true });
-  }
-  return encodeBase64(unencoded).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-var init_base64url = __esm({
-  "node_modules/jose/dist/webapi/util/base64url.js"() {
-    init_buffer_utils();
-    init_base64();
-  }
-});
-
-// node_modules/jose/dist/webapi/util/errors.js
-var JOSEError, JOSENotSupported, JWSInvalid, JWTInvalid;
-var init_errors = __esm({
-  "node_modules/jose/dist/webapi/util/errors.js"() {
-    JOSEError = class extends Error {
-      static code = "ERR_JOSE_GENERIC";
-      code = "ERR_JOSE_GENERIC";
-      constructor(message2, options) {
-        super(message2, options);
-        this.name = this.constructor.name;
-        Error.captureStackTrace?.(this, this.constructor);
-      }
-    };
-    JOSENotSupported = class extends JOSEError {
-      static code = "ERR_JOSE_NOT_SUPPORTED";
-      code = "ERR_JOSE_NOT_SUPPORTED";
-    };
-    JWSInvalid = class extends JOSEError {
-      static code = "ERR_JWS_INVALID";
-      code = "ERR_JWS_INVALID";
-    };
-    JWTInvalid = class extends JOSEError {
-      static code = "ERR_JWT_INVALID";
-      code = "ERR_JWT_INVALID";
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/crypto_key.js
-function getHashLength(hash) {
-  return parseInt(hash.name.slice(4), 10);
-}
-function getNamedCurve(alg) {
-  switch (alg) {
-    case "ES256":
-      return "P-256";
-    case "ES384":
-      return "P-384";
-    case "ES512":
-      return "P-521";
-    default:
-      throw new Error("unreachable");
-  }
-}
-function checkUsage(key, usage) {
-  if (usage && !key.usages.includes(usage)) {
-    throw new TypeError(`CryptoKey does not support this operation, its usages must include ${usage}.`);
-  }
-}
-function checkSigCryptoKey(key, alg, usage) {
-  switch (alg) {
-    case "HS256":
-    case "HS384":
-    case "HS512": {
-      if (!isAlgorithm(key.algorithm, "HMAC"))
-        throw unusable("HMAC");
-      const expected = parseInt(alg.slice(2), 10);
-      const actual = getHashLength(key.algorithm.hash);
-      if (actual !== expected)
-        throw unusable(`SHA-${expected}`, "algorithm.hash");
-      break;
-    }
-    case "RS256":
-    case "RS384":
-    case "RS512": {
-      if (!isAlgorithm(key.algorithm, "RSASSA-PKCS1-v1_5"))
-        throw unusable("RSASSA-PKCS1-v1_5");
-      const expected = parseInt(alg.slice(2), 10);
-      const actual = getHashLength(key.algorithm.hash);
-      if (actual !== expected)
-        throw unusable(`SHA-${expected}`, "algorithm.hash");
-      break;
-    }
-    case "PS256":
-    case "PS384":
-    case "PS512": {
-      if (!isAlgorithm(key.algorithm, "RSA-PSS"))
-        throw unusable("RSA-PSS");
-      const expected = parseInt(alg.slice(2), 10);
-      const actual = getHashLength(key.algorithm.hash);
-      if (actual !== expected)
-        throw unusable(`SHA-${expected}`, "algorithm.hash");
-      break;
-    }
-    case "Ed25519":
-    case "EdDSA": {
-      if (!isAlgorithm(key.algorithm, "Ed25519"))
-        throw unusable("Ed25519");
-      break;
-    }
-    case "ML-DSA-44":
-    case "ML-DSA-65":
-    case "ML-DSA-87": {
-      if (!isAlgorithm(key.algorithm, alg))
-        throw unusable(alg);
-      break;
-    }
-    case "ES256":
-    case "ES384":
-    case "ES512": {
-      if (!isAlgorithm(key.algorithm, "ECDSA"))
-        throw unusable("ECDSA");
-      const expected = getNamedCurve(alg);
-      const actual = key.algorithm.namedCurve;
-      if (actual !== expected)
-        throw unusable(expected, "algorithm.namedCurve");
-      break;
-    }
-    default:
-      throw new TypeError("CryptoKey does not support this operation");
-  }
-  checkUsage(key, usage);
-}
-var unusable, isAlgorithm;
-var init_crypto_key = __esm({
-  "node_modules/jose/dist/webapi/lib/crypto_key.js"() {
-    unusable = (name2, prop = "algorithm.name") => new TypeError(`CryptoKey does not support this operation, its ${prop} must be ${name2}`);
-    isAlgorithm = (algorithm, name2) => algorithm.name === name2;
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/invalid_key_input.js
-function message(msg, actual, ...types) {
-  types = types.filter(Boolean);
-  if (types.length > 2) {
-    const last = types.pop();
-    msg += `one of type ${types.join(", ")}, or ${last}.`;
-  } else if (types.length === 2) {
-    msg += `one of type ${types[0]} or ${types[1]}.`;
-  } else {
-    msg += `of type ${types[0]}.`;
-  }
-  if (actual == null) {
-    msg += ` Received ${actual}`;
-  } else if (typeof actual === "function" && actual.name) {
-    msg += ` Received function ${actual.name}`;
-  } else if (typeof actual === "object" && actual != null) {
-    if (actual.constructor?.name) {
-      msg += ` Received an instance of ${actual.constructor.name}`;
-    }
-  }
-  return msg;
-}
-var invalidKeyInput, withAlg;
-var init_invalid_key_input = __esm({
-  "node_modules/jose/dist/webapi/lib/invalid_key_input.js"() {
-    invalidKeyInput = (actual, ...types) => message("Key must be ", actual, ...types);
-    withAlg = (alg, actual, ...types) => message(`Key for the ${alg} algorithm must be `, actual, ...types);
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/is_key_like.js
-var isCryptoKey, isKeyObject, isKeyLike;
-var init_is_key_like = __esm({
-  "node_modules/jose/dist/webapi/lib/is_key_like.js"() {
-    isCryptoKey = (key) => {
-      if (key?.[Symbol.toStringTag] === "CryptoKey")
-        return true;
-      try {
-        return key instanceof CryptoKey;
-      } catch {
-        return false;
-      }
-    };
-    isKeyObject = (key) => key?.[Symbol.toStringTag] === "KeyObject";
-    isKeyLike = (key) => isCryptoKey(key) || isKeyObject(key);
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/is_disjoint.js
-function isDisjoint(...headers) {
-  const sources = headers.filter(Boolean);
-  if (sources.length === 0 || sources.length === 1) {
-    return true;
-  }
-  let acc;
-  for (const header of sources) {
-    const parameters = Object.keys(header);
-    if (!acc || acc.size === 0) {
-      acc = new Set(parameters);
-      continue;
-    }
-    for (const parameter of parameters) {
-      if (acc.has(parameter)) {
-        return false;
-      }
-      acc.add(parameter);
-    }
-  }
-  return true;
-}
-var init_is_disjoint = __esm({
-  "node_modules/jose/dist/webapi/lib/is_disjoint.js"() {
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/is_object.js
-function isObject(input) {
-  if (!isObjectLike(input) || Object.prototype.toString.call(input) !== "[object Object]") {
-    return false;
-  }
-  if (Object.getPrototypeOf(input) === null) {
-    return true;
-  }
-  let proto = input;
-  while (Object.getPrototypeOf(proto) !== null) {
-    proto = Object.getPrototypeOf(proto);
-  }
-  return Object.getPrototypeOf(input) === proto;
-}
-var isObjectLike;
-var init_is_object = __esm({
-  "node_modules/jose/dist/webapi/lib/is_object.js"() {
-    isObjectLike = (value) => typeof value === "object" && value !== null;
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/check_key_length.js
-function checkKeyLength(alg, key) {
-  if (alg.startsWith("RS") || alg.startsWith("PS")) {
-    const { modulusLength } = key.algorithm;
-    if (typeof modulusLength !== "number" || modulusLength < 2048) {
-      throw new TypeError(`${alg} requires key modulusLength to be 2048 bits or larger`);
-    }
-  }
-}
-var init_check_key_length = __esm({
-  "node_modules/jose/dist/webapi/lib/check_key_length.js"() {
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/jwk_to_key.js
-function subtleMapping(jwk) {
-  let algorithm;
-  let keyUsages;
-  switch (jwk.kty) {
-    case "AKP": {
-      switch (jwk.alg) {
-        case "ML-DSA-44":
-        case "ML-DSA-65":
-        case "ML-DSA-87":
-          algorithm = { name: jwk.alg };
-          keyUsages = jwk.priv ? ["sign"] : ["verify"];
-          break;
-        default:
-          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
-      }
-      break;
-    }
-    case "RSA": {
-      switch (jwk.alg) {
-        case "PS256":
-        case "PS384":
-        case "PS512":
-          algorithm = { name: "RSA-PSS", hash: `SHA-${jwk.alg.slice(-3)}` };
-          keyUsages = jwk.d ? ["sign"] : ["verify"];
-          break;
-        case "RS256":
-        case "RS384":
-        case "RS512":
-          algorithm = { name: "RSASSA-PKCS1-v1_5", hash: `SHA-${jwk.alg.slice(-3)}` };
-          keyUsages = jwk.d ? ["sign"] : ["verify"];
-          break;
-        case "RSA-OAEP":
-        case "RSA-OAEP-256":
-        case "RSA-OAEP-384":
-        case "RSA-OAEP-512":
-          algorithm = {
-            name: "RSA-OAEP",
-            hash: `SHA-${parseInt(jwk.alg.slice(-3), 10) || 1}`
-          };
-          keyUsages = jwk.d ? ["decrypt", "unwrapKey"] : ["encrypt", "wrapKey"];
-          break;
-        default:
-          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
-      }
-      break;
-    }
-    case "EC": {
-      switch (jwk.alg) {
-        case "ES256":
-          algorithm = { name: "ECDSA", namedCurve: "P-256" };
-          keyUsages = jwk.d ? ["sign"] : ["verify"];
-          break;
-        case "ES384":
-          algorithm = { name: "ECDSA", namedCurve: "P-384" };
-          keyUsages = jwk.d ? ["sign"] : ["verify"];
-          break;
-        case "ES512":
-          algorithm = { name: "ECDSA", namedCurve: "P-521" };
-          keyUsages = jwk.d ? ["sign"] : ["verify"];
-          break;
-        case "ECDH-ES":
-        case "ECDH-ES+A128KW":
-        case "ECDH-ES+A192KW":
-        case "ECDH-ES+A256KW":
-          algorithm = { name: "ECDH", namedCurve: jwk.crv };
-          keyUsages = jwk.d ? ["deriveBits"] : [];
-          break;
-        default:
-          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
-      }
-      break;
-    }
-    case "OKP": {
-      switch (jwk.alg) {
-        case "Ed25519":
-        case "EdDSA":
-          algorithm = { name: "Ed25519" };
-          keyUsages = jwk.d ? ["sign"] : ["verify"];
-          break;
-        case "ECDH-ES":
-        case "ECDH-ES+A128KW":
-        case "ECDH-ES+A192KW":
-        case "ECDH-ES+A256KW":
-          algorithm = { name: jwk.crv };
-          keyUsages = jwk.d ? ["deriveBits"] : [];
-          break;
-        default:
-          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
-      }
-      break;
-    }
-    default:
-      throw new JOSENotSupported('Invalid or unsupported JWK "kty" (Key Type) Parameter value');
-  }
-  return { algorithm, keyUsages };
-}
-async function jwkToKey(jwk) {
-  if (!jwk.alg) {
-    throw new TypeError('"alg" argument is required when "jwk.alg" is not present');
-  }
-  const { algorithm, keyUsages } = subtleMapping(jwk);
-  const keyData = { ...jwk };
-  if (keyData.kty !== "AKP") {
-    delete keyData.alg;
-  }
-  delete keyData.use;
-  return crypto.subtle.importKey("jwk", keyData, algorithm, jwk.ext ?? (jwk.d || jwk.priv ? false : true), jwk.key_ops ?? keyUsages);
-}
-var init_jwk_to_key = __esm({
-  "node_modules/jose/dist/webapi/lib/jwk_to_key.js"() {
-    init_errors();
-  }
-});
-
-// node_modules/jose/dist/webapi/key/import.js
-async function importJWK(jwk, alg, options) {
-  if (!isObject(jwk)) {
-    throw new TypeError("JWK must be an object");
-  }
-  let ext;
-  alg ??= jwk.alg;
-  ext ??= options?.extractable ?? jwk.ext;
-  switch (jwk.kty) {
-    case "oct":
-      if (typeof jwk.k !== "string" || !jwk.k) {
-        throw new TypeError('missing "k" (Key Value) Parameter value');
-      }
-      return decode(jwk.k);
-    case "RSA":
-      if ("oth" in jwk && jwk.oth !== void 0) {
-        throw new JOSENotSupported('RSA JWK "oth" (Other Primes Info) Parameter value is not supported');
-      }
-      return jwkToKey({ ...jwk, alg, ext });
-    case "AKP": {
-      if (typeof jwk.alg !== "string" || !jwk.alg) {
-        throw new TypeError('missing "alg" (Algorithm) Parameter value');
-      }
-      if (alg !== void 0 && alg !== jwk.alg) {
-        throw new TypeError("JWK alg and alg option value mismatch");
-      }
-      return jwkToKey({ ...jwk, ext });
-    }
-    case "EC":
-    case "OKP":
-      return jwkToKey({ ...jwk, alg, ext });
-    default:
-      throw new JOSENotSupported('Unsupported "kty" (Key Type) Parameter value');
-  }
-}
-var init_import = __esm({
-  "node_modules/jose/dist/webapi/key/import.js"() {
-    init_base64url();
-    init_jwk_to_key();
-    init_errors();
-    init_is_object();
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/validate_crit.js
-function validateCrit(Err, recognizedDefault, recognizedOption, protectedHeader, joseHeader) {
-  if (joseHeader.crit !== void 0 && protectedHeader?.crit === void 0) {
-    throw new Err('"crit" (Critical) Header Parameter MUST be integrity protected');
-  }
-  if (!protectedHeader || protectedHeader.crit === void 0) {
-    return /* @__PURE__ */ new Set();
-  }
-  if (!Array.isArray(protectedHeader.crit) || protectedHeader.crit.length === 0 || protectedHeader.crit.some((input) => typeof input !== "string" || input.length === 0)) {
-    throw new Err('"crit" (Critical) Header Parameter MUST be an array of non-empty strings when present');
-  }
-  let recognized;
-  if (recognizedOption !== void 0) {
-    recognized = new Map([...Object.entries(recognizedOption), ...recognizedDefault.entries()]);
-  } else {
-    recognized = recognizedDefault;
-  }
-  for (const parameter of protectedHeader.crit) {
-    if (!recognized.has(parameter)) {
-      throw new JOSENotSupported(`Extension Header Parameter "${parameter}" is not recognized`);
-    }
-    if (joseHeader[parameter] === void 0) {
-      throw new Err(`Extension Header Parameter "${parameter}" is missing`);
-    }
-    if (recognized.get(parameter) && protectedHeader[parameter] === void 0) {
-      throw new Err(`Extension Header Parameter "${parameter}" MUST be integrity protected`);
-    }
-  }
-  return new Set(protectedHeader.crit);
-}
-var init_validate_crit = __esm({
-  "node_modules/jose/dist/webapi/lib/validate_crit.js"() {
-    init_errors();
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/is_jwk.js
-var isJWK, isPrivateJWK, isPublicJWK, isSecretJWK;
-var init_is_jwk = __esm({
-  "node_modules/jose/dist/webapi/lib/is_jwk.js"() {
-    init_is_object();
-    isJWK = (key) => isObject(key) && typeof key.kty === "string";
-    isPrivateJWK = (key) => key.kty !== "oct" && (key.kty === "AKP" && typeof key.priv === "string" || typeof key.d === "string");
-    isPublicJWK = (key) => key.kty !== "oct" && key.d === void 0 && key.priv === void 0;
-    isSecretJWK = (key) => key.kty === "oct" && typeof key.k === "string";
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/normalize_key.js
-async function normalizeKey(key, alg) {
-  if (key instanceof Uint8Array) {
-    return key;
-  }
-  if (isCryptoKey(key)) {
-    return key;
-  }
-  if (isKeyObject(key)) {
-    if (key.type === "secret") {
-      return key.export();
-    }
-    if ("toCryptoKey" in key && typeof key.toCryptoKey === "function") {
-      try {
-        return handleKeyObject(key, alg);
-      } catch (err) {
-        if (err instanceof TypeError) {
-          throw err;
-        }
-      }
-    }
-    let jwk = key.export({ format: "jwk" });
-    return handleJWK(key, jwk, alg);
-  }
-  if (isJWK(key)) {
-    if (key.k) {
-      return decode(key.k);
-    }
-    return handleJWK(key, key, alg, true);
-  }
-  throw new Error("unreachable");
-}
-var cache2, handleJWK, handleKeyObject;
-var init_normalize_key = __esm({
-  "node_modules/jose/dist/webapi/lib/normalize_key.js"() {
-    init_is_jwk();
-    init_base64url();
-    init_jwk_to_key();
-    init_is_key_like();
-    handleJWK = async (key, jwk, alg, freeze = false) => {
-      cache2 ||= /* @__PURE__ */ new WeakMap();
-      let cached2 = cache2.get(key);
-      if (cached2?.[alg]) {
-        return cached2[alg];
-      }
-      const cryptoKey = await jwkToKey({ ...jwk, alg });
-      if (freeze)
-        Object.freeze(key);
-      if (!cached2) {
-        cache2.set(key, { [alg]: cryptoKey });
-      } else {
-        cached2[alg] = cryptoKey;
-      }
-      return cryptoKey;
-    };
-    handleKeyObject = (keyObject, alg) => {
-      cache2 ||= /* @__PURE__ */ new WeakMap();
-      let cached2 = cache2.get(keyObject);
-      if (cached2?.[alg]) {
-        return cached2[alg];
-      }
-      const isPublic = keyObject.type === "public";
-      const extractable = isPublic ? true : false;
-      let cryptoKey;
-      if (keyObject.asymmetricKeyType === "x25519") {
-        switch (alg) {
-          case "ECDH-ES":
-          case "ECDH-ES+A128KW":
-          case "ECDH-ES+A192KW":
-          case "ECDH-ES+A256KW":
-            break;
-          default:
-            throw new TypeError("given KeyObject instance cannot be used for this algorithm");
-        }
-        cryptoKey = keyObject.toCryptoKey(keyObject.asymmetricKeyType, extractable, isPublic ? [] : ["deriveBits"]);
-      }
-      if (keyObject.asymmetricKeyType === "ed25519") {
-        if (alg !== "EdDSA" && alg !== "Ed25519") {
-          throw new TypeError("given KeyObject instance cannot be used for this algorithm");
-        }
-        cryptoKey = keyObject.toCryptoKey(keyObject.asymmetricKeyType, extractable, [
-          isPublic ? "verify" : "sign"
-        ]);
-      }
-      switch (keyObject.asymmetricKeyType) {
-        case "ml-dsa-44":
-        case "ml-dsa-65":
-        case "ml-dsa-87": {
-          if (alg !== keyObject.asymmetricKeyType.toUpperCase()) {
-            throw new TypeError("given KeyObject instance cannot be used for this algorithm");
-          }
-          cryptoKey = keyObject.toCryptoKey(keyObject.asymmetricKeyType, extractable, [
-            isPublic ? "verify" : "sign"
-          ]);
-        }
-      }
-      if (keyObject.asymmetricKeyType === "rsa") {
-        let hash;
-        switch (alg) {
-          case "RSA-OAEP":
-            hash = "SHA-1";
-            break;
-          case "RS256":
-          case "PS256":
-          case "RSA-OAEP-256":
-            hash = "SHA-256";
-            break;
-          case "RS384":
-          case "PS384":
-          case "RSA-OAEP-384":
-            hash = "SHA-384";
-            break;
-          case "RS512":
-          case "PS512":
-          case "RSA-OAEP-512":
-            hash = "SHA-512";
-            break;
-          default:
-            throw new TypeError("given KeyObject instance cannot be used for this algorithm");
-        }
-        if (alg.startsWith("RSA-OAEP")) {
-          return keyObject.toCryptoKey({
-            name: "RSA-OAEP",
-            hash
-          }, extractable, isPublic ? ["encrypt"] : ["decrypt"]);
-        }
-        cryptoKey = keyObject.toCryptoKey({
-          name: alg.startsWith("PS") ? "RSA-PSS" : "RSASSA-PKCS1-v1_5",
-          hash
-        }, extractable, [isPublic ? "verify" : "sign"]);
-      }
-      if (keyObject.asymmetricKeyType === "ec") {
-        const nist = /* @__PURE__ */ new Map([
-          ["prime256v1", "P-256"],
-          ["secp384r1", "P-384"],
-          ["secp521r1", "P-521"]
-        ]);
-        const namedCurve = nist.get(keyObject.asymmetricKeyDetails?.namedCurve);
-        if (!namedCurve) {
-          throw new TypeError("given KeyObject instance cannot be used for this algorithm");
-        }
-        if (alg === "ES256" && namedCurve === "P-256") {
-          cryptoKey = keyObject.toCryptoKey({
-            name: "ECDSA",
-            namedCurve
-          }, extractable, [isPublic ? "verify" : "sign"]);
-        }
-        if (alg === "ES384" && namedCurve === "P-384") {
-          cryptoKey = keyObject.toCryptoKey({
-            name: "ECDSA",
-            namedCurve
-          }, extractable, [isPublic ? "verify" : "sign"]);
-        }
-        if (alg === "ES512" && namedCurve === "P-521") {
-          cryptoKey = keyObject.toCryptoKey({
-            name: "ECDSA",
-            namedCurve
-          }, extractable, [isPublic ? "verify" : "sign"]);
-        }
-        if (alg.startsWith("ECDH-ES")) {
-          cryptoKey = keyObject.toCryptoKey({
-            name: "ECDH",
-            namedCurve
-          }, extractable, isPublic ? [] : ["deriveBits"]);
-        }
-      }
-      if (!cryptoKey) {
-        throw new TypeError("given KeyObject instance cannot be used for this algorithm");
-      }
-      if (!cached2) {
-        cache2.set(keyObject, { [alg]: cryptoKey });
-      } else {
-        cached2[alg] = cryptoKey;
-      }
-      return cryptoKey;
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/check_key_type.js
-function checkKeyType(alg, key, usage) {
-  switch (alg.substring(0, 2)) {
-    case "A1":
-    case "A2":
-    case "di":
-    case "HS":
-    case "PB":
-      symmetricTypeCheck(alg, key, usage);
-      break;
-    default:
-      asymmetricTypeCheck(alg, key, usage);
-  }
-}
-var tag, jwkMatchesOp, symmetricTypeCheck, asymmetricTypeCheck;
-var init_check_key_type = __esm({
-  "node_modules/jose/dist/webapi/lib/check_key_type.js"() {
-    init_invalid_key_input();
-    init_is_key_like();
-    init_is_jwk();
-    tag = (key) => key?.[Symbol.toStringTag];
-    jwkMatchesOp = (alg, key, usage) => {
-      if (key.use !== void 0) {
-        let expected;
-        switch (usage) {
-          case "sign":
-          case "verify":
-            expected = "sig";
-            break;
-          case "encrypt":
-          case "decrypt":
-            expected = "enc";
-            break;
-        }
-        if (key.use !== expected) {
-          throw new TypeError(`Invalid key for this operation, its "use" must be "${expected}" when present`);
-        }
-      }
-      if (key.alg !== void 0 && key.alg !== alg) {
-        throw new TypeError(`Invalid key for this operation, its "alg" must be "${alg}" when present`);
-      }
-      if (Array.isArray(key.key_ops)) {
-        let expectedKeyOp;
-        switch (true) {
-          case (usage === "sign" || usage === "verify"):
-          case alg === "dir":
-          case alg.includes("CBC-HS"):
-            expectedKeyOp = usage;
-            break;
-          case alg.startsWith("PBES2"):
-            expectedKeyOp = "deriveBits";
-            break;
-          case /^A\d{3}(?:GCM)?(?:KW)?$/.test(alg):
-            if (!alg.includes("GCM") && alg.endsWith("KW")) {
-              expectedKeyOp = usage === "encrypt" ? "wrapKey" : "unwrapKey";
-            } else {
-              expectedKeyOp = usage;
-            }
-            break;
-          case (usage === "encrypt" && alg.startsWith("RSA")):
-            expectedKeyOp = "wrapKey";
-            break;
-          case usage === "decrypt":
-            expectedKeyOp = alg.startsWith("RSA") ? "unwrapKey" : "deriveBits";
-            break;
-        }
-        if (expectedKeyOp && key.key_ops?.includes?.(expectedKeyOp) === false) {
-          throw new TypeError(`Invalid key for this operation, its "key_ops" must include "${expectedKeyOp}" when present`);
-        }
-      }
-      return true;
-    };
-    symmetricTypeCheck = (alg, key, usage) => {
-      if (key instanceof Uint8Array)
-        return;
-      if (isJWK(key)) {
-        if (isSecretJWK(key) && jwkMatchesOp(alg, key, usage))
-          return;
-        throw new TypeError(`JSON Web Key for symmetric algorithms must have JWK "kty" (Key Type) equal to "oct" and the JWK "k" (Key Value) present`);
-      }
-      if (!isKeyLike(key)) {
-        throw new TypeError(withAlg(alg, key, "CryptoKey", "KeyObject", "JSON Web Key", "Uint8Array"));
-      }
-      if (key.type !== "secret") {
-        throw new TypeError(`${tag(key)} instances for symmetric algorithms must be of type "secret"`);
-      }
-    };
-    asymmetricTypeCheck = (alg, key, usage) => {
-      if (isJWK(key)) {
-        switch (usage) {
-          case "decrypt":
-          case "sign":
-            if (isPrivateJWK(key) && jwkMatchesOp(alg, key, usage))
-              return;
-            throw new TypeError(`JSON Web Key for this operation must be a private JWK`);
-          case "encrypt":
-          case "verify":
-            if (isPublicJWK(key) && jwkMatchesOp(alg, key, usage))
-              return;
-            throw new TypeError(`JSON Web Key for this operation must be a public JWK`);
-        }
-      }
-      if (!isKeyLike(key)) {
-        throw new TypeError(withAlg(alg, key, "CryptoKey", "KeyObject", "JSON Web Key"));
-      }
-      if (key.type === "secret") {
-        throw new TypeError(`${tag(key)} instances for asymmetric algorithms must not be of type "secret"`);
-      }
-      if (key.type === "public") {
-        switch (usage) {
-          case "sign":
-            throw new TypeError(`${tag(key)} instances for asymmetric algorithm signing must be of type "private"`);
-          case "decrypt":
-            throw new TypeError(`${tag(key)} instances for asymmetric algorithm decryption must be of type "private"`);
-        }
-      }
-      if (key.type === "private") {
-        switch (usage) {
-          case "verify":
-            throw new TypeError(`${tag(key)} instances for asymmetric algorithm verifying must be of type "public"`);
-          case "encrypt":
-            throw new TypeError(`${tag(key)} instances for asymmetric algorithm encryption must be of type "public"`);
-        }
-      }
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/key_to_jwk.js
-async function keyToJWK(key) {
-  if (isKeyObject(key)) {
-    if (key.type === "secret") {
-      key = key.export();
-    } else {
-      return key.export({ format: "jwk" });
-    }
-  }
-  if (key instanceof Uint8Array) {
-    return {
-      kty: "oct",
-      k: encode2(key)
-    };
-  }
-  if (!isCryptoKey(key)) {
-    throw new TypeError(invalidKeyInput(key, "CryptoKey", "KeyObject", "Uint8Array"));
-  }
-  if (!key.extractable) {
-    throw new TypeError("non-extractable CryptoKey cannot be exported as a JWK");
-  }
-  const { ext, key_ops, alg, use, ...jwk } = await crypto.subtle.exportKey("jwk", key);
-  if (jwk.kty === "AKP") {
-    ;
-    jwk.alg = alg;
-  }
-  return jwk;
-}
-var init_key_to_jwk = __esm({
-  "node_modules/jose/dist/webapi/lib/key_to_jwk.js"() {
-    init_invalid_key_input();
-    init_base64url();
-    init_is_key_like();
-  }
-});
-
-// node_modules/jose/dist/webapi/key/export.js
-async function exportJWK(key) {
-  return keyToJWK(key);
-}
-var init_export = __esm({
-  "node_modules/jose/dist/webapi/key/export.js"() {
-    init_key_to_jwk();
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/subtle_dsa.js
-function subtleAlgorithm(alg, algorithm) {
-  const hash = `SHA-${alg.slice(-3)}`;
-  switch (alg) {
-    case "HS256":
-    case "HS384":
-    case "HS512":
-      return { hash, name: "HMAC" };
-    case "PS256":
-    case "PS384":
-    case "PS512":
-      return { hash, name: "RSA-PSS", saltLength: parseInt(alg.slice(-3), 10) >> 3 };
-    case "RS256":
-    case "RS384":
-    case "RS512":
-      return { hash, name: "RSASSA-PKCS1-v1_5" };
-    case "ES256":
-    case "ES384":
-    case "ES512":
-      return { hash, name: "ECDSA", namedCurve: algorithm.namedCurve };
-    case "Ed25519":
-    case "EdDSA":
-      return { name: "Ed25519" };
-    case "ML-DSA-44":
-    case "ML-DSA-65":
-    case "ML-DSA-87":
-      return { name: alg };
-    default:
-      throw new JOSENotSupported(`alg ${alg} is not supported either by JOSE or your javascript runtime`);
-  }
-}
-var init_subtle_dsa = __esm({
-  "node_modules/jose/dist/webapi/lib/subtle_dsa.js"() {
-    init_errors();
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/get_sign_verify_key.js
-async function getSigKey(alg, key, usage) {
-  if (key instanceof Uint8Array) {
-    if (!alg.startsWith("HS")) {
-      throw new TypeError(invalidKeyInput(key, "CryptoKey", "KeyObject", "JSON Web Key"));
-    }
-    return crypto.subtle.importKey("raw", key, { hash: `SHA-${alg.slice(-3)}`, name: "HMAC" }, false, [usage]);
-  }
-  checkSigCryptoKey(key, alg, usage);
-  return key;
-}
-var init_get_sign_verify_key = __esm({
-  "node_modules/jose/dist/webapi/lib/get_sign_verify_key.js"() {
-    init_crypto_key();
-    init_invalid_key_input();
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/jwt_claims_set.js
-function secs(str) {
-  const matched = REGEX.exec(str);
-  if (!matched || matched[4] && matched[1]) {
-    throw new TypeError("Invalid time period format");
-  }
-  const value = parseFloat(matched[2]);
-  const unit = matched[3].toLowerCase();
-  let numericDate;
-  switch (unit) {
-    case "sec":
-    case "secs":
-    case "second":
-    case "seconds":
-    case "s":
-      numericDate = Math.round(value);
-      break;
-    case "minute":
-    case "minutes":
-    case "min":
-    case "mins":
-    case "m":
-      numericDate = Math.round(value * minute);
-      break;
-    case "hour":
-    case "hours":
-    case "hr":
-    case "hrs":
-    case "h":
-      numericDate = Math.round(value * hour);
-      break;
-    case "day":
-    case "days":
-    case "d":
-      numericDate = Math.round(value * day);
-      break;
-    case "week":
-    case "weeks":
-    case "w":
-      numericDate = Math.round(value * week);
-      break;
-    default:
-      numericDate = Math.round(value * year);
-      break;
-  }
-  if (matched[1] === "-" || matched[4] === "ago") {
-    return -numericDate;
-  }
-  return numericDate;
-}
-function validateInput(label, input) {
-  if (!Number.isFinite(input)) {
-    throw new TypeError(`Invalid ${label} input`);
-  }
-  return input;
-}
-var epoch, minute, hour, day, week, year, REGEX, JWTClaimsBuilder;
-var init_jwt_claims_set = __esm({
-  "node_modules/jose/dist/webapi/lib/jwt_claims_set.js"() {
-    init_buffer_utils();
-    init_is_object();
-    epoch = (date) => Math.floor(date.getTime() / 1e3);
-    minute = 60;
-    hour = minute * 60;
-    day = hour * 24;
-    week = day * 7;
-    year = day * 365.25;
-    REGEX = /^(\+|\-)? ?(\d+|\d+\.\d+) ?(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)(?: (ago|from now))?$/i;
-    JWTClaimsBuilder = class {
-      #payload;
-      constructor(payload) {
-        if (!isObject(payload)) {
-          throw new TypeError("JWT Claims Set MUST be an object");
-        }
-        this.#payload = structuredClone(payload);
-      }
-      data() {
-        return encoder.encode(JSON.stringify(this.#payload));
-      }
-      get iss() {
-        return this.#payload.iss;
-      }
-      set iss(value) {
-        this.#payload.iss = value;
-      }
-      get sub() {
-        return this.#payload.sub;
-      }
-      set sub(value) {
-        this.#payload.sub = value;
-      }
-      get aud() {
-        return this.#payload.aud;
-      }
-      set aud(value) {
-        this.#payload.aud = value;
-      }
-      set jti(value) {
-        this.#payload.jti = value;
-      }
-      set nbf(value) {
-        if (typeof value === "number") {
-          this.#payload.nbf = validateInput("setNotBefore", value);
-        } else if (value instanceof Date) {
-          this.#payload.nbf = validateInput("setNotBefore", epoch(value));
-        } else {
-          this.#payload.nbf = epoch(/* @__PURE__ */ new Date()) + secs(value);
-        }
-      }
-      set exp(value) {
-        if (typeof value === "number") {
-          this.#payload.exp = validateInput("setExpirationTime", value);
-        } else if (value instanceof Date) {
-          this.#payload.exp = validateInput("setExpirationTime", epoch(value));
-        } else {
-          this.#payload.exp = epoch(/* @__PURE__ */ new Date()) + secs(value);
-        }
-      }
-      set iat(value) {
-        if (value === void 0) {
-          this.#payload.iat = epoch(/* @__PURE__ */ new Date());
-        } else if (value instanceof Date) {
-          this.#payload.iat = validateInput("setIssuedAt", epoch(value));
-        } else if (typeof value === "string") {
-          this.#payload.iat = validateInput("setIssuedAt", epoch(/* @__PURE__ */ new Date()) + secs(value));
-        } else {
-          this.#payload.iat = validateInput("setIssuedAt", value);
-        }
-      }
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/lib/sign.js
-async function sign(alg, key, data) {
-  const cryptoKey = await getSigKey(alg, key, "sign");
-  checkKeyLength(alg, cryptoKey);
-  const signature = await crypto.subtle.sign(subtleAlgorithm(alg, cryptoKey.algorithm), cryptoKey, data);
-  return new Uint8Array(signature);
-}
-var init_sign = __esm({
-  "node_modules/jose/dist/webapi/lib/sign.js"() {
-    init_subtle_dsa();
-    init_check_key_length();
-    init_get_sign_verify_key();
-  }
-});
-
-// node_modules/jose/dist/webapi/jws/flattened/sign.js
-var FlattenedSign;
-var init_sign2 = __esm({
-  "node_modules/jose/dist/webapi/jws/flattened/sign.js"() {
-    init_base64url();
-    init_sign();
-    init_is_disjoint();
-    init_errors();
-    init_buffer_utils();
-    init_check_key_type();
-    init_validate_crit();
-    init_normalize_key();
-    FlattenedSign = class {
-      #payload;
-      #protectedHeader;
-      #unprotectedHeader;
-      constructor(payload) {
-        if (!(payload instanceof Uint8Array)) {
-          throw new TypeError("payload must be an instance of Uint8Array");
-        }
-        this.#payload = payload;
-      }
-      setProtectedHeader(protectedHeader) {
-        if (this.#protectedHeader) {
-          throw new TypeError("setProtectedHeader can only be called once");
-        }
-        this.#protectedHeader = protectedHeader;
-        return this;
-      }
-      setUnprotectedHeader(unprotectedHeader) {
-        if (this.#unprotectedHeader) {
-          throw new TypeError("setUnprotectedHeader can only be called once");
-        }
-        this.#unprotectedHeader = unprotectedHeader;
-        return this;
-      }
-      async sign(key, options) {
-        if (!this.#protectedHeader && !this.#unprotectedHeader) {
-          throw new JWSInvalid("either setProtectedHeader or setUnprotectedHeader must be called before #sign()");
-        }
-        if (!isDisjoint(this.#protectedHeader, this.#unprotectedHeader)) {
-          throw new JWSInvalid("JWS Protected and JWS Unprotected Header Parameter names must be disjoint");
-        }
-        const joseHeader = {
-          ...this.#protectedHeader,
-          ...this.#unprotectedHeader
-        };
-        const extensions = validateCrit(JWSInvalid, /* @__PURE__ */ new Map([["b64", true]]), options?.crit, this.#protectedHeader, joseHeader);
-        let b64 = true;
-        if (extensions.has("b64")) {
-          b64 = this.#protectedHeader.b64;
-          if (typeof b64 !== "boolean") {
-            throw new JWSInvalid('The "b64" (base64url-encode payload) Header Parameter must be a boolean');
-          }
-        }
-        const { alg } = joseHeader;
-        if (typeof alg !== "string" || !alg) {
-          throw new JWSInvalid('JWS "alg" (Algorithm) Header Parameter missing or invalid');
-        }
-        checkKeyType(alg, key, "sign");
-        let payloadS;
-        let payloadB;
-        if (b64) {
-          payloadS = encode2(this.#payload);
-          payloadB = encode(payloadS);
-        } else {
-          payloadB = this.#payload;
-          payloadS = "";
-        }
-        let protectedHeaderString;
-        let protectedHeaderBytes;
-        if (this.#protectedHeader) {
-          protectedHeaderString = encode2(JSON.stringify(this.#protectedHeader));
-          protectedHeaderBytes = encode(protectedHeaderString);
-        } else {
-          protectedHeaderString = "";
-          protectedHeaderBytes = new Uint8Array();
-        }
-        const data = concat(protectedHeaderBytes, encode("."), payloadB);
-        const k = await normalizeKey(key, alg);
-        const signature = await sign(alg, k, data);
-        const jws = {
-          signature: encode2(signature),
-          payload: payloadS
-        };
-        if (this.#unprotectedHeader) {
-          jws.header = this.#unprotectedHeader;
-        }
-        if (this.#protectedHeader) {
-          jws.protected = protectedHeaderString;
-        }
-        return jws;
-      }
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/jws/compact/sign.js
-var CompactSign;
-var init_sign3 = __esm({
-  "node_modules/jose/dist/webapi/jws/compact/sign.js"() {
-    init_sign2();
-    CompactSign = class {
-      #flattened;
-      constructor(payload) {
-        this.#flattened = new FlattenedSign(payload);
-      }
-      setProtectedHeader(protectedHeader) {
-        this.#flattened.setProtectedHeader(protectedHeader);
-        return this;
-      }
-      async sign(key, options) {
-        const jws = await this.#flattened.sign(key, options);
-        if (jws.payload === void 0) {
-          throw new TypeError("use the flattened module for creating JWS with b64: false");
-        }
-        return `${jws.protected}.${jws.payload}.${jws.signature}`;
-      }
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/jwt/sign.js
-var SignJWT;
-var init_sign4 = __esm({
-  "node_modules/jose/dist/webapi/jwt/sign.js"() {
-    init_sign3();
-    init_errors();
-    init_jwt_claims_set();
-    SignJWT = class {
-      #protectedHeader;
-      #jwt;
-      constructor(payload = {}) {
-        this.#jwt = new JWTClaimsBuilder(payload);
-      }
-      setIssuer(issuer) {
-        this.#jwt.iss = issuer;
-        return this;
-      }
-      setSubject(subject) {
-        this.#jwt.sub = subject;
-        return this;
-      }
-      setAudience(audience) {
-        this.#jwt.aud = audience;
-        return this;
-      }
-      setJti(jwtId) {
-        this.#jwt.jti = jwtId;
-        return this;
-      }
-      setNotBefore(input) {
-        this.#jwt.nbf = input;
-        return this;
-      }
-      setExpirationTime(input) {
-        this.#jwt.exp = input;
-        return this;
-      }
-      setIssuedAt(input) {
-        this.#jwt.iat = input;
-        return this;
-      }
-      setProtectedHeader(protectedHeader) {
-        this.#protectedHeader = protectedHeader;
-        return this;
-      }
-      async sign(key, options) {
-        const sig = new CompactSign(this.#jwt.data());
-        sig.setProtectedHeader(this.#protectedHeader);
-        if (Array.isArray(this.#protectedHeader?.crit) && this.#protectedHeader.crit.includes("b64") && this.#protectedHeader.b64 === false) {
-          throw new JWTInvalid("JWTs MUST NOT use unencoded payload");
-        }
-        return sig.sign(key, options);
-      }
-    };
-  }
-});
-
-// node_modules/jose/dist/webapi/key/generate_key_pair.js
-function getModulusLengthOption(options) {
-  const modulusLength = options?.modulusLength ?? 2048;
-  if (typeof modulusLength !== "number" || modulusLength < 2048) {
-    throw new JOSENotSupported("Invalid or unsupported modulusLength option provided, 2048 bits or larger keys must be used");
-  }
-  return modulusLength;
-}
-async function generateKeyPair(alg, options) {
-  let algorithm;
-  let keyUsages;
-  switch (alg) {
-    case "PS256":
-    case "PS384":
-    case "PS512":
-      algorithm = {
-        name: "RSA-PSS",
-        hash: `SHA-${alg.slice(-3)}`,
-        publicExponent: Uint8Array.of(1, 0, 1),
-        modulusLength: getModulusLengthOption(options)
-      };
-      keyUsages = ["sign", "verify"];
-      break;
-    case "RS256":
-    case "RS384":
-    case "RS512":
-      algorithm = {
-        name: "RSASSA-PKCS1-v1_5",
-        hash: `SHA-${alg.slice(-3)}`,
-        publicExponent: Uint8Array.of(1, 0, 1),
-        modulusLength: getModulusLengthOption(options)
-      };
-      keyUsages = ["sign", "verify"];
-      break;
-    case "RSA-OAEP":
-    case "RSA-OAEP-256":
-    case "RSA-OAEP-384":
-    case "RSA-OAEP-512":
-      algorithm = {
-        name: "RSA-OAEP",
-        hash: `SHA-${parseInt(alg.slice(-3), 10) || 1}`,
-        publicExponent: Uint8Array.of(1, 0, 1),
-        modulusLength: getModulusLengthOption(options)
-      };
-      keyUsages = ["decrypt", "unwrapKey", "encrypt", "wrapKey"];
-      break;
-    case "ES256":
-      algorithm = { name: "ECDSA", namedCurve: "P-256" };
-      keyUsages = ["sign", "verify"];
-      break;
-    case "ES384":
-      algorithm = { name: "ECDSA", namedCurve: "P-384" };
-      keyUsages = ["sign", "verify"];
-      break;
-    case "ES512":
-      algorithm = { name: "ECDSA", namedCurve: "P-521" };
-      keyUsages = ["sign", "verify"];
-      break;
-    case "Ed25519":
-    case "EdDSA": {
-      keyUsages = ["sign", "verify"];
-      algorithm = { name: "Ed25519" };
-      break;
-    }
-    case "ML-DSA-44":
-    case "ML-DSA-65":
-    case "ML-DSA-87": {
-      keyUsages = ["sign", "verify"];
-      algorithm = { name: alg };
-      break;
-    }
-    case "ECDH-ES":
-    case "ECDH-ES+A128KW":
-    case "ECDH-ES+A192KW":
-    case "ECDH-ES+A256KW": {
-      keyUsages = ["deriveBits"];
-      const crv = options?.crv ?? "P-256";
-      switch (crv) {
-        case "P-256":
-        case "P-384":
-        case "P-521": {
-          algorithm = { name: "ECDH", namedCurve: crv };
-          break;
-        }
-        case "X25519":
-          algorithm = { name: "X25519" };
-          break;
-        default:
-          throw new JOSENotSupported("Invalid or unsupported crv option provided, supported values are P-256, P-384, P-521, and X25519");
-      }
-      break;
-    }
-    default:
-      throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
-  }
-  return crypto.subtle.generateKey(algorithm, options?.extractable ?? false, keyUsages);
-}
-var init_generate_key_pair = __esm({
-  "node_modules/jose/dist/webapi/key/generate_key_pair.js"() {
-    init_errors();
-  }
-});
-
-// node_modules/jose/dist/webapi/index.js
-var init_webapi = __esm({
-  "node_modules/jose/dist/webapi/index.js"() {
-    init_sign4();
-    init_export();
-    init_import();
-    init_generate_key_pair();
-  }
-});
-
-// vendor/channel-pack/src/oauth.ts
-import { createHash as createHash4, randomBytes as randomBytes3 } from "node:crypto";
-function generatePkcePair() {
-  const codeVerifier = randomBytes3(48).toString("base64url");
-  const codeChallenge = createHash4("sha256").update(codeVerifier).digest("base64url");
-  return { codeVerifier, codeChallenge };
-}
-async function generateDpopKeyPair() {
-  const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true, crv: "P-256" });
-  return {
-    privateKeyJwk: await exportJWK(privateKey),
-    publicKeyJwk: await exportJWK(publicKey)
-  };
-}
-async function signDpopJws(keyPair, htm, htu) {
-  const key = await importJWK(keyPair.privateKeyJwk, "ES256", { extractable: false });
-  const payload = {
-    htm,
-    htu,
-    iat: Math.floor(Date.now() / 1e3),
-    jti: randomBytes3(32).toString("hex")
-  };
-  return new SignJWT(payload).setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk: keyPair.publicKeyJwk }).sign(key);
-}
-async function requestToken(body, keyPair, fetcher = fetch) {
-  const dpop = await signDpopJws(keyPair, "POST", STS_TOKEN_ENDPOINT);
-  let response;
-  try {
-    response = await fetcher(STS_TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: {
-        DPoP: dpop,
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams(body).toString(),
-      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS)
-    });
-  } catch (error) {
-    throw new Error(`CodeArts token request network error: ${String(error)}`);
-  }
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
-  if (!response.ok || !data?.credentials) {
-    const message2 = `CodeArts token request failed: ${response.status}${data ? ` ${JSON.stringify(data)}` : ""}`;
-    const errorCode = String(data?.error_code ?? "");
-    if (data?.error === "invalid_grant" || errorCode.includes("ExpiredRefreshToken")) {
-      throw new RefreshTokenExpiredError(message2);
-    }
-    throw new Error(message2);
-  }
-  return data;
-}
-async function exchangeAuthorizationCode(code, codeVerifier, port, keyPair, fetcher = fetch) {
-  return requestToken({
-    client_id: CLIENT_ID,
-    code,
-    code_verifier: codeVerifier,
-    grant_type: GRANT_AUTHORIZATION_CODE,
-    redirect_uri: `http://127.0.0.1:${port}${REDIRECT_PATH}`
-  }, keyPair, fetcher);
-}
-async function exchangeRefreshToken(refreshToken2, codeVerifier, keyPair, fetcher = fetch) {
-  return requestToken({
-    client_id: CLIENT_ID,
-    code_verifier: codeVerifier,
-    grant_type: GRANT_REFRESH_TOKEN,
-    refresh_token: refreshToken2
-  }, keyPair, fetcher);
-}
-function credentialFromTokenResponse(token, pkce, keyPair) {
-  const credentials = token.credentials ?? {};
-  return {
-    access_key_id: credentials.access_key_id ?? "",
-    secret_access_key: credentials.secret_access_key ?? "",
-    security_token: credentials.security_token ?? "",
-    expires_at: credentials.expiration ?? "",
-    refresh_token: token.refresh_token,
-    code_verifier: pkce.codeVerifier,
-    dpop_private_key_jwk: keyPair.privateKeyJwk
-  };
-}
-function keyPairFromStoredJwk(jwk) {
-  return {
-    privateKeyJwk: jwk,
-    publicKeyJwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }
-  };
-}
-var CLIENT_ID, REDIRECT_PATH, STS_TOKEN_ENDPOINT, TOKEN_TIMEOUT_MS, GRANT_AUTHORIZATION_CODE, GRANT_REFRESH_TOKEN, RefreshTokenExpiredError;
-var init_oauth = __esm({
-  "vendor/channel-pack/src/oauth.ts"() {
-    "use strict";
-    init_webapi();
-    CLIENT_ID = "codearts-agent";
-    REDIRECT_PATH = "/oauth/callback";
-    STS_TOKEN_ENDPOINT = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens";
-    TOKEN_TIMEOUT_MS = 6e4;
-    GRANT_AUTHORIZATION_CODE = "authorization_code";
-    GRANT_REFRESH_TOKEN = "refresh_token";
-    RefreshTokenExpiredError = class extends Error {
-      constructor(message2) {
-        super(message2);
-        this.name = "RefreshTokenExpiredError";
-      }
-    };
-  }
-});
-
-// vendor/channel-pack/src/login.ts
-var login_exports = {};
-__export(login_exports, {
-  CODEARTS_LOGIN_BASE: () => CODEARTS_LOGIN_BASE,
-  CREDENTIAL_ENDPOINT: () => CREDENTIAL_ENDPOINT,
-  HUAWEI_AUTH_BASE: () => HUAWEI_AUTH_BASE,
-  LOGIN_PLUGIN_NAME: () => LOGIN_PLUGIN_NAME,
-  LOGIN_PLUGIN_VERSION: () => LOGIN_PLUGIN_VERSION,
-  OAUTH_LOCALE: () => OAUTH_LOCALE,
-  OAUTH_THEME: () => OAUTH_THEME,
-  PORTAL_AUTHORIZE_BASE: () => PORTAL_AUTHORIZE_BASE,
-  PORTAL_LOGIN_BASE: () => PORTAL_LOGIN_BASE,
-  buildLoginUrl: () => buildLoginUrl,
-  buildOAuthLoginUrl: () => buildOAuthLoginUrl,
-  buildPortalLoginResultUrl: () => buildPortalLoginResultUrl,
-  expiresFromCredential: () => expiresFromCredential,
-  generateRandomSecret: () => generateRandomSecret,
-  openBrowser: () => openBrowser,
-  parseCredentialResponse: () => parseCredentialResponse,
-  pollForCredential: () => pollForCredential,
-  runLoginFlow: () => runLoginFlow,
-  runOAuthFlow: () => runOAuthFlow,
-  startCallbackServer: () => startCallbackServer,
-  startOAuthCallbackServer: () => startOAuthCallbackServer,
-  startOAuthFlow: () => startOAuthFlow
-});
-import { createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { getRandomValues, randomUUID as randomUUID2, randomBytes as randomBytes4 } from "node:crypto";
-function generateRandomSecret() {
-  const bytes = getRandomValues(new Uint8Array(32));
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-function buildLoginUrl(port, ticketId) {
-  const callbackUrl = `http://127.0.0.1:${port}/authentication`;
-  const redirectUrl = `${CODEARTS_LOGIN_BASE}?IdeaType=jetbrains&auth_callback_url=${encodeURIComponent(callbackUrl)}&plugin-name=${PLUGIN_NAME}&plugin-version=${PLUGIN_VERSION}&ticket_id=${encodeURIComponent(ticketId)}`;
-  const loginUrl = `${HUAWEI_AUTH_BASE}?service=${encodeURIComponent(redirectUrl)}`;
-  return { redirectUrl, loginUrl };
-}
-function parseCredentialResponse(data) {
-  if (data.credential) {
-    const access = data.credential.access ?? "";
-    const st = data.credential.securitytoken ?? data.credential.securityToken ?? "";
-    if (access && st) {
-      return {
-        access_key_id: access,
-        secret_access_key: data.credential.secret ?? "",
-        security_token: st,
-        expires_at: data.credential.expires_at ?? data.credential.expiresAt ?? "",
-        domain_id: data.domain_id ?? "",
-        user_id: data.user_id ?? "",
-        user_name: data.user_name ?? ""
-      };
-    }
-  }
-  if (data.result) {
-    const ak = data.result.accessKeyId ?? "";
-    const st = data.result.securityToken ?? "";
-    if (ak && st) {
-      return {
-        access_key_id: ak,
-        secret_access_key: data.result.secretAccessKey ?? "",
-        security_token: st,
-        expires_at: data.result.expiration ?? data.result.expiresAt ?? ""
-      };
-    }
-  }
-  return null;
-}
-function expiresFromCredential(credential) {
-  if (credential.expires_at) {
-    const parsed = Date.parse(credential.expires_at);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return Date.now() + 864e5;
-}
-async function pollForCredential(ticketId, secret, options = {}) {
-  const fetcher = options.fetcher ?? fetch;
-  const maxAttempts = options.maxAttempts ?? 120;
-  const pluginName = options.pluginName ?? PLUGIN_NAME;
-  const pluginVersion = options.pluginVersion ?? PLUGIN_VERSION;
-  const url = `${CREDENTIAL_ENDPOINT}?ticket_id=${encodeURIComponent(ticketId)}&secret=${encodeURIComponent(secret)}`;
-  for (let i = 0; i < maxAttempts; i++) {
-    if (i > 0) await new Promise((resolve2) => setTimeout(resolve2, 1e3));
-    let response;
-    try {
-      response = await fetcher(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json;charset=UTF-8",
-          "plugin-name": pluginName,
-          "plugin-version": pluginVersion
-        }
-      });
-    } catch {
-      continue;
-    }
-    if (!response.ok) continue;
-    let data;
-    try {
-      data = await response.json();
-    } catch {
-      continue;
-    }
-    const credential = data ? parseCredentialResponse(data) : null;
-    if (credential) return credential;
-  }
-  throw new Error("CodeArts login timed out");
-}
-function openBrowser(url) {
-  const warn = (error) => {
-    console.error("[codearts-auth] failed to open browser; open manually:", url, error);
-  };
-  const win = process.platform === "win32";
-  if (win) {
-    const args = ["/c", "start", '""', `"${url}"`];
-    try {
-      const child = spawn("cmd", args, { detached: true, stdio: "ignore", windowsVerbatimArguments: true });
-      child.on("error", warn);
-      child.unref();
-      return;
-    } catch (error) {
-      warn(error);
-      return;
-    }
-  }
-  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-  try {
-    const child = spawn(cmd, [url], { detached: true, stdio: "ignore" });
-    child.on("error", warn);
-    child.unref();
-  } catch (error) {
-    warn(error);
-  }
-}
-function pickToken(params) {
-  return params.get("token") ?? params.get("access_token") ?? params.get("accessToken") ?? params.get("authCode") ?? "";
-}
-function startCallbackServer(ticketId, secret, options) {
-  let resolveResult;
-  let rejectResult;
-  const result = new Promise((resolve2, reject) => {
-    resolveResult = resolve2;
-    rejectResult = reject;
-  });
-  const server = createServer((request2, response) => {
-    const url = new URL(request2.url ?? "/", `http://127.0.0.1:${request2.socket.localPort}`);
-    if (url.pathname !== "/authentication" && !url.pathname.startsWith("/authentication")) {
-      response.writeHead(404).end("Not found");
-      return;
-    }
-    if (request2.method === "OPTIONS") {
-      response.writeHead(204, CORS_HEADERS).end();
-      return;
-    }
-    const params = url.searchParams;
-    const directToken = pickToken(params);
-    if (directToken) {
-      response.writeHead(200, CORS_HEADERS).end();
-      resolveResult({ access: directToken, expires: Date.now() + 864e5, loginUrl: "" });
-      return;
-    }
-    const fingerprint = params.get("fingerprint");
-    if (fingerprint) {
-      try {
-        const decoded = Buffer.from(fingerprint, "base64").toString();
-        const fpToken = pickToken(new URL(decoded).searchParams);
-        if (fpToken) {
-          response.writeHead(200, CORS_HEADERS).end();
-          resolveResult({ access: fpToken, expires: Date.now() + 864e5, loginUrl: "" });
-          return;
-        }
-      } catch {
-      }
-    }
-    const callbackSecret = params.get("secret");
-    if (callbackSecret) {
-      response.writeHead(200, CORS_HEADERS).end();
-      void pollForCredential(ticketId, callbackSecret, options).then(
-        (credential) => resolveResult({
-          access: JSON.stringify(credential),
-          expires: expiresFromCredential(credential),
-          loginUrl: ""
-        }),
-        (error) => rejectResult(error)
-      );
-      return;
-    }
-    response.writeHead(400).end("Missing token or secret");
-  });
-  return new Promise((resolveStart, rejectStart) => {
-    server.on("error", (error) => rejectStart(error));
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      resolveStart({ port, server, result });
-    });
-  });
-}
-async function runLoginFlow(options = {}) {
-  const ticketId = randomUUID2();
-  const secret = generateRandomSecret();
-  const { port, server, result } = await startCallbackServer(ticketId, secret, options);
-  const { loginUrl } = buildLoginUrl(port, ticketId);
-  try {
-    const opener = options.openBrowser ?? openBrowser;
-    await opener(loginUrl);
-    const outcome = await result;
-    return { ...outcome, loginUrl };
-  } finally {
-    await new Promise((resolve2) => server.close(resolve2));
-  }
-}
-function buildPortalLoginResultUrl(succeeded) {
-  return `${PORTAL_LOGIN_BASE}?login_succeed=${succeeded}&uri_scheme=${CLIENT_ID}&locale=${OAUTH_LOCALE}`;
-}
-function buildOAuthLoginUrl(port, pkce, ticketId) {
-  return `${PORTAL_AUTHORIZE_BASE}?theme=${OAUTH_THEME}&locale=${OAUTH_LOCALE}&uri_scheme=${CLIENT_ID}&client_id=${CLIENT_ID}&port=${port}&code_challenge=${pkce.codeChallenge}&code_challenge_method=SHA-256&ticket_id=${ticketId}&plugin-name=${LOGIN_PLUGIN_NAME}&plugin-version=${LOGIN_PLUGIN_VERSION}`;
-}
-function startOAuthCallbackServer(ticketId, pkce, keyPair, options) {
-  let resolveResult;
-  let rejectResult;
-  const result = new Promise((resolve2, reject) => {
-    resolveResult = resolve2;
-    rejectResult = reject;
-  });
-  const server = createServer((request2, response) => {
-    const url = new URL(request2.url ?? "/", `http://127.0.0.1:${request2.socket.localPort}`);
-    if (url.pathname !== REDIRECT_PATH && !url.pathname.startsWith(REDIRECT_PATH)) {
-      response.writeHead(404).end("Not found");
-      return;
-    }
-    if (request2.method === "OPTIONS") {
-      response.writeHead(204, CORS_HEADERS).end();
-      return;
-    }
-    const callbackSecret = url.searchParams.get("secret");
-    if (callbackSecret) {
-      const redirectTo = url.searchParams.get("redirect") ?? buildPortalLoginResultUrl(true);
-      response.writeHead(307, { ...CORS_HEADERS, Location: redirectTo }).end();
-      void pollForCredential(ticketId, callbackSecret, {
-        ...options,
-        pluginName: LOGIN_PLUGIN_NAME,
-        pluginVersion: LOGIN_PLUGIN_VERSION
-      }).then(
-        (credential) => resolveResult({ access: JSON.stringify(credential), expires: expiresFromCredential(credential), loginUrl: "" }),
-        (error) => rejectResult(error)
-      );
-      return;
-    }
-    const code = url.searchParams.get("code");
-    if (code) {
-      void exchangeAuthorizationCode(code, pkce.codeVerifier, request2.socket.localPort ?? 0, keyPair, options.fetcher).then(
-        (token) => {
-          const credential = credentialFromTokenResponse(token, pkce, keyPair);
-          response.writeHead(307, { ...CORS_HEADERS, Location: buildPortalLoginResultUrl(true) }).end();
-          resolveResult({ access: JSON.stringify(credential), expires: expiresFromCredential(credential), loginUrl: "" });
-        },
-        (error) => {
-          response.writeHead(307, { ...CORS_HEADERS, Location: buildPortalLoginResultUrl(false) }).end();
-          rejectResult(error);
-        }
-      );
-      return;
-    }
-    response.writeHead(400).end("Missing authorization code or secret");
-  });
-  return listenOnCallbackPort(server).then((port) => ({ port, server, result }));
-}
-function listenOnCallbackPort(server) {
-  return new Promise((resolve2, reject) => {
-    const tryListen = (port) => {
-      server.once("error", reject);
-      server.listen(port, "127.0.0.1", () => {
-        const address = server.address();
-        const assigned = typeof address === "object" && address ? address.port : 0;
-        if (assigned >= MIN_CALLBACK_PORT) {
-          resolve2(assigned);
-          return;
-        }
-        server.close(() => {
-          const retry = Math.floor(Math.random() * (65536 - MIN_CALLBACK_PORT)) + MIN_CALLBACK_PORT;
-          tryListen(retry);
-        });
-      });
-    };
-    tryListen(0);
-  });
-}
-async function startOAuthFlow(options = {}) {
-  const ticketId = randomBytes4(32).toString("hex");
-  const pkce = generatePkcePair();
-  const keyPair = await generateDpopKeyPair();
-  const { port, server, result } = await startOAuthCallbackServer(ticketId, pkce, keyPair, options);
-  const loginUrl = buildOAuthLoginUrl(port, pkce, ticketId);
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    await new Promise((resolve2) => server.close(() => resolve2()));
-  };
-  const resultWithUrl = Promise.race([
-    result,
-    new Promise((_, reject) => {
-      const timer = setTimeout(() => reject(new Error("CodeArts OAuth login timed out")), OAUTH_CALLBACK_TIMEOUT_MS);
-      timer.unref?.();
-    })
-  ]).then((outcome) => ({ ...outcome, loginUrl }));
-  resultWithUrl.catch(() => {
-  }).finally(() => {
-    void close();
-  });
-  return { loginUrl, result: resultWithUrl, close };
-}
-async function runOAuthFlow(options = {}) {
-  const started = await startOAuthFlow(options);
-  try {
-    const opener = options.openBrowser ?? openBrowser;
-    await opener(started.loginUrl);
-    return await started.result;
-  } finally {
-    await started.close();
-  }
-}
-var CODEARTS_LOGIN_BASE, HUAWEI_AUTH_BASE, CREDENTIAL_ENDPOINT, PLUGIN_NAME, PLUGIN_VERSION, CORS_HEADERS, PORTAL_AUTHORIZE_BASE, PORTAL_LOGIN_BASE, LOGIN_PLUGIN_NAME, LOGIN_PLUGIN_VERSION, OAUTH_THEME, OAUTH_LOCALE, OAUTH_CALLBACK_TIMEOUT_MS, MIN_CALLBACK_PORT;
-var init_login = __esm({
-  "vendor/channel-pack/src/login.ts"() {
-    "use strict";
-    init_oauth();
-    CODEARTS_LOGIN_BASE = "https://devcloud.cn-north-4.huaweicloud.com/doer/redirect";
-    HUAWEI_AUTH_BASE = "https://auth.huaweicloud.com/authui/login.html";
-    CREDENTIAL_ENDPOINT = "https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/login/ticket";
-    PLUGIN_NAME = "snap_jetbrains";
-    PLUGIN_VERSION = "26.3.3";
-    CORS_HEADERS = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-      "Access-Control-Max-Age": "86400"
-    };
-    PORTAL_AUTHORIZE_BASE = "https://codearts.huaweicloud.com/portal/authorize";
-    PORTAL_LOGIN_BASE = "https://codearts.huaweicloud.com/portal/login";
-    LOGIN_PLUGIN_NAME = "snap_AIIDE";
-    LOGIN_PLUGIN_VERSION = "5.2.0";
-    OAUTH_THEME = "2";
-    OAUTH_LOCALE = "zh-cn";
-    OAUTH_CALLBACK_TIMEOUT_MS = 18e4;
-    MIN_CALLBACK_PORT = 1e4;
-  }
-});
-
 // node_modules/undici/lib/core/symbols.js
 var require_symbols = __commonJS({
   "node_modules/undici/lib/core/symbols.js"(exports, module) {
@@ -3560,10 +1718,10 @@ var require_util = __commonJS({
       }
       return obj;
     }
-    function errorRequest(client, request2, err) {
+    function errorRequest(client, request, err) {
       try {
-        request2.onResponseError(err);
-        assert(request2.aborted);
+        request.onResponseError(err);
+        assert(request.aborted);
       } catch (err2) {
         client.emit("error", err2);
       }
@@ -4329,7 +2487,7 @@ var require_request = __commonJS({
         return this;
       }
     };
-    function processHeader(request2, key, val) {
+    function processHeader(request, key, val) {
       if (val && (typeof val === "object" && !Array.isArray(val))) {
         throw new InvalidArgumentError(`invalid ${key} header`);
       } else if (val === void 0) {
@@ -4376,24 +2534,24 @@ var require_request = __commonJS({
         }
       }
       if (headerName === "host") {
-        if (request2.host !== null) {
+        if (request.host !== null) {
           throw new InvalidArgumentError("duplicate host header");
         }
         if (typeof val !== "string") {
           throw new InvalidArgumentError("invalid host header");
         }
-        request2.host = val;
+        request.host = val;
       } else if (headerName === "content-length") {
-        if (request2.contentLength !== null) {
+        if (request.contentLength !== null) {
           throw new InvalidArgumentError("duplicate content-length header");
         }
         if (!isValidContentLengthHeaderValue(val)) {
           throw new InvalidArgumentError("invalid content-length header");
         }
-        request2.contentLength = parseInt(val, 10);
-      } else if (request2.contentType === null && headerName === "content-type") {
-        request2.contentType = val;
-        request2.headers.push(key, val);
+        request.contentLength = parseInt(val, 10);
+      } else if (request.contentType === null && headerName === "content-type") {
+        request.contentType = val;
+        request.headers.push(key, val);
       } else if (headerName === "transfer-encoding" || headerName === "keep-alive" || headerName === "upgrade") {
         throw new InvalidArgumentError(`invalid ${headerName} header`);
       } else if (headerName === "connection") {
@@ -4407,13 +2565,13 @@ var require_request = __commonJS({
             throw new InvalidArgumentError("invalid connection header");
           }
           if (trimmed === "close") {
-            request2.reset = true;
+            request.reset = true;
           }
         }
       } else if (headerName === "expect") {
         throw new NotSupportedError("expect header not supported");
       } else {
-        request2.headers.push(key, val);
+        request.headers.push(key, val);
       }
     }
     module.exports = Request2;
@@ -6773,11 +4931,11 @@ var require_util2 = __commonJS({
     function normalizeBinaryStringToUtf8(value) {
       return Buffer.from(value, "binary").toString("utf8");
     }
-    function requestCurrentURL(request2) {
-      return request2.urlList[request2.urlList.length - 1];
+    function requestCurrentURL(request) {
+      return request.urlList[request.urlList.length - 1];
     }
-    function requestBadPort(request2) {
-      const url = requestCurrentURL(request2);
+    function requestBadPort(request) {
+      const url = requestCurrentURL(request);
       if (urlIsHttpHttpsScheme(url) && badPortsSet.has(url.port)) {
         return "blocked";
       }
@@ -6815,10 +4973,10 @@ var require_util2 = __commonJS({
       }
       return policy;
     }
-    function setRequestReferrerPolicyOnRedirect(request2, actualResponse) {
+    function setRequestReferrerPolicyOnRedirect(request, actualResponse) {
       const policy = parseReferrerPolicy(actualResponse);
       if (policy !== "") {
-        request2.referrerPolicy = policy;
+        request.referrerPolicy = policy;
       }
     }
     function crossOriginResourcePolicyCheck() {
@@ -6838,33 +4996,33 @@ var require_util2 = __commonJS({
       header = httpRequest.mode;
       httpRequest.headersList.set("sec-fetch-mode", header, true);
     }
-    function appendRequestOriginHeader(request2) {
-      let serializedOrigin = request2.origin;
+    function appendRequestOriginHeader(request) {
+      let serializedOrigin = request.origin;
       if (serializedOrigin === "client" || serializedOrigin === void 0) {
         return;
       }
-      if (request2.responseTainting === "cors" || request2.mode === "websocket") {
-        request2.headersList.append("origin", serializedOrigin, true);
-      } else if (request2.method !== "GET" && request2.method !== "HEAD") {
-        switch (request2.referrerPolicy) {
+      if (request.responseTainting === "cors" || request.mode === "websocket") {
+        request.headersList.append("origin", serializedOrigin, true);
+      } else if (request.method !== "GET" && request.method !== "HEAD") {
+        switch (request.referrerPolicy) {
           case "no-referrer":
             serializedOrigin = null;
             break;
           case "no-referrer-when-downgrade":
           case "strict-origin":
           case "strict-origin-when-cross-origin":
-            if (request2.origin && urlHasHttpsScheme(request2.origin) && !urlHasHttpsScheme(requestCurrentURL(request2))) {
+            if (request.origin && urlHasHttpsScheme(request.origin) && !urlHasHttpsScheme(requestCurrentURL(request))) {
               serializedOrigin = null;
             }
             break;
           case "same-origin":
-            if (!sameOrigin(request2, requestCurrentURL(request2))) {
+            if (!sameOrigin(request, requestCurrentURL(request))) {
               serializedOrigin = null;
             }
             break;
           default:
         }
-        request2.headersList.append("origin", serializedOrigin, true);
+        request.headersList.append("origin", serializedOrigin, true);
       }
     }
     function coarsenTime(timestamp, crossOriginIsolatedCapability) {
@@ -6918,18 +5076,18 @@ var require_util2 = __commonJS({
         referrerPolicy: policyContainer.referrerPolicy
       };
     }
-    function determineRequestsReferrer(request2) {
-      const policy = request2.referrerPolicy;
+    function determineRequestsReferrer(request) {
+      const policy = request.referrerPolicy;
       assert(policy);
       let referrerSource = null;
-      if (request2.referrer === "client") {
+      if (request.referrer === "client") {
         const globalOrigin = getGlobalOrigin();
         if (!globalOrigin || globalOrigin.origin === "null") {
           return "no-referrer";
         }
         referrerSource = new URL(globalOrigin);
-      } else if (webidl.is.URL(request2.referrer)) {
-        referrerSource = request2.referrer;
+      } else if (webidl.is.URL(request.referrer)) {
+        referrerSource = request.referrer;
       }
       let referrerURL = stripURLForReferrer(referrerSource);
       const referrerOrigin = stripURLForReferrer(referrerSource, true);
@@ -6947,14 +5105,14 @@ var require_util2 = __commonJS({
         case "unsafe-url":
           return referrerURL;
         case "strict-origin": {
-          const currentURL = requestCurrentURL(request2);
+          const currentURL = requestCurrentURL(request);
           if (isURLPotentiallyTrustworthy(referrerURL) && !isURLPotentiallyTrustworthy(currentURL)) {
             return "no-referrer";
           }
           return referrerOrigin;
         }
         case "strict-origin-when-cross-origin": {
-          const currentURL = requestCurrentURL(request2);
+          const currentURL = requestCurrentURL(request);
           if (sameOrigin(referrerURL, currentURL)) {
             return referrerURL;
           }
@@ -6964,17 +5122,17 @@ var require_util2 = __commonJS({
           return referrerOrigin;
         }
         case "same-origin":
-          if (sameOrigin(request2, referrerURL)) {
+          if (sameOrigin(request, referrerURL)) {
             return referrerURL;
           }
           return "no-referrer";
         case "origin-when-cross-origin":
-          if (sameOrigin(request2, referrerURL)) {
+          if (sameOrigin(request, referrerURL)) {
             return referrerURL;
           }
           return referrerOrigin;
         case "no-referrer-when-downgrade": {
-          const currentURL = requestCurrentURL(request2);
+          const currentURL = requestCurrentURL(request);
           if (isURLPotentiallyTrustworthy(referrerURL) && !isURLPotentiallyTrustworthy(currentURL)) {
             return "no-referrer";
           }
@@ -7041,7 +5199,7 @@ var require_util2 = __commonJS({
       if (url.protocol === "blob:") return true;
       return isOriginPotentiallyTrustworthy(url.origin);
     }
-    function tryUpgradeRequestToAPotentiallyTrustworthyURL(request2) {
+    function tryUpgradeRequestToAPotentiallyTrustworthyURL(request) {
     }
     function sameOrigin(A, B) {
       if (A.origin === B.origin && A.origin === "null") {
@@ -7420,7 +5578,7 @@ var require_util2 = __commonJS({
       }
       return gettingDecodingSplitting(value);
     }
-    function hasAuthenticationEntry(request2) {
+    function hasAuthenticationEntry(request) {
       return false;
     }
     function includesCredentials(url) {
@@ -8754,11 +6912,11 @@ var require_client_h1 = __commonJS({
           util.destroy(socket, new SocketError("bad response", util.getSocketInfo(socket)));
           return -1;
         }
-        const request2 = client[kQueue][client[kRunningIdx]];
-        if (!request2) {
+        const request = client[kQueue][client[kRunningIdx]];
+        if (!request) {
           return -1;
         }
-        request2.onResponseStarted();
+        request.onResponseStarted();
         return 0;
       }
       /**
@@ -8825,9 +6983,9 @@ var require_client_h1 = __commonJS({
         assert(!socket.destroyed);
         assert(!this.paused);
         assert((headers.length & 1) === 0);
-        const request2 = client[kQueue][client[kRunningIdx]];
-        assert(request2);
-        assert(request2.upgrade || request2.method === "CONNECT");
+        const request = client[kQueue][client[kRunningIdx]];
+        assert(request);
+        assert(request.upgrade || request.method === "CONNECT");
         this.statusCode = 0;
         this.statusText = "";
         this.shouldKeepAlive = false;
@@ -8844,9 +7002,9 @@ var require_client_h1 = __commonJS({
         client[kQueue][client[kRunningIdx]++] = null;
         client.emit("disconnect", client[kUrl], [client], new InformationalError("upgrade"));
         try {
-          request2.onRequestUpgrade(statusCode, headers, socket, statusText);
+          request.onRequestUpgrade(statusCode, headers, socket, statusText);
         } catch (err) {
-          util.errorRequest(client, request2, err);
+          util.errorRequest(client, request, err);
           util.destroy(socket, err);
         }
         client[kResume]();
@@ -8866,8 +7024,8 @@ var require_client_h1 = __commonJS({
           util.destroy(socket, new SocketError("bad response", util.getSocketInfo(socket)));
           return -1;
         }
-        const request2 = client[kQueue][client[kRunningIdx]];
-        if (!request2) {
+        const request = client[kQueue][client[kRunningIdx]];
+        if (!request) {
           return -1;
         }
         assert(!this.upgrade);
@@ -8876,23 +7034,23 @@ var require_client_h1 = __commonJS({
           util.destroy(socket, new SocketError("bad response", util.getSocketInfo(socket)));
           return -1;
         }
-        if (upgrade && !request2.upgrade) {
+        if (upgrade && !request.upgrade) {
           util.destroy(socket, new SocketError("bad upgrade", util.getSocketInfo(socket)));
           return -1;
         }
         assert(this.timeoutType === TIMEOUT_HEADERS);
         this.statusCode = statusCode;
         this.shouldKeepAlive = shouldKeepAlive || // Override llhttp value which does not allow keepAlive for HEAD.
-        request2.method === "HEAD" && !socket[kReset] && this.connectionKeepAlive;
+        request.method === "HEAD" && !socket[kReset] && this.connectionKeepAlive;
         if (this.statusCode >= 200) {
-          const bodyTimeout = request2.bodyTimeout != null ? request2.bodyTimeout : client[kBodyTimeout];
+          const bodyTimeout = request.bodyTimeout != null ? request.bodyTimeout : client[kBodyTimeout];
           this.setTimeout(bodyTimeout, TIMEOUT_BODY);
         } else if (this.timeout) {
           if (this.timeout.refresh) {
             this.timeout.refresh();
           }
         }
-        if (request2.method === "CONNECT") {
+        if (request.method === "CONNECT") {
           assert(client[kRunning] === 1);
           this.upgrade = true;
           return 2;
@@ -8923,11 +7081,11 @@ var require_client_h1 = __commonJS({
         } else {
           socket[kReset] = true;
         }
-        const pause = request2.onResponseStart(statusCode, headers, this.resume, statusText) === false;
-        if (request2.aborted) {
+        const pause = request.onResponseStart(statusCode, headers, this.resume, statusText) === false;
+        if (request.aborted) {
           return -1;
         }
-        if (request2.method === "HEAD") {
+        if (request.method === "HEAD") {
           return 1;
         }
         if (statusCode < 200) {
@@ -8948,8 +7106,8 @@ var require_client_h1 = __commonJS({
         if (socket.destroyed) {
           return -1;
         }
-        const request2 = client[kQueue][client[kRunningIdx]];
-        assert(request2);
+        const request = client[kQueue][client[kRunningIdx]];
+        assert(request);
         assert(this.timeoutType === TIMEOUT_BODY);
         if (this.timeout) {
           if (this.timeout.refresh) {
@@ -8962,7 +7120,7 @@ var require_client_h1 = __commonJS({
           return -1;
         }
         this.bytesRead += buf.length;
-        if (request2.onResponseData(buf) === false) {
+        if (request.onResponseData(buf) === false) {
           return constants.ERROR.PAUSED;
         }
         return 0;
@@ -8980,8 +7138,8 @@ var require_client_h1 = __commonJS({
         }
         assert(statusCode >= 100);
         assert((this.headers.length & 1) === 0);
-        const request2 = client[kQueue][client[kRunningIdx]];
-        assert(request2);
+        const request = client[kQueue][client[kRunningIdx]];
+        assert(request);
         this.statusCode = 0;
         this.statusText = "";
         this.bytesRead = 0;
@@ -8993,11 +7151,11 @@ var require_client_h1 = __commonJS({
         if (statusCode < 200) {
           return 0;
         }
-        if (request2.method !== "HEAD" && contentLength !== -1 && bytesRead !== contentLength) {
+        if (request.method !== "HEAD" && contentLength !== -1 && bytesRead !== contentLength) {
           util.destroy(socket, new ResponseContentLengthMismatchError());
           return -1;
         }
-        request2.onResponseEnd(headers);
+        request.onResponseEnd(headers);
         client[kQueue][client[kRunningIdx]++] = null;
         socket[kSocketUsed] = client[kPending] === 0;
         if (socket[kWriting]) {
@@ -9066,8 +7224,8 @@ var require_client_h1 = __commonJS({
       return {
         version: "h1",
         defaultPipelining: 1,
-        write(request2) {
-          return writeH1(client, request2);
+        write(request) {
+          return writeH1(client, request);
         },
         resume() {
           resumeH1(client);
@@ -9094,18 +7252,18 @@ var require_client_h1 = __commonJS({
          * @param {import('../core/request.js')} request
          * @returns {boolean}
          */
-        busy(request2) {
+        busy(request) {
           if (socket[kWriting] || socket[kReset] || socket[kBlocking] || socket[kIdleSocketValidation] === 1) {
             return true;
           }
-          if (request2) {
-            if (client[kRunning] > 0 && !request2.idempotent) {
+          if (request) {
+            if (client[kRunning] > 0 && !request.idempotent) {
               return true;
             }
-            if (client[kRunning] > 0 && (request2.upgrade || request2.method === "CONNECT")) {
+            if (client[kRunning] > 0 && (request.upgrade || request.method === "CONNECT")) {
               return true;
             }
-            if (client[kRunning] > 0 && util.bodyLength(request2.body) !== 0 && (util.isStream(request2.body) || util.isAsyncIterable(request2.body) || util.isFormDataLike(request2.body))) {
+            if (client[kRunning] > 0 && util.bodyLength(request.body) !== 0 && (util.isStream(request.body) || util.isAsyncIterable(request.body) || util.isFormDataLike(request.body))) {
               return true;
             }
           }
@@ -9159,13 +7317,13 @@ var require_client_h1 = __commonJS({
         assert(client[kPending] === 0);
         const requests = client[kQueue].splice(client[kRunningIdx]);
         for (let i = 0; i < requests.length; i++) {
-          const request2 = requests[i];
-          util.errorRequest(client, request2, err);
+          const request = requests[i];
+          util.errorRequest(client, request, err);
         }
       } else if (client[kRunning] > 0 && err.code !== "UND_ERR_INFO") {
-        const request2 = client[kQueue][client[kRunningIdx]];
+        const request = client[kQueue][client[kRunningIdx]];
         client[kQueue][client[kRunningIdx]++] = null;
-        util.errorRequest(client, request2, err);
+        util.errorRequest(client, request, err);
       }
       client[kPendingIdx] = client[kRunningIdx];
       assert(client[kRunning] === 0);
@@ -9233,8 +7391,8 @@ var require_client_h1 = __commonJS({
           }
         } else if (client[kRunning] > 0 && socket[kParser].statusCode < 200) {
           if (socket[kParser].timeoutType !== TIMEOUT_HEADERS) {
-            const request2 = client[kQueue][client[kRunningIdx]];
-            const headersTimeout = request2.headersTimeout != null ? request2.headersTimeout : client[kHeadersTimeout];
+            const request = client[kQueue][client[kRunningIdx]];
+            const headersTimeout = request.headersTimeout != null ? request.headersTimeout : client[kHeadersTimeout];
             socket[kParser].setTimeout(headersTimeout, TIMEOUT_HEADERS);
           }
         }
@@ -9243,11 +7401,11 @@ var require_client_h1 = __commonJS({
     function shouldSendContentLength(method) {
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
-    function setTypeOfService(socket, request2) {
+    function setTypeOfService(socket, request) {
       if (typeof socket.setTypeOfService !== "function") {
         return;
       }
-      const typeOfService = request2.typeOfService;
+      const typeOfService = request.typeOfService;
       if (typeOfService === void 0) {
         return;
       }
@@ -9261,26 +7419,26 @@ var require_client_h1 = __commonJS({
       } catch {
       }
     }
-    function writeH1(client, request2) {
-      const { method, path: path2, host, upgrade, blocking, reset } = request2;
-      let { body, headers, contentLength } = request2;
+    function writeH1(client, request) {
+      const { method, path: path2, host, upgrade, blocking, reset } = request;
+      let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
         if (!extractBody) {
           extractBody = require_body().extractBody;
         }
         const [bodyStream, contentType] = extractBody(body);
-        if (request2.contentType == null) {
+        if (request.contentType == null) {
           headers.push("content-type", contentType);
         }
         body = bodyStream.stream;
         contentLength = bodyStream.length;
-      } else if (util.isBlobLike(body) && request2.contentType == null) {
+      } else if (util.isBlobLike(body) && request.contentType == null) {
         const contentType = body.type;
         if (contentType) {
           const contentTypeValue = `${contentType}`;
           if (!util.isValidHeaderValue(contentTypeValue)) {
-            util.errorRequest(client, request2, new InvalidArgumentError("invalid content-type header"));
+            util.errorRequest(client, request, new InvalidArgumentError("invalid content-type header"));
             return false;
           }
           headers.push("content-type", contentTypeValue);
@@ -9292,14 +7450,14 @@ var require_client_h1 = __commonJS({
       const bodyLength = util.bodyLength(body);
       contentLength = bodyLength ?? contentLength;
       if (contentLength === null) {
-        contentLength = request2.contentLength;
+        contentLength = request.contentLength;
       }
       if (contentLength === 0 && !expectsPayload) {
         contentLength = null;
       }
-      if (shouldSendContentLength(method) && contentLength > 0 && request2.contentLength !== null && request2.contentLength !== contentLength) {
+      if (shouldSendContentLength(method) && contentLength > 0 && request.contentLength !== null && request.contentLength !== contentLength) {
         if (client[kStrictContentLength]) {
-          util.errorRequest(client, request2, new RequestContentLengthMismatchError());
+          util.errorRequest(client, request, new RequestContentLengthMismatchError());
           return false;
         }
         process.emitWarning(new RequestContentLengthMismatchError());
@@ -9307,19 +7465,19 @@ var require_client_h1 = __commonJS({
       const socket = client[kSocket];
       clearIdleSocketValidation(socket);
       const abort = (err) => {
-        if (request2.aborted || request2.completed) {
+        if (request.aborted || request.completed) {
           return;
         }
-        util.errorRequest(client, request2, err || new RequestAbortedError());
+        util.errorRequest(client, request, err || new RequestAbortedError());
         util.destroy(body);
         util.destroy(socket, new InformationalError("aborted"));
       };
       try {
-        request2.onRequestStart(abort, null);
+        request.onRequestStart(abort, null);
       } catch (err) {
-        util.errorRequest(client, request2, err);
+        util.errorRequest(client, request, err);
       }
-      if (request2.aborted) {
+      if (request.aborted) {
         return false;
       }
       if (method === "HEAD") {
@@ -9337,7 +7495,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      setTypeOfService(socket, request2);
+      setTypeOfService(socket, request);
       let header = `${method} ${path2} HTTP/1.1\r
 `;
       if (typeof host === "string") {
@@ -9371,31 +7529,31 @@ upgrade: ${upgrade}\r
         }
       }
       if (channels.sendHeaders.hasSubscribers) {
-        channels.sendHeaders.publish({ request: request2, headers: header, socket });
+        channels.sendHeaders.publish({ request, headers: header, socket });
       }
       if (!body || bodyLength === 0) {
-        writeBuffer(abort, null, client, request2, socket, contentLength, header, expectsPayload);
+        writeBuffer(abort, null, client, request, socket, contentLength, header, expectsPayload);
       } else if (util.isBuffer(body)) {
-        writeBuffer(abort, body, client, request2, socket, contentLength, header, expectsPayload);
+        writeBuffer(abort, body, client, request, socket, contentLength, header, expectsPayload);
       } else if (util.isBlobLike(body)) {
         if (typeof body.stream === "function") {
-          writeIterable(abort, body.stream(), client, request2, socket, contentLength, header, expectsPayload);
+          writeIterable(abort, body.stream(), client, request, socket, contentLength, header, expectsPayload);
         } else {
-          writeBlob(abort, body, client, request2, socket, contentLength, header, expectsPayload);
+          writeBlob(abort, body, client, request, socket, contentLength, header, expectsPayload);
         }
       } else if (util.isStream(body)) {
-        writeStream(abort, body, client, request2, socket, contentLength, header, expectsPayload);
+        writeStream(abort, body, client, request, socket, contentLength, header, expectsPayload);
       } else if (util.isIterable(body)) {
-        writeIterable(abort, body, client, request2, socket, contentLength, header, expectsPayload);
+        writeIterable(abort, body, client, request, socket, contentLength, header, expectsPayload);
       } else {
         assert(false);
       }
       return true;
     }
-    function writeStream(abort, body, client, request2, socket, contentLength, header, expectsPayload) {
+    function writeStream(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       assert(contentLength !== 0 || client[kRunning] === 0, "stream body cannot be pipelined");
       let finished = false;
-      const writer = new AsyncWriter({ abort, socket, request: request2, contentLength, client, expectsPayload, header });
+      const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header });
       const onData = function(chunk) {
         if (finished) {
           return;
@@ -9461,7 +7619,7 @@ upgrade: ${upgrade}\r
         setImmediate(onClose);
       }
     }
-    function writeBuffer(abort, body, client, request2, socket, contentLength, header, expectsPayload) {
+    function writeBuffer(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       try {
         if (!body) {
           if (contentLength === 0) {
@@ -9481,18 +7639,18 @@ upgrade: ${upgrade}\r
 `, "latin1");
           socket.write(body);
           socket.uncork();
-          request2.onBodySent(body);
-          if (!expectsPayload && request2.reset !== false) {
+          request.onBodySent(body);
+          if (!expectsPayload && request.reset !== false) {
             socket[kReset] = true;
           }
         }
-        request2.onRequestSent();
+        request.onRequestSent();
         client[kResume]();
       } catch (err) {
         abort(err);
       }
     }
-    async function writeBlob(abort, body, client, request2, socket, contentLength, header, expectsPayload) {
+    async function writeBlob(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       try {
         if (contentLength != null && contentLength !== body.size) {
           throw new RequestContentLengthMismatchError();
@@ -9504,9 +7662,9 @@ upgrade: ${upgrade}\r
 `, "latin1");
         socket.write(buffer);
         socket.uncork();
-        request2.onBodySent(buffer);
-        request2.onRequestSent();
-        if (!expectsPayload && request2.reset !== false) {
+        request.onBodySent(buffer);
+        request.onRequestSent();
+        if (!expectsPayload && request.reset !== false) {
           socket[kReset] = true;
         }
         client[kResume]();
@@ -9514,7 +7672,7 @@ upgrade: ${upgrade}\r
         abort(err);
       }
     }
-    async function writeIterable(abort, body, client, request2, socket, contentLength, header, expectsPayload) {
+    async function writeIterable(abort, body, client, request, socket, contentLength, header, expectsPayload) {
       assert(contentLength !== 0 || client[kRunning] === 0, "iterator body cannot be pipelined");
       let callback = null;
       function onDrain() {
@@ -9533,7 +7691,7 @@ upgrade: ${upgrade}\r
         }
       });
       socket.on("close", onDrain).on("drain", onDrain);
-      const writer = new AsyncWriter({ abort, socket, request: request2, contentLength, client, expectsPayload, header });
+      const writer = new AsyncWriter({ abort, socket, request, contentLength, client, expectsPayload, header });
       try {
         for await (const chunk of body) {
           if (socket[kError]) {
@@ -9562,9 +7720,9 @@ upgrade: ${upgrade}\r
        * @param {boolean} arg.expectsPayload
        * @param {string} arg.header
        */
-      constructor({ abort, socket, request: request2, contentLength, client, expectsPayload, header }) {
+      constructor({ abort, socket, request, contentLength, client, expectsPayload, header }) {
         this.socket = socket;
-        this.request = request2;
+        this.request = request;
         this.contentLength = contentLength;
         this.client = client;
         this.bytesWritten = 0;
@@ -9578,7 +7736,7 @@ upgrade: ${upgrade}\r
        * @returns
        */
       write(chunk) {
-        const { socket, request: request2, contentLength, client, bytesWritten, expectsPayload, header } = this;
+        const { socket, request, contentLength, client, bytesWritten, expectsPayload, header } = this;
         if (socket[kError]) {
           throw socket[kError];
         }
@@ -9597,7 +7755,7 @@ upgrade: ${upgrade}\r
         }
         socket.cork();
         if (bytesWritten === 0) {
-          if (!expectsPayload && request2.reset !== false) {
+          if (!expectsPayload && request.reset !== false) {
             socket[kReset] = true;
           }
           if (contentLength === null) {
@@ -9617,7 +7775,7 @@ ${len.toString(16)}\r
         this.bytesWritten += len;
         const ret = socket.write(chunk);
         socket.uncork();
-        request2.onBodySent(chunk);
+        request.onBodySent(chunk);
         if (!ret) {
           if (socket[kParser].timeout && socket[kParser].timeoutType === TIMEOUT_HEADERS) {
             if (socket[kParser].timeout.refresh) {
@@ -9631,8 +7789,8 @@ ${len.toString(16)}\r
        * @returns {void}
        */
       end() {
-        const { socket, contentLength, client, bytesWritten, expectsPayload, header, request: request2 } = this;
-        request2.onRequestSent();
+        const { socket, contentLength, client, bytesWritten, expectsPayload, header, request } = this;
+        request.onRequestSent();
         socket[kWriting] = false;
         if (socket[kError]) {
           throw socket[kError];
@@ -9787,48 +7945,48 @@ var require_client_h2 = __commonJS({
     function getGoAwayPendingIdx(client, lastStreamID) {
       const maxAcceptedStreamID = Number.isInteger(lastStreamID) ? lastStreamID : Number.MAX_SAFE_INTEGER;
       for (let i = client[kRunningIdx]; i < client[kPendingIdx]; i++) {
-        const request2 = client[kQueue][i];
-        if (request2 == null) {
+        const request = client[kQueue][i];
+        if (request == null) {
           continue;
         }
-        if (typeof request2[kRequestStreamId] !== "number" || request2[kRequestStreamId] > maxAcceptedStreamID) {
+        if (typeof request[kRequestStreamId] !== "number" || request[kRequestStreamId] > maxAcceptedStreamID) {
           return i;
         }
       }
       return client[kPendingIdx];
     }
-    function detachRequestFromStream(request2) {
-      request2[kRequestStreamId] = null;
-      request2[kRequestStream] = null;
-      request2[kRequestStreamCleanup] = null;
+    function detachRequestFromStream(request) {
+      request[kRequestStreamId] = null;
+      request[kRequestStream] = null;
+      request[kRequestStreamCleanup] = null;
     }
-    function bindRequestToStream(request2, stream, cleanup) {
-      const previousCleanup = request2[kRequestStreamCleanup];
-      const previousStream = request2[kRequestStream];
-      detachRequestFromStream(request2);
+    function bindRequestToStream(request, stream, cleanup) {
+      const previousCleanup = request[kRequestStreamCleanup];
+      const previousStream = request[kRequestStream];
+      detachRequestFromStream(request);
       previousCleanup?.(previousStream);
-      request2[kRequestStreamId] = stream.id;
-      request2[kRequestStream] = stream;
-      request2[kRequestStreamCleanup] = cleanup;
+      request[kRequestStreamId] = stream.id;
+      request[kRequestStream] = stream;
+      request[kRequestStreamCleanup] = cleanup;
     }
-    function clearRequestStream(request2) {
-      const cleanup = request2[kRequestStreamCleanup];
-      const stream = request2[kRequestStream];
-      detachRequestFromStream(request2);
+    function clearRequestStream(request) {
+      const cleanup = request[kRequestStreamCleanup];
+      const stream = request[kRequestStream];
+      detachRequestFromStream(request);
       cleanup?.(stream);
     }
-    function requeueUnsentRequest(client, request2) {
-      client[kQueue].splice(client[kPendingIdx] + 1, 0, request2);
+    function requeueUnsentRequest(client, request) {
+      client[kQueue].splice(client[kPendingIdx] + 1, 0, request);
     }
-    function completeRequest(client, request2, resetPendingIdx = false) {
+    function completeRequest(client, request, resetPendingIdx = false) {
       const queue = client[kQueue];
       const runningIdx = client[kRunningIdx];
-      if (runningIdx < client[kPendingIdx] && queue[runningIdx] === request2) {
+      if (runningIdx < client[kPendingIdx] && queue[runningIdx] === request) {
         queue[runningIdx] = null;
         client[kRunningIdx] = runningIdx + 1;
         return;
       }
-      const index = queue.indexOf(request2, runningIdx);
+      const index = queue.indexOf(request, runningIdx);
       if (index === -1 || index >= client[kPendingIdx]) {
         return;
       }
@@ -9838,17 +7996,17 @@ var require_client_h2 = __commonJS({
         client[kPendingIdx] = client[kRunningIdx];
       }
     }
-    function canReplayRequest(request2) {
-      const { body } = request2;
+    function canReplayRequest(request) {
+      const { body } = request;
       return body == null || util.isBuffer(body) || util.isBlobLike(body);
     }
-    function hasResponseStarted(request2) {
-      const state = request2[kRequestStream]?.[kRequestStreamState];
+    function hasResponseStarted(request) {
+      const state = request[kRequestStream]?.[kRequestStreamState];
       return state?.responseReceived === true;
     }
-    function registerGoAwayRefusal(request2) {
-      const attempts = (request2[kGoAwayReplayAttempts] ?? 0) + 1;
-      request2[kGoAwayReplayAttempts] = attempts;
+    function registerGoAwayRefusal(request) {
+      const attempts = (request[kGoAwayReplayAttempts] ?? 0) + 1;
+      request[kGoAwayReplayAttempts] = attempts;
       return attempts <= MAX_GOAWAY_REPLAY_ATTEMPTS;
     }
     function closeStream(stream, code = NGHTTP2_REFUSED_STREAM) {
@@ -9859,9 +8017,9 @@ var require_client_h2 = __commonJS({
         }
       }
     }
-    function detachRequestStreamForClose(request2) {
-      const stream = request2[kRequestStream];
-      clearRequestStream(request2);
+    function detachRequestStreamForClose(request) {
+      const stream = request[kRequestStream];
+      clearRequestStream(request);
       severRequestStream(stream);
       return stream;
     }
@@ -9936,8 +8094,8 @@ var require_client_h2 = __commonJS({
          * @param {import('../core/request.js')} request
          * @returns {boolean}
         */
-        write(request2) {
-          return writeH2(client, request2);
+        write(request) {
+          return writeH2(client, request);
         },
         /**
          * @returns {void}
@@ -9966,18 +8124,18 @@ var require_client_h2 = __commonJS({
          * @param {import('../core/request.js')} request
          * @returns {boolean}
         */
-        busy(request2) {
+        busy(request) {
           if (session[kRemoteSettings] === false && client[kRunning] > 0) {
             return true;
           }
           if (client[kRunning] >= client[kMaxConcurrentStreams]) {
             return true;
           }
-          if (request2 != null) {
+          if (request != null) {
             if (client[kRunning] > 0) {
-              if ((request2.upgrade === "websocket" || request2.method === "CONNECT") && session[kRemoteSettings] === false) return true;
+              if ((request.upgrade === "websocket" || request.method === "CONNECT") && session[kRemoteSettings] === false) return true;
             } else {
-              return (request2.upgrade === "websocket" || request2.method === "CONNECT") && session[kRemoteSettings] === false;
+              return (request.upgrade === "websocket" || request.method === "CONNECT") && session[kRemoteSettings] === false;
             }
           }
           return false;
@@ -10157,14 +8315,14 @@ var require_client_h2 = __commonJS({
       const retriableRequests = [];
       const streamsToClose = [];
       for (let i = pendingIdx; i < previousPendingIdx; i++) {
-        const request2 = client[kQueue][i];
-        if (request2 != null) {
-          const responseStarted = hasResponseStarted(request2);
-          streamsToClose.push(detachRequestStreamForClose(request2));
-          if (!responseStarted && canReplayRequest(request2) && registerGoAwayRefusal(request2)) {
-            retriableRequests.push(request2);
+        const request = client[kQueue][i];
+        if (request != null) {
+          const responseStarted = hasResponseStarted(request);
+          streamsToClose.push(detachRequestStreamForClose(request));
+          if (!responseStarted && canReplayRequest(request) && registerGoAwayRefusal(request)) {
+            retriableRequests.push(request);
           } else {
-            util.errorRequest(client, request2, err);
+            util.errorRequest(client, request, err);
           }
         }
       }
@@ -10208,9 +8366,9 @@ var require_client_h2 = __commonJS({
         assert(client[kPending] === 0);
         const requests = client[kQueue].splice(client[kRunningIdx]);
         for (let i = 0; i < requests.length; i++) {
-          const request2 = requests[i];
-          if (request2 != null) {
-            util.errorRequest(client, request2, err);
+          const request = requests[i];
+          if (request != null) {
+            util.errorRequest(client, request, err);
           }
         }
       }
@@ -10329,9 +8487,9 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
-      if (request2[kRequestStream] === stream) {
-        detachRequestFromStream(request2);
+      const { request } = state;
+      if (request[kRequestStream] === stream) {
+        detachRequestFromStream(request);
       }
       removeUpgradeStreamListeners(stream);
       if (!stream.destroyed && !stream.closed) {
@@ -10342,8 +8500,8 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
-      if (state.responseReceived || request2.aborted || request2.completed) {
+      const { request } = state;
+      if (state.responseReceived || request.aborted || request.completed) {
         return;
       }
       releaseUpgradeStream(state.stream);
@@ -10367,30 +8525,30 @@ var require_client_h2 = __commonJS({
     function onUpgradeResponse(headers, _flags) {
       const stream = this;
       const state = stream[kRequestStreamState];
-      const { request: request2 } = state;
+      const { request } = state;
       state.responseReceived = true;
       const statusCode = headers[HTTP2_HEADER_STATUS];
       delete headers[HTTP2_HEADER_STATUS];
       try {
-        request2.onRequestUpgrade(statusCode, headers, stream);
+        request.onRequestUpgrade(statusCode, headers, stream);
       } catch (err) {
         state.abort(err);
         return;
       }
-      if (request2.aborted) {
+      if (request.aborted) {
         return;
       }
       removeUpgradeStreamListeners(stream);
-      detachRequestFromStream(request2);
+      detachRequestFromStream(request);
       finalizeRequest(state);
     }
     function setupUpgradeStream(stream, state) {
-      const { request: request2, headersTimeout, session } = state;
+      const { request, headersTimeout, session } = state;
       stream[kHTTP2Stream] = true;
       stream[kHTTP2Session] = session;
       stream[kRequestStreamState] = state;
       state.stream = stream;
-      bindRequestToStream(request2, stream, releaseUpgradeStream);
+      bindRequestToStream(request, stream, releaseUpgradeStream);
       stream.once("response", onUpgradeResponse);
       stream.on("error", onUpgradeStreamError);
       stream.once("end", onUpgradeStreamEnd);
@@ -10408,7 +8566,7 @@ var require_client_h2 = __commonJS({
       completeRequest(state.client, state.request, resetPendingIdx);
       state.client[kResume]();
     }
-    function openStream(client, request2, session, abort, headers, options) {
+    function openStream(client, request, session, abort, headers, options) {
       try {
         return session.request(headers, options);
       } catch (err) {
@@ -10417,7 +8575,7 @@ var require_client_h2 = __commonJS({
           wrappedErr2.cause = err;
           session[kError] = wrappedErr2;
           resetHttp2Session(session, wrappedErr2);
-          requeueUnsentRequest(client, request2);
+          requeueUnsentRequest(client, request);
           return null;
         }
         const wrappedErr = new InformationalError(err.message, { cause: err });
@@ -10429,13 +8587,13 @@ var require_client_h2 = __commonJS({
         return null;
       }
     }
-    function writeH2(client, request2) {
-      const headersTimeout = request2.headersTimeout ?? client[kHeadersTimeout];
-      const bodyTimeout = request2.bodyTimeout ?? client[kBodyTimeout];
+    function writeH2(client, request) {
+      const headersTimeout = request.headersTimeout ?? client[kHeadersTimeout];
+      const bodyTimeout = request.bodyTimeout ?? client[kBodyTimeout];
       const session = client[kHTTP2Session];
-      const { method, path: path2, host, upgrade, expectContinue, signal, protocol, headers: reqHeaders } = request2;
+      const { method, path: path2, host, upgrade, expectContinue, signal, protocol, headers: reqHeaders } = request;
       if (upgrade != null && upgrade !== "websocket") {
-        util.errorRequest(client, request2, new InvalidArgumentError(`Custom upgrade "${upgrade}" not supported over HTTP/2`));
+        util.errorRequest(client, request, new InvalidArgumentError(`Custom upgrade "${upgrade}" not supported over HTTP/2`));
         return false;
       }
       const headers = buildRequestHeaders(reqHeaders);
@@ -10443,13 +8601,13 @@ var require_client_h2 = __commonJS({
       headers[HTTP2_HEADER_METHOD] = method;
       const state = {
         abort: null,
-        body: request2.body,
+        body: request.body,
         bytesRead: 0,
         client,
         contentLength: null,
         expectsPayload: false,
         maxResponseSize: client[kMaxResponseSize],
-        request: request2,
+        request,
         headersTimeout,
         bodyTimeout,
         requestFinalized: false,
@@ -10462,13 +8620,13 @@ var require_client_h2 = __commonJS({
         stream: null
       };
       const abort = (err, resetPendingIdx = false) => {
-        if (request2.aborted || request2.completed) {
+        if (request.aborted || request.completed) {
           return;
         }
         err = err || new RequestAbortedError();
-        util.errorRequest(client, request2, err);
+        util.errorRequest(client, request, err);
         if (state.stream != null) {
-          clearRequestStream(request2);
+          clearRequestStream(request);
           const stream2 = state.stream;
           stream2.close();
           if (!stream2.destroyed) {
@@ -10482,18 +8640,18 @@ var require_client_h2 = __commonJS({
       state.abort = abort;
       let stream = null;
       try {
-        request2.onRequestStart(abort, null);
+        request.onRequestStart(abort, null);
       } catch (err) {
-        util.errorRequest(client, request2, err);
+        util.errorRequest(client, request, err);
       }
-      if (request2.aborted) {
+      if (request.aborted) {
         return false;
       }
       if (upgrade || method === "CONNECT") {
         refH2Session(session);
         if (upgrade === "websocket") {
           if (session[kEnableConnectProtocol] === false) {
-            util.errorRequest(client, request2, new InformationalError("HTTP/2: Extended CONNECT protocol not supported by server"));
+            util.errorRequest(client, request, new InformationalError("HTTP/2: Extended CONNECT protocol not supported by server"));
             unrefH2Session(session);
             return false;
           }
@@ -10505,7 +8663,7 @@ var require_client_h2 = __commonJS({
           } else {
             headers[HTTP2_HEADER_SCHEME] = protocol === "http:" ? "http" : "https";
           }
-          stream = openStream(client, request2, session, abort, headers, { endStream: false, signal });
+          stream = openStream(client, request, session, abort, headers, { endStream: false, signal });
           if (stream == null) {
             unrefH2Session(session);
             return false;
@@ -10513,7 +8671,7 @@ var require_client_h2 = __commonJS({
           setupUpgradeStream(stream, state);
           return true;
         }
-        stream = openStream(client, request2, session, abort, headers, { endStream: false, signal });
+        stream = openStream(client, request, session, abort, headers, { endStream: false, signal });
         if (stream == null) {
           unrefH2Session(session);
           return false;
@@ -10537,14 +8695,14 @@ var require_client_h2 = __commonJS({
         contentLength = bodyStream.length;
       }
       if (contentLength == null) {
-        contentLength = request2.contentLength;
+        contentLength = request.contentLength;
       }
       if (contentLength === 0 && !expectsPayload) {
         contentLength = null;
       }
-      if (shouldSendContentLength(method) && contentLength > 0 && request2.contentLength != null && request2.contentLength !== contentLength) {
+      if (shouldSendContentLength(method) && contentLength > 0 && request.contentLength != null && request.contentLength !== contentLength) {
         if (client[kStrictContentLength]) {
-          util.errorRequest(client, request2, new RequestContentLengthMismatchError());
+          util.errorRequest(client, request, new RequestContentLengthMismatchError());
           return false;
         }
         process.emitWarning(new RequestContentLengthMismatchError());
@@ -10560,7 +8718,7 @@ var require_client_h2 = __commonJS({
           header += `${key}: ${headers[key]}\r
 `;
         }
-        channels.sendHeaders.publish({ request: request2, headers: header, socket: session[kSocket] });
+        channels.sendHeaders.publish({ request, headers: header, socket: session[kSocket] });
       }
       const shouldEndStream = body === null || contentLength === 0;
       state.body = body;
@@ -10569,7 +8727,7 @@ var require_client_h2 = __commonJS({
       if (expectContinue) {
         headers[HTTP2_HEADER_EXPECT] = "100-continue";
       }
-      stream = openStream(client, request2, session, abort, headers, { endStream: shouldEndStream, signal });
+      stream = openStream(client, request, session, abort, headers, { endStream: shouldEndStream, signal });
       if (stream == null) {
         return false;
       }
@@ -10583,7 +8741,7 @@ var require_client_h2 = __commonJS({
       }
       stream[kHTTP2Session] = session;
       stream.on("close", completeRequestStream);
-      bindRequestToStream(request2, stream, releaseRequestStream);
+      bindRequestToStream(request, stream, releaseRequestStream);
       if (expectContinue) {
         stream.once("continue", writeBodyH2);
       }
@@ -10623,9 +8781,9 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
-      if (request2[kRequestStream] === stream) {
-        detachRequestFromStream(request2);
+      const { request } = state;
+      if (request[kRequestStream] === stream) {
+        detachRequestFromStream(request);
       }
       if (!stream.destroyed && !stream.closed) {
         removeRequestStreamListeners(stream);
@@ -10638,8 +8796,8 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2, maxResponseSize, responseContentLength } = state;
-      if (request2.aborted || request2.completed) {
+      const { request, maxResponseSize, responseContentLength } = state;
+      if (request.aborted || request.completed) {
         return;
       }
       if (responseContentLength != null && state.bytesRead + chunk.length > responseContentLength) {
@@ -10651,7 +8809,7 @@ var require_client_h2 = __commonJS({
         return;
       }
       state.bytesRead += chunk.length;
-      if (request2.onResponseData(chunk) === false) {
+      if (request.onResponseData(chunk) === false) {
         stream.pause();
       }
     }
@@ -10661,13 +8819,13 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
-      if (request2.aborted || request2.completed) {
+      const { request } = state;
+      if (request.aborted || request.completed) {
         return;
       }
       const statusCode = headers[HTTP2_HEADER_STATUS];
       delete headers[HTTP2_HEADER_STATUS];
-      request2.onResponseStart(Number(statusCode), headers, noop, "");
+      request.onResponseStart(Number(statusCode), headers, noop, "");
     }
     function onResponse(headers) {
       const stream = this;
@@ -10675,7 +8833,7 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
+      const { request } = state;
       stream.off("response", onResponse);
       if (state.body != null && !state.bodySent && !stream.writableEnded) {
         stream.removeListener("continue", writeBodyH2);
@@ -10683,20 +8841,20 @@ var require_client_h2 = __commonJS({
       }
       const statusCode = Number(headers[HTTP2_HEADER_STATUS]);
       delete headers[HTTP2_HEADER_STATUS];
-      request2.onResponseStarted();
+      request.onResponseStarted();
       state.responseReceived = true;
-      if (request2.method !== "HEAD" && statusCode !== 304) {
+      if (request.method !== "HEAD" && statusCode !== 304) {
         const contentLength = headers[HTTP2_HEADER_CONTENT_LENGTH];
         state.responseContentLength = contentLength == null ? null : Number(contentLength);
       }
       if (state.headersTimeout || state.bodyTimeout) {
         stream.setTimeout(state.bodyTimeout);
       }
-      if (request2.aborted || request2.completed) {
+      if (request.aborted || request.completed) {
         releaseRequestStream(stream);
         return;
       }
-      if (request2.onResponseStart(statusCode, headers, stream.resume.bind(stream), "") === false) {
+      if (request.onResponseStart(statusCode, headers, stream.resume.bind(stream), "") === false) {
         stream.pause();
       }
       stream.on("data", onData);
@@ -10707,10 +8865,10 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
+      const { request } = state;
       stream.off("end", onEnd);
       if (state.responseReceived) {
-        if (!request2.aborted && !request2.completed) {
+        if (!request.aborted && !request.completed) {
           if (state.responseContentLength != null && state.bytesRead !== state.responseContentLength) {
             state.abort(new ResponseContentLengthMismatchError());
             return;
@@ -10723,16 +8881,16 @@ var require_client_h2 = __commonJS({
       }
     }
     function retryRefusedStream(stream, state) {
-      const { client, request: request2 } = state;
-      if (state.responseReceived || request2.aborted || request2.completed || request2[kRefusedStreamRetry] || !canReplayRequest(request2)) {
+      const { client, request } = state;
+      if (state.responseReceived || request.aborted || request.completed || request[kRefusedStreamRetry] || !canReplayRequest(request)) {
         return false;
       }
-      request2[kRefusedStreamRetry] = true;
-      detachRequestStreamForClose(request2);
+      request[kRefusedStreamRetry] = true;
+      detachRequestStreamForClose(request);
       state.stream = null;
       state.requestFinalized = true;
-      completeRequest(client, request2);
-      client[kQueue].splice(client[kPendingIdx], 0, request2);
+      completeRequest(client, request);
+      client[kQueue].splice(client[kPendingIdx], 0, request);
       client[kResume]();
       return true;
     }
@@ -10782,10 +8940,10 @@ var require_client_h2 = __commonJS({
       if (state == null) {
         return;
       }
-      const { request: request2 } = state;
+      const { request } = state;
       stream.off("trailers", onTrailers);
       stream.off("data", onData);
-      if (request2.aborted || request2.completed) {
+      if (request.aborted || request.completed) {
         return;
       }
       state.trailers = trailers;
@@ -10794,14 +8952,14 @@ var require_client_h2 = __commonJS({
       const stream = this;
       const state = stream[kRequestStreamState];
       state.bodySent = true;
-      const { abort, body, client, contentLength, expectsPayload, request: request2 } = state;
+      const { abort, body, client, contentLength, expectsPayload, request } = state;
       if (!body || contentLength === 0) {
         writeBuffer(
           abort,
           stream,
           null,
           client,
-          request2,
+          request,
           client[kSocket],
           contentLength,
           expectsPayload
@@ -10812,7 +8970,7 @@ var require_client_h2 = __commonJS({
           stream,
           body,
           client,
-          request2,
+          request,
           client[kSocket],
           contentLength,
           expectsPayload
@@ -10824,7 +8982,7 @@ var require_client_h2 = __commonJS({
             stream,
             body.stream(),
             client,
-            request2,
+            request,
             client[kSocket],
             contentLength,
             expectsPayload
@@ -10835,7 +8993,7 @@ var require_client_h2 = __commonJS({
             stream,
             body,
             client,
-            request2,
+            request,
             client[kSocket],
             contentLength,
             expectsPayload
@@ -10849,7 +9007,7 @@ var require_client_h2 = __commonJS({
           stream,
           body,
           client,
-          request2,
+          request,
           contentLength
         );
       } else if (util.isIterable(body)) {
@@ -10858,7 +9016,7 @@ var require_client_h2 = __commonJS({
           stream,
           body,
           client,
-          request2,
+          request,
           client[kSocket],
           contentLength,
           expectsPayload
@@ -10867,7 +9025,7 @@ var require_client_h2 = __commonJS({
         assert(false);
       }
     }
-    function writeBuffer(abort, h2stream, body, client, request2, socket, contentLength, expectsPayload) {
+    function writeBuffer(abort, h2stream, body, client, request, socket, contentLength, expectsPayload) {
       try {
         if (body != null && util.isBuffer(body)) {
           assert(contentLength === body.byteLength, "buffer body must have content length");
@@ -10875,18 +9033,18 @@ var require_client_h2 = __commonJS({
           h2stream.write(body);
           h2stream.uncork();
           h2stream.end();
-          request2.onBodySent(body);
+          request.onBodySent(body);
         }
         if (!expectsPayload) {
           socket[kReset] = true;
         }
-        request2.onRequestSent();
+        request.onRequestSent();
         client[kResume]();
       } catch (error) {
         abort(error);
       }
     }
-    function writeStream(abort, socket, expectsPayload, h2stream, body, client, request2, contentLength) {
+    function writeStream(abort, socket, expectsPayload, h2stream, body, client, request, contentLength) {
       assert(contentLength !== 0 || client[kRunning] === 0, "stream body cannot be pipelined");
       const pipe = pipeline(
         body,
@@ -10897,7 +9055,7 @@ var require_client_h2 = __commonJS({
             abort(err);
           } else {
             util.removeAllListeners(pipe);
-            request2.onRequestSent();
+            request.onRequestSent();
             if (!expectsPayload) {
               socket[kReset] = true;
             }
@@ -10907,10 +9065,10 @@ var require_client_h2 = __commonJS({
       );
       util.addListener(pipe, "data", onPipeData);
       function onPipeData(chunk) {
-        request2.onBodySent(chunk);
+        request.onBodySent(chunk);
       }
     }
-    async function writeBlob(abort, h2stream, body, client, request2, socket, contentLength, expectsPayload) {
+    async function writeBlob(abort, h2stream, body, client, request, socket, contentLength, expectsPayload) {
       try {
         if (contentLength != null && contentLength !== body.size) {
           throw new RequestContentLengthMismatchError();
@@ -10920,8 +9078,8 @@ var require_client_h2 = __commonJS({
         h2stream.write(buffer);
         h2stream.uncork();
         h2stream.end();
-        request2.onBodySent(buffer);
-        request2.onRequestSent();
+        request.onBodySent(buffer);
+        request.onRequestSent();
         if (!expectsPayload) {
           socket[kReset] = true;
         }
@@ -10930,7 +9088,7 @@ var require_client_h2 = __commonJS({
         abort(err);
       }
     }
-    async function writeIterable(abort, h2stream, body, client, request2, socket, contentLength, expectsPayload) {
+    async function writeIterable(abort, h2stream, body, client, request, socket, contentLength, expectsPayload) {
       assert(contentLength !== 0 || client[kRunning] === 0, "iterator body cannot be pipelined");
       let callback = null;
       function onDrain() {
@@ -10955,13 +9113,13 @@ var require_client_h2 = __commonJS({
             throw socket[kError];
           }
           const res = h2stream.write(chunk);
-          request2.onBodySent(chunk);
+          request.onBodySent(chunk);
           if (!res) {
             await waitForDrain();
           }
         }
         h2stream.end();
-        request2.onRequestSent();
+        request.onRequestSent();
         if (!expectsPayload) {
           socket[kReset] = true;
         }
@@ -11299,10 +9457,10 @@ var require_client = __commonJS({
         this.once("connect", cb);
       }
       [kDispatch](opts, handler) {
-        const request2 = new Request2(this[kUrl].origin, opts, handler);
-        this[kQueue].push(request2);
+        const request = new Request2(this[kUrl].origin, opts, handler);
+        this[kQueue].push(request);
         if (this[kResuming]) {
-        } else if (util.bodyLength(request2.body) == null && util.isIterable(request2.body)) {
+        } else if (util.bodyLength(request.body) == null && util.isIterable(request.body)) {
           this[kResuming] = 1;
           queueMicrotask(() => resume(this));
         } else {
@@ -11326,9 +9484,9 @@ var require_client = __commonJS({
         return new Promise((resolve2) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
-            const request2 = requests[i];
-            if (request2 != null) {
-              util.errorRequest(this, request2, err);
+            const request = requests[i];
+            if (request != null) {
+              util.errorRequest(this, request, err);
             }
           }
           const callback = () => {
@@ -11353,9 +9511,9 @@ var require_client = __commonJS({
         assert(client[kPendingIdx] === client[kRunningIdx]);
         const requests = client[kQueue].splice(client[kRunningIdx]);
         for (let i = 0; i < requests.length; i++) {
-          const request2 = requests[i];
-          if (request2 != null) {
-            util.errorRequest(client, request2, err);
+          const request = requests[i];
+          if (request != null) {
+            util.errorRequest(client, request, err);
           }
         }
         assert(client[kSize] === 0);
@@ -11470,8 +9628,8 @@ var require_client = __commonJS({
           util.errorRequest(client, running2[i], err);
         }
         while (client[kPending] > 0 && client[kQueue][client[kPendingIdx]].servername === client[kServerName]) {
-          const request2 = client[kQueue].splice(client[kPendingIdx], 1)[0];
-          util.errorRequest(client, request2, err);
+          const request = client[kQueue].splice(client[kPendingIdx], 1)[0];
+          util.errorRequest(client, request, err);
         }
       } else {
         onError(client, err);
@@ -11526,19 +9684,19 @@ var require_client = __commonJS({
         if (client[kRunning] >= (getMaxConcurrent(client) || 1)) {
           return;
         }
-        const request2 = client[kQueue][client[kPendingIdx]];
-        if (request2 === null) {
+        const request = client[kQueue][client[kPendingIdx]];
+        if (request === null) {
           return;
         }
-        if (request2.aborted) {
+        if (request.aborted) {
           client[kQueue].splice(client[kPendingIdx], 1);
           continue;
         }
-        if (client[kUrl].protocol === "https:" && client[kServerName] !== request2.servername) {
+        if (client[kUrl].protocol === "https:" && client[kServerName] !== request.servername) {
           if (client[kRunning] > 0) {
             return;
           }
-          client[kServerName] = request2.servername;
+          client[kServerName] = request.servername;
           client[kHTTPContext]?.destroy(new InformationalError("servername changed"), () => {
             client[kHTTPContext] = null;
             resume(client);
@@ -11548,17 +9706,17 @@ var require_client = __commonJS({
           return;
         }
         if (!client[kHTTPContext]) {
-          client[kServerName] = request2.servername;
+          client[kServerName] = request.servername;
           connect(client);
           return;
         }
         if (client[kHTTPContext].destroyed) {
           return;
         }
-        if (client[kHTTPContext].busy(request2)) {
+        if (client[kHTTPContext].busy(request)) {
           return;
         }
-        if (!request2.aborted && client[kHTTPContext].write(request2)) {
+        if (!request.aborted && client[kHTTPContext].write(request)) {
           client[kPendingIdx]++;
         } else {
           client[kQueue].splice(client[kPendingIdx], 1);
@@ -12364,7 +10522,7 @@ var require_agent = __commonJS({
     function defaultFactory(origin, opts) {
       return opts && opts.connections === 1 ? new Client(origin, opts) : new Pool2(origin, opts);
     }
-    var Agent2 = class extends DispatcherBase {
+    var Agent3 = class extends DispatcherBase {
       constructor({ factory: factory2 = defaultFactory, maxOrigins = Infinity, connect, ...options } = {}) {
         if (typeof factory2 !== "function") {
           throw new InvalidArgumentError("factory must be a function.");
@@ -12478,7 +10636,7 @@ var require_agent = __commonJS({
         return allClientStats;
       }
     };
-    module.exports = Agent2;
+    module.exports = Agent3;
   }
 });
 
@@ -12862,13 +11020,13 @@ var require_socks5_client = __commonJS({
         }
         debug("starting handshake with", this.authMethods.length, "auth methods");
         this.state = STATES.HANDSHAKING;
-        const request2 = Buffer2.alloc(2 + this.authMethods.length);
-        request2[0] = SOCKS_VERSION;
-        request2[1] = this.authMethods.length;
+        const request = Buffer2.alloc(2 + this.authMethods.length);
+        request[0] = SOCKS_VERSION;
+        request[1] = this.authMethods.length;
         this.authMethods.forEach((method, i) => {
-          request2[2 + i] = method;
+          request[2 + i] = method;
         });
-        this.socket.write(request2);
+        this.socket.write(request);
       }
       /**
        * Handle handshake response from server
@@ -12910,13 +11068,13 @@ var require_socks5_client = __commonJS({
         if (usernameBuffer.length > 255 || passwordBuffer.length > 255) {
           throw new InvalidArgumentError("Username or password too long");
         }
-        const request2 = Buffer2.alloc(3 + usernameBuffer.length + passwordBuffer.length);
-        request2[0] = 1;
-        request2[1] = usernameBuffer.length;
-        usernameBuffer.copy(request2, 2);
-        request2[2 + usernameBuffer.length] = passwordBuffer.length;
-        passwordBuffer.copy(request2, 3 + usernameBuffer.length);
-        this.socket.write(request2);
+        const request = Buffer2.alloc(3 + usernameBuffer.length + passwordBuffer.length);
+        request[0] = 1;
+        request[1] = usernameBuffer.length;
+        usernameBuffer.copy(request, 2);
+        request[2 + usernameBuffer.length] = passwordBuffer.length;
+        passwordBuffer.copy(request, 3 + usernameBuffer.length);
+        this.socket.write(request);
       }
       /**
        * Handle authentication response
@@ -12951,22 +11109,22 @@ var require_socks5_client = __commonJS({
         }
         debug("connecting to", address, port);
         this.state = STATES.CONNECTING;
-        const request2 = this.buildConnectRequest(COMMANDS.CONNECT, address, port);
-        this.socket.write(request2);
+        const request = this.buildConnectRequest(COMMANDS.CONNECT, address, port);
+        this.socket.write(request);
       }
       /**
        * Build a SOCKS5 request
        */
       buildConnectRequest(command, address, port) {
         const { type: addressType, buffer: addressBuffer } = parseAddress(address);
-        const request2 = Buffer2.alloc(4 + addressBuffer.length + 2);
-        request2[0] = SOCKS_VERSION;
-        request2[1] = command;
-        request2[2] = 0;
-        request2[3] = addressType;
-        addressBuffer.copy(request2, 4);
-        request2.writeUInt16BE(port, 4 + addressBuffer.length);
-        return request2;
+        const request = Buffer2.alloc(4 + addressBuffer.length + 2);
+        request[0] = SOCKS_VERSION;
+        request[1] = command;
+        request[2] = 0;
+        request[3] = addressType;
+        addressBuffer.copy(request, 4);
+        request.writeUInt16BE(port, 4 + addressBuffer.length);
+        return request;
       }
       /**
        * Handle CONNECT response
@@ -12998,8 +11156,8 @@ var require_socks5_client = __commonJS({
           return;
         }
         if (reply2 !== REPLY_CODES.SUCCEEDED) {
-          const errorMessage6 = this.getReplyErrorMessage(reply2);
-          throw new Socks5ProxyError(`SOCKS5 connection failed: ${errorMessage6}`, `UND_ERR_SOCKS5_REPLY_${reply2}`);
+          const errorMessage5 = this.getReplyErrorMessage(reply2);
+          throw new Socks5ProxyError(`SOCKS5 connection failed: ${errorMessage5}`, `UND_ERR_SOCKS5_REPLY_${reply2}`);
         }
         let boundAddress;
         let offset = 4;
@@ -13340,7 +11498,7 @@ var require_proxy_agent = __commonJS({
   "node_modules/undici/lib/dispatcher/proxy-agent.js"(exports, module) {
     "use strict";
     var { kProxy, kClose, kDestroy, kDispatch } = require_symbols();
-    var Agent2 = require_agent();
+    var Agent3 = require_agent();
     var Pool2 = require_pool();
     var DispatcherBase = require_dispatcher_base();
     var { InvalidArgumentError, RequestAbortedError, SecureProxyConnectionError, ProxyConnectionError } = require_errors();
@@ -13495,7 +11653,7 @@ var require_proxy_agent = __commonJS({
         } else {
           this[kClient] = clientFactory(url, { connect });
         }
-        this[kAgent] = new Agent2({
+        this[kAgent] = new Agent3({
           ...opts,
           factory: factory2,
           connect: async (opts2, callback) => {
@@ -13655,7 +11813,7 @@ var require_env_http_proxy_agent = __commonJS({
     var DispatcherBase = require_dispatcher_base();
     var { kClose, kDestroy, kClosed, kDestroyed, kDispatch, kNoProxyAgent, kHttpProxyAgent, kHttpsProxyAgent } = require_symbols();
     var ProxyAgent2 = require_proxy_agent();
-    var Agent2 = require_agent();
+    var Agent3 = require_agent();
     var DEFAULT_PORTS = {
       "http:": 80,
       "https:": 443
@@ -13668,7 +11826,7 @@ var require_env_http_proxy_agent = __commonJS({
         super(opts);
         this.#opts = opts;
         const { httpProxy, httpsProxy, noProxy, ...agentOpts } = opts;
-        this[kNoProxyAgent] = new Agent2(agentOpts);
+        this[kNoProxyAgent] = new Agent3(agentOpts);
         const HTTP_PROXY = httpProxy ?? process.env.http_proxy ?? process.env.HTTP_PROXY;
         if (HTTP_PROXY) {
           this[kHttpProxyAgent] = new ProxyAgent2({ ...agentOpts, uri: HTTP_PROXY });
@@ -14955,10 +13113,10 @@ var require_api_request = __commonJS({
         }
       }
     };
-    function request2(opts, callback) {
+    function request(opts, callback) {
       if (callback === void 0) {
         return new Promise((resolve2, reject) => {
-          request2.call(this, opts, (err, data) => {
+          request.call(this, opts, (err, data) => {
             return err ? reject(err) : resolve2(data);
           });
         });
@@ -14974,7 +13132,7 @@ var require_api_request = __commonJS({
         queueMicrotask(() => callback(err, { opaque }));
       }
     }
-    module.exports = request2;
+    module.exports = request;
     module.exports.RequestHandler = RequestHandler;
   }
 });
@@ -15987,8 +14145,8 @@ var require_mock_utils = __commonJS({
       return dispatchMockReply(mockDispatches, mockDispatch2, key, opts, handler);
     }
     function dispatchMockReply(mockDispatches, mockDispatch2, key, opts, handler, resolvedResponse) {
-      const { data: responseData2, delay: delay2 } = mockDispatch2;
-      const response = resolvedResponse ?? responseData2;
+      const { data: responseData, delay: delay2 } = mockDispatch2;
+      const response = resolvedResponse ?? responseData;
       if (response.error !== null) {
         deleteMockDispatch(mockDispatches, key);
         handler.onResponseError(null, response.error);
@@ -16098,13 +14256,13 @@ var require_mock_utils = __commonJS({
         if (aborted) {
           return;
         }
-        const responseData3 = getResponseData(body);
+        const responseData2 = getResponseData(body);
         const responseHeaders = generateKeyValues(headers ?? {});
         const responseTrailers = generateKeyValues(trailers ?? {});
         controller.rawHeaders = responseHeaders;
         controller.rawTrailers = responseTrailers;
         handler.onResponseStart?.(controller, statusCode, parseHeaders(responseHeaders), getStatusText(statusCode));
-        handler.onResponseData?.(controller, Buffer.from(responseData3));
+        handler.onResponseData?.(controller, Buffer.from(responseData2));
         handler.onResponseEnd?.(controller, parseHeaders(responseTrailers));
         deleteMockDispatch(mockDispatches2, key);
       }
@@ -16349,8 +14507,8 @@ var require_mock_interceptor = __commonJS({
         this[kContentLength] = false;
       }
       createMockScopeDispatchData({ statusCode, data, responseOptions }) {
-        const responseData2 = getResponseData(data);
-        const contentLength = this[kContentLength] ? { "content-length": responseData2.length } : {};
+        const responseData = getResponseData(data);
+        const contentLength = this[kContentLength] ? { "content-length": responseData.length } : {};
         const headers = { ...this[kDefaultHeaders], ...contentLength, ...responseOptions.headers };
         const trailers = { ...this[kDefaultTrailers], ...responseOptions.trailers };
         return { statusCode, data, headers, trailers };
@@ -16809,7 +14967,7 @@ var require_mock_agent = __commonJS({
   "node_modules/undici/lib/mock/mock-agent.js"(exports, module) {
     "use strict";
     var { kClients } = require_symbols();
-    var Agent2 = require_agent();
+    var Agent3 = require_agent();
     var {
       kAgent,
       kMockAgentSet,
@@ -16847,7 +15005,7 @@ var require_mock_agent = __commonJS({
         if (opts?.agent && typeof opts.agent.dispatch !== "function") {
           throw new InvalidArgumentError("Argument opts.agent must implement Agent");
         }
-        const agent = opts?.agent ? opts.agent : new Agent2(opts);
+        const agent = opts?.agent ? opts.agent : new Agent3(opts);
         this[kAgent] = agent;
         this[kClients] = agent[kClients];
         this[kOptions] = mockOptions;
@@ -17227,10 +15385,10 @@ var require_snapshot_recorder = __commonJS({
         if (this.isUrlExcluded(requestOpts)) {
           return;
         }
-        const request2 = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
-        const hash = createRequestHash(request2);
+        const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
+        const hash = createRequestHash(request);
         const normalizedHeaders = normalizeHeaders(response.headers);
-        const responseData2 = {
+        const responseData = {
           statusCode: response.statusCode,
           headers: filterHeadersForStorage(normalizedHeaders, this.#headerFilters, this.matchOptions),
           body: Buffer.isBuffer(response.body) ? response.body.toString("base64") : Buffer.from(String(response.body || "")).toString("base64"),
@@ -17242,12 +15400,12 @@ var require_snapshot_recorder = __commonJS({
         }
         const existingSnapshot = this.#snapshots.get(hash);
         if (existingSnapshot && existingSnapshot.responses) {
-          existingSnapshot.responses.push(responseData2);
+          existingSnapshot.responses.push(responseData);
           existingSnapshot.timestamp = (/* @__PURE__ */ new Date()).toISOString();
         } else {
           this.#snapshots.set(hash, {
-            request: request2,
-            responses: [responseData2],
+            request,
+            responses: [responseData],
             // Always store as array for consistency
             callCount: 0,
             timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -17280,8 +15438,8 @@ var require_snapshot_recorder = __commonJS({
         if (this.isUrlExcluded(requestOpts)) {
           return void 0;
         }
-        const request2 = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
-        const hash = createRequestHash(request2);
+        const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
+        const hash = createRequestHash(request);
         const snapshot = this.#snapshots.get(hash);
         if (!snapshot) return void 0;
         const currentCallCount = snapshot.callCount || 0;
@@ -17376,8 +15534,8 @@ var require_snapshot_recorder = __commonJS({
        * @returns {boolean} - True if snapshot was deleted, false if not found
        */
       deleteSnapshot(requestOpts) {
-        const request2 = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
-        const hash = createRequestHash(request2);
+        const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
+        const hash = createRequestHash(request);
         return this.#snapshots.delete(hash);
       }
       /**
@@ -17386,8 +15544,8 @@ var require_snapshot_recorder = __commonJS({
        * @returns {SnapshotInfo|null} - Snapshot information or null if not found
        */
       getSnapshotInfo(requestOpts) {
-        const request2 = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
-        const hash = createRequestHash(request2);
+        const request = formatRequestKey(requestOpts, this.#headerFilters, this.matchOptions);
+        const hash = createRequestHash(request);
         const snapshot = this.#snapshots.get(hash);
         if (!snapshot) return null;
         return {
@@ -17477,7 +15635,7 @@ var require_snapshot_recorder = __commonJS({
 var require_snapshot_agent = __commonJS({
   "node_modules/undici/lib/mock/snapshot-agent.js"(exports, module) {
     "use strict";
-    var Agent2 = require_agent();
+    var Agent3 = require_agent();
     var MockAgent = require_mock_agent();
     var { SnapshotRecorder } = require_snapshot_recorder();
     var { InvalidArgumentError, UndiciError } = require_errors();
@@ -17530,7 +15688,7 @@ var require_snapshot_agent = __commonJS({
         });
         this[kSnapshotLoaded] = false;
         if (this[kSnapshotMode] === "record" || this[kSnapshotMode] === "update" || this[kSnapshotMode] === "playback" && opts.excludeUrls && opts.excludeUrls.length > 0) {
-          this[kRealAgent] = new Agent2(opts);
+          this[kRealAgent] = new Agent3(opts);
         }
         if ((this[kSnapshotMode] === "playback" || this[kSnapshotMode] === "update") && this[kSnapshotPath]) {
           this.loadSnapshots().catch(() => {
@@ -17574,7 +15732,7 @@ var require_snapshot_agent = __commonJS({
        * Records a real request and replays the response
        */
       #recordAndReplay(opts, handler) {
-        const responseData2 = {
+        const responseData = {
           statusCode: null,
           headers: {},
           trailers: {},
@@ -17589,22 +15747,22 @@ var require_snapshot_agent = __commonJS({
             return handler.onRequestUpgrade(controller, statusCode, headers, socket);
           },
           onResponseStart(controller, statusCode, headers, statusMessage) {
-            responseData2.statusCode = statusCode;
-            responseData2.headers = headers;
+            responseData.statusCode = statusCode;
+            responseData.headers = headers;
             return handler.onResponseStart(controller, statusCode, headers, statusMessage);
           },
           onResponseData(controller, chunk) {
-            responseData2.body.push(chunk);
+            responseData.body.push(chunk);
             return handler.onResponseData(controller, chunk);
           },
           onResponseEnd(controller, trailers) {
-            responseData2.trailers = trailers;
-            const responseBody = Buffer.concat(responseData2.body);
+            responseData.trailers = trailers;
+            const responseBody = Buffer.concat(responseData.body);
             self[kSnapshotRecorder].record(opts, {
-              statusCode: responseData2.statusCode,
-              headers: responseData2.headers,
+              statusCode: responseData.statusCode,
+              headers: responseData.headers,
               body: responseBody,
-              trailers: responseData2.trailers
+              trailers: responseData.trailers
             }).then(() => handler.onResponseEnd(controller, trailers)).catch((error) => handler.onResponseError(controller, error));
           },
           onResponseError(controller, error) {
@@ -17686,19 +15844,19 @@ var require_snapshot_agent = __commonJS({
        */
       #setupMockInterceptors() {
         for (const snapshot of this[kSnapshotRecorder].getSnapshots()) {
-          const { request: request2, responses, response } = snapshot;
-          const url = new URL(request2.url);
+          const { request, responses, response } = snapshot;
+          const url = new URL(request.url);
           const mockPool = this.get(url.origin);
-          const responseData2 = responses ? responses[0] : response;
-          if (!responseData2) continue;
+          const responseData = responses ? responses[0] : response;
+          if (!responseData) continue;
           mockPool.intercept({
             path: url.pathname + url.search,
-            method: request2.method,
-            headers: request2.headers,
-            body: request2.body
-          }).reply(responseData2.statusCode, responseData2.body, {
-            headers: responseData2.headers,
-            trailers: responseData2.trailers
+            method: request.method,
+            headers: request.headers,
+            body: request.body
+          }).reply(responseData.statusCode, responseData.body, {
+            headers: responseData.headers,
+            trailers: responseData.trailers
           }).persist();
         }
       }
@@ -17779,11 +15937,11 @@ var require_global2 = __commonJS({
     var globalDispatcher = Symbol.for("undici.globalDispatcher.2");
     var legacyGlobalDispatcher = Symbol.for("undici.globalDispatcher.1");
     var { InvalidArgumentError } = require_errors();
-    var Agent2 = require_agent();
+    var Agent3 = require_agent();
     var Dispatcher1Wrapper2 = require_dispatcher1_wrapper();
     var fallbackDispatcher;
     if (getGlobalDispatcher() === void 0) {
-      setGlobalDispatcher(new Agent2());
+      setGlobalDispatcher(new Agent3());
     }
     function setGlobalDispatcher(agent) {
       if (!agent || typeof agent.dispatch !== "function") {
@@ -23326,7 +21484,7 @@ var require_request2 = __commonJS({
         webidl.argumentLengthCheck(arguments, 1, prefix);
         input = webidl.converters.RequestInfo(input);
         init = webidl.converters.RequestInit(init);
-        let request2 = null;
+        let request = null;
         let fallbackMode = null;
         const baseUrl = environmentSettingsObject.settingsObject.baseUrl;
         let signal = null;
@@ -23343,18 +21501,18 @@ var require_request2 = __commonJS({
               "Request cannot be constructed from a URL that includes credentials: " + input
             );
           }
-          request2 = makeRequest({ urlList: [parsedURL] });
+          request = makeRequest({ urlList: [parsedURL] });
           fallbackMode = "cors";
         } else {
           assert(webidl.is.Request(input));
-          request2 = input.#state;
+          request = input.#state;
           signal = input.#signal;
           this.#dispatcher = init.dispatcher || input.#dispatcher;
         }
         const origin = environmentSettingsObject.settingsObject.origin;
         let window = "client";
-        if (request2.window?.constructor?.name === "EnvironmentSettingsObject" && sameOrigin(request2.window, origin)) {
-          window = request2.window;
+        if (request.window?.constructor?.name === "EnvironmentSettingsObject" && sameOrigin(request.window, origin)) {
+          window = request.window;
         }
         if (init.window != null) {
           throw new TypeError(`'window' option '${window}' must be null`);
@@ -23362,66 +21520,66 @@ var require_request2 = __commonJS({
         if ("window" in init) {
           window = "no-window";
         }
-        request2 = makeRequest({
+        request = makeRequest({
           // URL request’s URL.
           // undici implementation note: this is set as the first item in request's urlList in makeRequest
           // method request’s method.
-          method: request2.method,
+          method: request.method,
           // header list A copy of request’s header list.
           // undici implementation note: headersList is cloned in makeRequest
-          headersList: request2.headersList,
+          headersList: request.headersList,
           // unsafe-request flag Set.
-          unsafeRequest: request2.unsafeRequest,
+          unsafeRequest: request.unsafeRequest,
           // client This’s relevant settings object.
           client: environmentSettingsObject.settingsObject,
           // window window.
           window,
           // priority request’s priority.
-          priority: request2.priority,
+          priority: request.priority,
           // origin request’s origin. The propagation of the origin is only significant for navigation requests
           // being handled by a service worker. In this scenario a request can have an origin that is different
           // from the current client.
-          origin: request2.origin,
+          origin: request.origin,
           // referrer request’s referrer.
-          referrer: request2.referrer,
+          referrer: request.referrer,
           // referrer policy request’s referrer policy.
-          referrerPolicy: request2.referrerPolicy,
+          referrerPolicy: request.referrerPolicy,
           // mode request’s mode.
-          mode: request2.mode,
+          mode: request.mode,
           // credentials mode request’s credentials mode.
-          credentials: request2.credentials,
+          credentials: request.credentials,
           // cache mode request’s cache mode.
-          cache: request2.cache,
+          cache: request.cache,
           // redirect mode request’s redirect mode.
-          redirect: request2.redirect,
+          redirect: request.redirect,
           // integrity metadata request’s integrity metadata.
-          integrity: request2.integrity,
+          integrity: request.integrity,
           // keepalive request’s keepalive.
-          keepalive: request2.keepalive,
+          keepalive: request.keepalive,
           // reload-navigation flag request’s reload-navigation flag.
-          reloadNavigation: request2.reloadNavigation,
+          reloadNavigation: request.reloadNavigation,
           // history-navigation flag request’s history-navigation flag.
-          historyNavigation: request2.historyNavigation,
+          historyNavigation: request.historyNavigation,
           // URL list A clone of request’s URL list.
-          urlList: [...request2.urlList]
+          urlList: [...request.urlList]
         });
         const initHasKey = Object.keys(init).length !== 0;
         if (initHasKey) {
-          if (request2.mode === "navigate") {
-            request2.mode = "same-origin";
+          if (request.mode === "navigate") {
+            request.mode = "same-origin";
           }
-          request2.reloadNavigation = false;
-          request2.historyNavigation = false;
-          request2.origin = "client";
-          request2.referrer = "client";
-          request2.referrerPolicy = "";
-          request2.url = request2.urlList[request2.urlList.length - 1];
-          request2.urlList = [request2.url];
+          request.reloadNavigation = false;
+          request.historyNavigation = false;
+          request.origin = "client";
+          request.referrer = "client";
+          request.referrerPolicy = "";
+          request.url = request.urlList[request.urlList.length - 1];
+          request.urlList = [request.url];
         }
         if (init.referrer !== void 0) {
           const referrer = init.referrer;
           if (referrer === "") {
-            request2.referrer = "no-referrer";
+            request.referrer = "no-referrer";
           } else {
             let parsedReferrer;
             try {
@@ -23430,14 +21588,14 @@ var require_request2 = __commonJS({
               throw new TypeError(`Referrer "${referrer}" is not a valid URL.`, { cause: err });
             }
             if (parsedReferrer.protocol === "about:" && parsedReferrer.hostname === "client" || origin && !sameOrigin(parsedReferrer, environmentSettingsObject.settingsObject.baseUrl)) {
-              request2.referrer = "client";
+              request.referrer = "client";
             } else {
-              request2.referrer = parsedReferrer;
+              request.referrer = parsedReferrer;
             }
           }
         }
         if (init.referrerPolicy !== void 0) {
-          request2.referrerPolicy = init.referrerPolicy;
+          request.referrerPolicy = init.referrerPolicy;
         }
         let mode;
         if (init.mode !== void 0) {
@@ -23452,33 +21610,33 @@ var require_request2 = __commonJS({
           });
         }
         if (mode != null) {
-          request2.mode = mode;
+          request.mode = mode;
         }
         if (init.credentials !== void 0) {
-          request2.credentials = init.credentials;
+          request.credentials = init.credentials;
         }
         if (init.cache !== void 0) {
-          request2.cache = init.cache;
+          request.cache = init.cache;
         }
-        if (request2.cache === "only-if-cached" && request2.mode !== "same-origin") {
+        if (request.cache === "only-if-cached" && request.mode !== "same-origin") {
           throw new TypeError(
             "'only-if-cached' can be set only with 'same-origin' mode"
           );
         }
         if (init.redirect !== void 0) {
-          request2.redirect = init.redirect;
+          request.redirect = init.redirect;
         }
         if (init.integrity != null) {
-          request2.integrity = String(init.integrity);
+          request.integrity = String(init.integrity);
         }
         if (init.keepalive !== void 0) {
-          request2.keepalive = Boolean(init.keepalive);
+          request.keepalive = Boolean(init.keepalive);
         }
         if (init.method !== void 0) {
           let method = init.method;
           const mayBeNormalized = normalizedMethodRecords[method];
           if (mayBeNormalized !== void 0) {
-            request2.method = mayBeNormalized;
+            request.method = mayBeNormalized;
           } else {
             if (!isValidHTTPToken(method)) {
               throw new TypeError(`'${method}' is not a valid HTTP method.`);
@@ -23488,9 +21646,9 @@ var require_request2 = __commonJS({
               throw new TypeError(`'${method}' HTTP method is unsupported.`);
             }
             method = normalizedMethodRecordsBase[upperCase] ?? method;
-            request2.method = method;
+            request.method = method;
           }
-          if (!patchMethodWarning && request2.method === "patch") {
+          if (!patchMethodWarning && request.method === "patch") {
             process.emitWarning("Using `patch` is highly likely to result in a `405 Method Not Allowed`. `PATCH` is much more likely to succeed.", {
               code: "UNDICI-FETCH-patch"
             });
@@ -23500,7 +21658,7 @@ var require_request2 = __commonJS({
         if (init.signal !== void 0) {
           signal = init.signal;
         }
-        this.#state = request2;
+        this.#state = request;
         const ac = new AbortController();
         this.#signal = ac.signal;
         if (signal != null) {
@@ -23523,12 +21681,12 @@ var require_request2 = __commonJS({
           }
         }
         this.#headers = new Headers2(kConstruct);
-        setHeadersList(this.#headers, request2.headersList);
+        setHeadersList(this.#headers, request.headersList);
         setHeadersGuard(this.#headers, "request");
         if (mode === "no-cors") {
-          if (!corsSafeListedMethodsSet.has(request2.method)) {
+          if (!corsSafeListedMethodsSet.has(request.method)) {
             throw new TypeError(
-              `'${request2.method} is unsupported in no-cors mode.`
+              `'${request.method} is unsupported in no-cors mode.`
             );
           }
           setHeadersGuard(this.#headers, "request-no-cors");
@@ -23547,14 +21705,14 @@ var require_request2 = __commonJS({
           }
         }
         const inputBody = webidl.is.Request(input) ? input.#state.body : null;
-        if ((init.body != null || inputBody != null) && (request2.method === "GET" || request2.method === "HEAD")) {
+        if ((init.body != null || inputBody != null) && (request.method === "GET" || request.method === "HEAD")) {
           throw new TypeError("Request with GET/HEAD method cannot have body.");
         }
         let initBody = null;
         if (init.body != null) {
           const [extractedBody, contentType] = extractBody(
             init.body,
-            request2.keepalive
+            request.keepalive
           );
           initBody = extractedBody;
           if (contentType && !getHeadersList(this.#headers).contains("content-type", true)) {
@@ -23566,12 +21724,12 @@ var require_request2 = __commonJS({
           if (initBody != null && init.duplex == null) {
             throw new TypeError("RequestInit: duplex option is required when sending a body.");
           }
-          if (request2.mode !== "same-origin" && request2.mode !== "cors") {
+          if (request.mode !== "same-origin" && request.mode !== "cors") {
             throw new TypeError(
               'If request is made from ReadableStream, mode should be "same-origin" or "cors"'
             );
           }
-          request2.useCORSPreflightFlag = true;
+          request.useCORSPreflightFlag = true;
         }
         let finalBody = inputOrInitBody;
         if (initBody == null && inputBody != null) {
@@ -23758,26 +21916,26 @@ var require_request2 = __commonJS({
         return `Request ${nodeUtil.formatWithOptions(options, properties)}`;
       }
       static {
-        setRequestSignal = (request2, newSignal) => {
-          request2.#signal = newSignal;
+        setRequestSignal = (request, newSignal) => {
+          request.#signal = newSignal;
         };
-        getRequestDispatcher = (request2) => {
-          return request2.#dispatcher;
+        getRequestDispatcher = (request) => {
+          return request.#dispatcher;
         };
-        setRequestDispatcher = (request2, newDispatcher) => {
-          request2.#dispatcher = newDispatcher;
+        setRequestDispatcher = (request, newDispatcher) => {
+          request.#dispatcher = newDispatcher;
         };
-        setRequestHeaders = (request2, newHeaders) => {
-          request2.#headers = newHeaders;
+        setRequestHeaders = (request, newHeaders) => {
+          request.#headers = newHeaders;
         };
-        getRequestState = (request2) => {
-          return request2.#state;
+        getRequestState = (request) => {
+          return request.#state;
         };
-        setRequestState = (request2, newState) => {
-          request2.#state = newState;
+        setRequestState = (request, newState) => {
+          request.#state = newState;
         };
-        removeRequestAbortListener = (request2) => {
-          request2.#abortCleanup?.();
+        removeRequestAbortListener = (request) => {
+          request.#abortCleanup?.();
         };
         webidl.is.Request = (arg) => {
           return arg != null && typeof arg === "object" && #state in arg;
@@ -23830,23 +21988,23 @@ var require_request2 = __commonJS({
         headersList: init.headersList ? new HeadersList(init.headersList) : new HeadersList()
       };
     }
-    function cloneRequest(request2) {
-      const newRequest = makeRequest({ ...request2, body: null });
-      if (request2.body != null) {
-        newRequest.body = cloneBody(request2.body);
+    function cloneRequest(request) {
+      const newRequest = makeRequest({ ...request, body: null });
+      if (request.body != null) {
+        newRequest.body = cloneBody(request.body);
       }
       return newRequest;
     }
     function fromInnerRequest(innerRequest, dispatcher, signal, guard) {
-      const request2 = new Request2(kConstruct);
-      setRequestState(request2, innerRequest);
-      setRequestDispatcher(request2, dispatcher);
-      setRequestSignal(request2, signal);
+      const request = new Request2(kConstruct);
+      setRequestState(request, innerRequest);
+      setRequestDispatcher(request, dispatcher);
+      setRequestSignal(request, signal);
       const headers = new Headers2(kConstruct);
-      setRequestHeaders(request2, headers);
+      setRequestHeaders(request, headers);
       setHeadersList(headers, innerRequest.headersList);
       setHeadersGuard(headers, guard);
-      return request2;
+      return request;
     }
     Object.defineProperties(Request2.prototype, {
       method: kEnumerableProperty,
@@ -24260,14 +22418,14 @@ var require_fetch = __commonJS({
         p.reject(e);
         return p.promise;
       }
-      const request2 = getRequestState(requestObject);
+      const request = getRequestState(requestObject);
       if (requestObject.signal.aborted) {
-        abortFetch(p, request2, null, requestObject.signal.reason, null);
+        abortFetch(p, request, null, requestObject.signal.reason, null);
         return p.promise;
       }
-      const globalObject = request2.client.globalObject;
+      const globalObject = request.client.globalObject;
       if (globalObject?.constructor?.name === "ServiceWorkerGlobalScope") {
-        request2.serviceWorkers = "none";
+        request.serviceWorkers = "none";
       }
       let responseObject = null;
       let locallyAborted = false;
@@ -24279,7 +22437,7 @@ var require_fetch = __commonJS({
           assert(controller != null);
           controller.abort(requestObject.signal.reason);
           const realResponse = responseObject?.deref();
-          abortFetch(p, request2, realResponse, requestObject.signal.reason, controller.controller);
+          abortFetch(p, request, realResponse, requestObject.signal.reason, controller.controller);
         }
       );
       const cleanupAbortListeners = () => {
@@ -24291,7 +22449,7 @@ var require_fetch = __commonJS({
           return;
         }
         if (response.aborted) {
-          abortFetch(p, request2, responseObject, controller.serializedAbortReason, controller.controller);
+          abortFetch(p, request, responseObject, controller.serializedAbortReason, controller.controller);
           cleanupAbortListeners();
           return;
         }
@@ -24305,7 +22463,7 @@ var require_fetch = __commonJS({
         p = null;
       };
       controller = fetching({
-        request: request2,
+        request,
         processResponseEndOfBody: (response) => {
           handleFetchDone(response);
           cleanupAbortListeners();
@@ -24355,12 +22513,12 @@ var require_fetch = __commonJS({
       );
     }
     var markResourceTiming = performance.markResourceTiming;
-    function abortFetch(p, request2, responseObject, error, controller) {
+    function abortFetch(p, request, responseObject, error, controller) {
       if (p) {
         p.reject(error);
       }
-      if (request2.body?.stream != null && isReadable(request2.body.stream)) {
-        request2.body.stream.cancel(error).catch((err) => {
+      if (request.body?.stream != null && isReadable(request.body.stream)) {
+        request.body.stream.cancel(error).catch((err) => {
           if (err.code === "ERR_INVALID_STATE") {
             return;
           }
@@ -24376,7 +22534,7 @@ var require_fetch = __commonJS({
       }
     }
     function fetching({
-      request: request2,
+      request,
       processRequestBodyChunkLength,
       processRequestEndOfBody,
       processResponse,
@@ -24391,9 +22549,9 @@ var require_fetch = __commonJS({
       assert(dispatcher);
       let taskDestination = null;
       let crossOriginIsolatedCapability = false;
-      if (request2.client != null) {
-        taskDestination = request2.client.globalObject;
-        crossOriginIsolatedCapability = request2.client.crossOriginIsolatedCapability;
+      if (request.client != null) {
+        taskDestination = request.client.globalObject;
+        crossOriginIsolatedCapability = request.client.crossOriginIsolatedCapability;
       }
       const currentTime = coarsenedSharedCurrentTime(crossOriginIsolatedCapability);
       const timingInfo = createOpaqueTimingInfo({
@@ -24401,7 +22559,7 @@ var require_fetch = __commonJS({
       });
       const fetchParams = {
         controller: new Fetch(dispatcher),
-        request: request2,
+        request,
         timingInfo,
         processRequestBodyChunkLength,
         processRequestEndOfBody,
@@ -24413,79 +22571,79 @@ var require_fetch = __commonJS({
         // Keep requestObject alive to prevent its AbortController from being GC'd
         requestObject
       };
-      assert(!request2.body || request2.body.stream);
-      if (request2.window === "client") {
-        request2.window = request2.client?.globalObject?.constructor?.name === "Window" ? request2.client : "no-window";
+      assert(!request.body || request.body.stream);
+      if (request.window === "client") {
+        request.window = request.client?.globalObject?.constructor?.name === "Window" ? request.client : "no-window";
       }
-      if (request2.origin === "client") {
-        request2.origin = request2.client.origin;
+      if (request.origin === "client") {
+        request.origin = request.client.origin;
       }
-      if (request2.policyContainer === "client") {
-        if (request2.client != null) {
-          request2.policyContainer = clonePolicyContainer(
-            request2.client.policyContainer
+      if (request.policyContainer === "client") {
+        if (request.client != null) {
+          request.policyContainer = clonePolicyContainer(
+            request.client.policyContainer
           );
         } else {
-          request2.policyContainer = makePolicyContainer();
+          request.policyContainer = makePolicyContainer();
         }
       }
-      if (!request2.headersList.contains("accept", true)) {
+      if (!request.headersList.contains("accept", true)) {
         const value = "*/*";
-        request2.headersList.append("accept", value, true);
+        request.headersList.append("accept", value, true);
       }
-      if (!request2.headersList.contains("accept-language", true)) {
-        request2.headersList.append("accept-language", "*", true);
+      if (!request.headersList.contains("accept-language", true)) {
+        request.headersList.append("accept-language", "*", true);
       }
-      if (request2.priority === null) {
+      if (request.priority === null) {
       }
-      if (subresourceSet.has(request2.destination)) {
+      if (subresourceSet.has(request.destination)) {
       }
       mainFetch(fetchParams, false);
       return fetchParams.controller;
     }
     async function mainFetch(fetchParams, recursive) {
       try {
-        const request2 = fetchParams.request;
+        const request = fetchParams.request;
         let response = null;
-        if (request2.localURLsOnly && !urlIsLocal(requestCurrentURL(request2))) {
+        if (request.localURLsOnly && !urlIsLocal(requestCurrentURL(request))) {
           response = makeNetworkError("local URLs only");
         }
-        tryUpgradeRequestToAPotentiallyTrustworthyURL(request2);
-        if (requestBadPort(request2) === "blocked") {
+        tryUpgradeRequestToAPotentiallyTrustworthyURL(request);
+        if (requestBadPort(request) === "blocked") {
           response = makeNetworkError("bad port");
         }
-        if (request2.referrerPolicy === "") {
-          request2.referrerPolicy = request2.policyContainer.referrerPolicy;
+        if (request.referrerPolicy === "") {
+          request.referrerPolicy = request.policyContainer.referrerPolicy;
         }
-        if (request2.referrer !== "no-referrer") {
-          request2.referrer = determineRequestsReferrer(request2);
+        if (request.referrer !== "no-referrer") {
+          request.referrer = determineRequestsReferrer(request);
         }
         if (response === null) {
-          const currentURL = requestCurrentURL(request2);
+          const currentURL = requestCurrentURL(request);
           if (
             // - request’s current URL’s origin is same origin with request’s origin,
             //   and request’s response tainting is "basic"
-            sameOrigin(currentURL, request2.url) && request2.responseTainting === "basic" || // request’s current URL’s scheme is "data"
+            sameOrigin(currentURL, request.url) && request.responseTainting === "basic" || // request’s current URL’s scheme is "data"
             currentURL.protocol === "data:" || // - request’s mode is "navigate" or "websocket"
-            (request2.mode === "navigate" || request2.mode === "websocket")
+            (request.mode === "navigate" || request.mode === "websocket")
           ) {
-            request2.responseTainting = "basic";
+            request.responseTainting = "basic";
             response = await schemeFetch(fetchParams);
-          } else if (request2.mode === "same-origin") {
+          } else if (request.mode === "same-origin") {
             response = makeNetworkError('request mode cannot be "same-origin"');
-          } else if (request2.mode === "no-cors") {
-            if (request2.redirect !== "follow") {
+          } else if (request.mode === "no-cors") {
+            if (request.redirect !== "follow") {
               response = makeNetworkError(
                 'redirect mode cannot be "follow" for "no-cors" request'
               );
             } else {
-              request2.responseTainting = "opaque";
+              request.responseTainting = "opaque";
               response = await schemeFetch(fetchParams);
             }
-          } else if (!urlIsHttpHttpsScheme(requestCurrentURL(request2))) {
+          } else if (!urlIsHttpHttpsScheme(requestCurrentURL(request))) {
             response = makeNetworkError("URL scheme must be a HTTP(S) scheme");
           } else {
-            request2.responseTainting = "cors";
+            request.responseTainting = "cors";
             response = await httpFetch(fetchParams);
           }
         }
@@ -24493,13 +22651,13 @@ var require_fetch = __commonJS({
           return response;
         }
         if (response.status !== 0 && !response.internalResponse) {
-          if (request2.responseTainting === "cors") {
+          if (request.responseTainting === "cors") {
           }
-          if (request2.responseTainting === "basic") {
+          if (request.responseTainting === "basic") {
             response = filterResponse(response, "basic");
-          } else if (request2.responseTainting === "cors") {
+          } else if (request.responseTainting === "cors") {
             response = filterResponse(response, "cors");
-          } else if (request2.responseTainting === "opaque") {
+          } else if (request.responseTainting === "opaque") {
             response = filterResponse(response, "opaque");
           } else {
             assert(false);
@@ -24507,26 +22665,26 @@ var require_fetch = __commonJS({
         }
         let internalResponse = response.status === 0 ? response : response.internalResponse;
         if (internalResponse.urlList.length === 0) {
-          internalResponse.urlList.push(...request2.urlList);
+          internalResponse.urlList.push(...request.urlList);
         }
-        if (!request2.timingAllowFailed) {
+        if (!request.timingAllowFailed) {
           response.timingAllowPassed = true;
         }
-        if (response.type === "opaque" && internalResponse.status === 206 && internalResponse.rangeRequested && !request2.headers.contains("range", true)) {
+        if (response.type === "opaque" && internalResponse.status === 206 && internalResponse.rangeRequested && !request.headers.contains("range", true)) {
           response = internalResponse = makeNetworkError();
         }
-        if (response.status !== 0 && (request2.method === "HEAD" || request2.method === "CONNECT" || nullBodyStatus.includes(internalResponse.status))) {
+        if (response.status !== 0 && (request.method === "HEAD" || request.method === "CONNECT" || nullBodyStatus.includes(internalResponse.status))) {
           internalResponse.body = null;
           fetchParams.controller.dump = true;
         }
-        if (request2.integrity) {
+        if (request.integrity) {
           const processBodyError = (reason) => fetchFinale(fetchParams, makeNetworkError(reason));
-          if (request2.responseTainting === "opaque" || response.body == null) {
+          if (request.responseTainting === "opaque" || response.body == null) {
             processBodyError(response.error);
             return;
           }
           const processBody = (bytes) => {
-            if (!bytesMatch(bytes, request2.integrity)) {
+            if (!bytesMatch(bytes, request.integrity)) {
               processBodyError("integrity mismatch");
               return;
             }
@@ -24545,8 +22703,8 @@ var require_fetch = __commonJS({
       if (isCancelled(fetchParams)) {
         return Promise.resolve(makeAppropriateNetworkError(fetchParams));
       }
-      const { request: request2 } = fetchParams;
-      const { protocol: scheme } = requestCurrentURL(request2);
+      const { request } = fetchParams;
+      const { protocol: scheme } = requestCurrentURL(request);
       switch (scheme) {
         case "about:": {
           return Promise.resolve(makeNetworkError("about scheme is not supported"));
@@ -24555,19 +22713,19 @@ var require_fetch = __commonJS({
           if (!resolveObjectURL) {
             resolveObjectURL = __require("node:buffer").resolveObjectURL;
           }
-          const blobURLEntry = requestCurrentURL(request2);
+          const blobURLEntry = requestCurrentURL(request);
           if (blobURLEntry.search.length !== 0) {
             return Promise.resolve(makeNetworkError("NetworkError when attempting to fetch resource."));
           }
           const blob = resolveObjectURL(blobURLEntry.toString());
-          if (request2.method !== "GET" || !webidl.is.Blob(blob)) {
+          if (request.method !== "GET" || !webidl.is.Blob(blob)) {
             return Promise.resolve(makeNetworkError("invalid method"));
           }
           const response = makeResponse();
           const fullLength = blob.size;
           const serializedFullLength = isomorphicEncode(`${fullLength}`);
           const type = blob.type;
-          if (!request2.headersList.contains("range", true)) {
+          if (!request.headersList.contains("range", true)) {
             const bodyWithType = extractBody(blob);
             response.statusText = "OK";
             response.body = bodyWithType[0];
@@ -24575,7 +22733,7 @@ var require_fetch = __commonJS({
             response.headersList.set("content-type", type, true);
           } else {
             response.rangeRequested = true;
-            const rangeHeader = request2.headersList.get("range", true);
+            const rangeHeader = request.headersList.get("range", true);
             const rangeValue = simpleRangeHeaderValue(rangeHeader, true);
             if (rangeValue === "failure") {
               return Promise.resolve(makeNetworkError("failed to fetch the data URL"));
@@ -24606,7 +22764,7 @@ var require_fetch = __commonJS({
           return Promise.resolve(response);
         }
         case "data:": {
-          const currentURL = requestCurrentURL(request2);
+          const currentURL = requestCurrentURL(request);
           const dataURLStruct = dataURLProcessor(currentURL);
           if (dataURLStruct === "failure") {
             return Promise.resolve(makeNetworkError("failed to fetch the data URL"));
@@ -24704,41 +22862,41 @@ var require_fetch = __commonJS({
       }
     }
     async function httpFetch(fetchParams) {
-      const request2 = fetchParams.request;
+      const request = fetchParams.request;
       let response = null;
       let actualResponse = null;
       const timingInfo = fetchParams.timingInfo;
-      if (request2.serviceWorkers === "all") {
+      if (request.serviceWorkers === "all") {
       }
       if (response === null) {
-        if (request2.redirect === "follow") {
-          request2.serviceWorkers = "none";
+        if (request.redirect === "follow") {
+          request.serviceWorkers = "none";
         }
         actualResponse = response = await httpNetworkOrCacheFetch(fetchParams);
-        if (request2.responseTainting === "cors" && corsCheck(request2, response) === "failure") {
+        if (request.responseTainting === "cors" && corsCheck(request, response) === "failure") {
           return makeNetworkError("cors failure");
         }
-        if (TAOCheck(request2, response) === "failure") {
-          request2.timingAllowFailed = true;
+        if (TAOCheck(request, response) === "failure") {
+          request.timingAllowFailed = true;
         }
       }
-      if ((request2.responseTainting === "opaque" || response.type === "opaque") && crossOriginResourcePolicyCheck(
-        request2.origin,
-        request2.client,
-        request2.destination,
+      if ((request.responseTainting === "opaque" || response.type === "opaque") && crossOriginResourcePolicyCheck(
+        request.origin,
+        request.client,
+        request.destination,
         actualResponse
       ) === "blocked") {
         return makeNetworkError("blocked");
       }
       if (redirectStatusSet.has(actualResponse.status)) {
-        if (request2.redirect !== "manual") {
+        if (request.redirect !== "manual") {
           fetchParams.controller.connection.destroy();
         }
-        if (request2.redirect === "error") {
+        if (request.redirect === "error") {
           response = makeNetworkError("unexpected redirect");
-        } else if (request2.redirect === "manual") {
+        } else if (request.redirect === "manual") {
           response = actualResponse;
-        } else if (request2.redirect === "follow") {
+        } else if (request.redirect === "follow") {
           response = await httpRedirectFetch(fetchParams, response);
         } else {
           assert(false);
@@ -24748,13 +22906,13 @@ var require_fetch = __commonJS({
       return response;
     }
     function httpRedirectFetch(fetchParams, response) {
-      const request2 = fetchParams.request;
+      const request = fetchParams.request;
       const actualResponse = response.internalResponse ? response.internalResponse : response;
       let locationURL;
       try {
         locationURL = responseLocationURL(
           actualResponse,
-          requestCurrentURL(request2).hash
+          requestCurrentURL(request).hash
         );
         if (locationURL == null) {
           return response;
@@ -24765,68 +22923,68 @@ var require_fetch = __commonJS({
       if (!urlIsHttpHttpsScheme(locationURL)) {
         return Promise.resolve(makeNetworkError("URL scheme must be a HTTP(S) scheme"));
       }
-      if (request2.redirectCount === 20) {
+      if (request.redirectCount === 20) {
         return Promise.resolve(makeNetworkError("redirect count exceeded"));
       }
-      request2.redirectCount += 1;
-      if (request2.mode === "cors" && (locationURL.username || locationURL.password) && !sameOrigin(request2, locationURL)) {
+      request.redirectCount += 1;
+      if (request.mode === "cors" && (locationURL.username || locationURL.password) && !sameOrigin(request, locationURL)) {
         return Promise.resolve(makeNetworkError('cross origin not allowed for request mode "cors"'));
       }
-      if (request2.responseTainting === "cors" && (locationURL.username || locationURL.password)) {
+      if (request.responseTainting === "cors" && (locationURL.username || locationURL.password)) {
         return Promise.resolve(makeNetworkError(
           'URL cannot contain credentials for request mode "cors"'
         ));
       }
-      if (actualResponse.status !== 303 && request2.body != null && request2.body.source == null) {
+      if (actualResponse.status !== 303 && request.body != null && request.body.source == null) {
         return Promise.resolve(makeNetworkError());
       }
-      if ([301, 302].includes(actualResponse.status) && request2.method === "POST" || actualResponse.status === 303 && !GET_OR_HEAD.includes(request2.method)) {
-        request2.method = "GET";
-        request2.body = null;
+      if ([301, 302].includes(actualResponse.status) && request.method === "POST" || actualResponse.status === 303 && !GET_OR_HEAD.includes(request.method)) {
+        request.method = "GET";
+        request.body = null;
         for (const headerName of requestBodyHeader) {
-          request2.headersList.delete(headerName);
+          request.headersList.delete(headerName);
         }
       }
-      if (!sameOrigin(requestCurrentURL(request2), locationURL)) {
-        request2.headersList.delete("authorization", true);
-        request2.headersList.delete("proxy-authorization", true);
-        request2.headersList.delete("cookie", true);
-        request2.headersList.delete("host", true);
+      if (!sameOrigin(requestCurrentURL(request), locationURL)) {
+        request.headersList.delete("authorization", true);
+        request.headersList.delete("proxy-authorization", true);
+        request.headersList.delete("cookie", true);
+        request.headersList.delete("host", true);
       }
-      if (request2.body != null) {
-        assert(request2.body.source != null);
-        request2.body = safelyExtractBody(request2.body.source)[0];
+      if (request.body != null) {
+        assert(request.body.source != null);
+        request.body = safelyExtractBody(request.body.source)[0];
       }
       const timingInfo = fetchParams.timingInfo;
       timingInfo.redirectEndTime = timingInfo.postRedirectStartTime = coarsenedSharedCurrentTime(fetchParams.crossOriginIsolatedCapability);
       if (timingInfo.redirectStartTime === 0) {
         timingInfo.redirectStartTime = timingInfo.startTime;
       }
-      request2.urlList.push(locationURL);
-      setRequestReferrerPolicyOnRedirect(request2, actualResponse);
+      request.urlList.push(locationURL);
+      setRequestReferrerPolicyOnRedirect(request, actualResponse);
       return mainFetch(fetchParams, true);
     }
     async function httpNetworkOrCacheFetch(fetchParams, isAuthenticationFetch = false, isNewConnectionFetch = false) {
-      const request2 = fetchParams.request;
+      const request = fetchParams.request;
       let httpFetchParams = null;
       let httpRequest = null;
       let response = null;
       const httpCache = null;
       const revalidatingFlag = false;
-      if (request2.window === "no-window" && request2.redirect === "error") {
+      if (request.window === "no-window" && request.redirect === "error") {
         httpFetchParams = fetchParams;
-        httpRequest = request2;
+        httpRequest = request;
       } else {
-        if (request2.body?.source != null) {
-          httpRequest = cloneRequest(request2);
+        if (request.body?.source != null) {
+          httpRequest = cloneRequest(request);
         } else {
-          httpRequest = cloneRequest({ ...request2, body: null });
-          httpRequest.body = request2.body;
+          httpRequest = cloneRequest({ ...request, body: null });
+          httpRequest.body = request.body;
         }
         httpFetchParams = { ...fetchParams };
         httpFetchParams.request = httpRequest;
       }
-      const includeCredentials = request2.credentials === "include" || request2.credentials === "same-origin" && request2.responseTainting === "basic";
+      const includeCredentials = request.credentials === "include" || request.credentials === "same-origin" && request.responseTainting === "basic";
       const contentLength = httpRequest.body ? httpRequest.body.length : null;
       let contentLengthHeaderValue = null;
       if (httpRequest.body == null && ["POST", "PUT"].includes(httpRequest.method)) {
@@ -24913,14 +23071,14 @@ var require_fetch = __commonJS({
         response.rangeRequested = true;
       }
       response.requestIncludesCredentials = includeCredentials;
-      if (response.status === 401 && httpRequest.responseTainting !== "cors" && includeCredentials && (request2.useURLCredentials !== void 0 || isTraversableNavigable(request2.traversableForUserPrompts))) {
-        if (request2.body != null) {
-          if (request2.body.source == null) {
+      if (response.status === 401 && httpRequest.responseTainting !== "cors" && includeCredentials && (request.useURLCredentials !== void 0 || isTraversableNavigable(request.traversableForUserPrompts))) {
+        if (request.body != null) {
+          if (request.body.source == null) {
             return response;
           }
-          request2.body = safelyExtractBody(request2.body.source)[0];
+          request.body = safelyExtractBody(request.body.source)[0];
         }
-        if (request2.useURLCredentials === void 0 || isAuthenticationFetch) {
+        if (request.useURLCredentials === void 0 || isAuthenticationFetch) {
           if (isCancelled(fetchParams)) {
             return makeAppropriateNetworkError(fetchParams);
           }
@@ -24930,7 +23088,7 @@ var require_fetch = __commonJS({
         response = await httpNetworkOrCacheFetch(fetchParams, true);
       }
       if (response.status === 407) {
-        if (request2.window === "no-window") {
+        if (request.window === "no-window") {
           return makeNetworkError();
         }
         if (isCancelled(fetchParams)) {
@@ -24942,7 +23100,7 @@ var require_fetch = __commonJS({
         // response’s status is 421
         response.status === 421 && // isNewConnectionFetch is false
         !isNewConnectionFetch && // request’s body is null, or request’s body is non-null and request’s body’s source is non-null
-        (request2.body == null || request2.body.source != null)
+        (request.body == null || request.body.source != null)
       ) {
         if (isCancelled(fetchParams)) {
           return makeAppropriateNetworkError(fetchParams);
@@ -24970,21 +23128,21 @@ var require_fetch = __commonJS({
           }
         }
       };
-      const request2 = fetchParams.request;
+      const request = fetchParams.request;
       let response = null;
       const timingInfo = fetchParams.timingInfo;
       const httpCache = null;
       if (httpCache == null) {
-        request2.cache = "no-store";
+        request.cache = "no-store";
       }
       const newConnection = forceNewConnection ? "yes" : "no";
-      if (request2.mode === "websocket") {
+      if (request.mode === "websocket") {
       } else {
       }
       let requestBody = null;
-      if (request2.body == null && fetchParams.processRequestEndOfBody) {
+      if (request.body == null && fetchParams.processRequestEndOfBody) {
         queueMicrotask(() => fetchParams.processRequestEndOfBody());
-      } else if (request2.body != null) {
+      } else if (request.body != null) {
         const processBodyChunk = async function* (bytes) {
           if (isCancelled(fetchParams)) {
             return;
@@ -25012,7 +23170,7 @@ var require_fetch = __commonJS({
         };
         requestBody = (async function* () {
           try {
-            for await (const bytes of request2.body.stream) {
+            for await (const bytes of request.body.stream) {
               yield* processBodyChunk(bytes);
             }
             processEndOfBody();
@@ -25119,7 +23277,7 @@ var require_fetch = __commonJS({
       }
       return response;
       function dispatch({ body }) {
-        const url = requestCurrentURL(request2);
+        const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
         const path2 = url.pathname + url.search;
         const hasTrailingQuestionMark = url.search.length === 0 && url.href[url.href.length - url.hash.length - 1] === "?";
@@ -25129,13 +23287,13 @@ var require_fetch = __commonJS({
             {
               path: hasTrailingQuestionMark ? `${path2}?` : path2,
               origin: url.origin,
-              method: request2.method,
-              body: agent.isMockActive ? request2.body && (request2.body.source || request2.body.stream) : body2,
+              method: request.method,
+              body: agent.isMockActive ? request.body && (request.body.source || request.body.stream) : body2,
               // Preserve the serialized fetch body for MockAgent net-connect fallthroughs.
               __mockAgentBodyForDispatch: body2,
-              headers: request2.headersList.entries,
+              headers: request.headersList.entries,
               maxRedirections: 0,
-              upgrade: request2.mode === "websocket" ? "websocket" : void 0,
+              upgrade: request.mode === "websocket" ? "websocket" : void 0,
               ...allowH2 === false ? { allowH2 } : null
             },
             {
@@ -25165,9 +23323,9 @@ var require_fetch = __commonJS({
                 appendHeadersListFromResponseHeaders(headersList, headers, rawHeaders);
                 const location = headersList.get("location", true);
                 this.body = new Readable({ read: () => controller.resume() });
-                const willFollow = location && request2.redirect === "follow" && redirectStatusSet.has(status);
+                const willFollow = location && request.redirect === "follow" && redirectStatusSet.has(status);
                 const decoders = [];
-                if (request2.method !== "HEAD" && request2.method !== "CONNECT" && !nullBodyStatus.includes(status) && !willFollow) {
+                if (request.method !== "HEAD" && request.method !== "CONNECT" && !nullBodyStatus.includes(status) && !willFollow) {
                   const contentEncoding = headersList.get("content-encoding", true);
                   const codings = contentEncoding ? contentEncoding.toLowerCase().split(",") : [];
                   const maxContentEncodings = 5;
@@ -25240,7 +23398,7 @@ var require_fetch = __commonJS({
                 if (this.abort) {
                   fetchParams.controller.off("terminated", this.abort);
                 }
-                if (request2.mode === "websocket" && allowH2 !== false && error?.code === "UND_ERR_INFO" && error?.message === "HTTP/2: Extended CONNECT protocol not supported by server") {
+                if (request.mode === "websocket" && allowH2 !== false && error?.code === "UND_ERR_INFO" && error?.message === "HTTP/2: Extended CONNECT protocol not supported by server") {
                   resolve2(dispatchWithProtocolPreference(body2, false));
                   return;
                 }
@@ -25338,31 +23496,31 @@ var require_cache3 = __commonJS({
         webidl.util.markAsUncloneable(this);
         this.#relevantRequestResponseList = arguments[1];
       }
-      async match(request2, options = {}) {
+      async match(request, options = {}) {
         webidl.brandCheck(this, webidl.is.Cache);
         const prefix = "Cache.match";
         webidl.argumentLengthCheck(arguments, 1, prefix);
-        request2 = webidl.converters.RequestInfo(request2);
+        request = webidl.converters.RequestInfo(request);
         options = webidl.converters.CacheQueryOptions(options, prefix, "options");
-        const p = this.#internalMatchAll(request2, options, 1);
+        const p = this.#internalMatchAll(request, options, 1);
         if (p.length === 0) {
           return;
         }
         return p[0];
       }
-      async matchAll(request2 = void 0, options = {}) {
+      async matchAll(request = void 0, options = {}) {
         webidl.brandCheck(this, webidl.is.Cache);
         const prefix = "Cache.matchAll";
-        if (request2 !== void 0) request2 = webidl.converters.RequestInfo(request2);
+        if (request !== void 0) request = webidl.converters.RequestInfo(request);
         options = webidl.converters.CacheQueryOptions(options, prefix, "options");
-        return this.#internalMatchAll(request2, options);
+        return this.#internalMatchAll(request, options);
       }
-      async add(request2) {
+      async add(request) {
         webidl.brandCheck(this, webidl.is.Cache);
         const prefix = "Cache.add";
         webidl.argumentLengthCheck(arguments, 1, prefix);
-        request2 = webidl.converters.RequestInfo(request2);
-        const requests = [request2];
+        request = webidl.converters.RequestInfo(request);
+        const requests = [request];
         const responseArrayPromise = this.addAll(requests);
         return await responseArrayPromise;
       }
@@ -25372,19 +23530,19 @@ var require_cache3 = __commonJS({
         webidl.argumentLengthCheck(arguments, 1, prefix);
         const responsePromises = [];
         const requestList = [];
-        for (let request2 of requests) {
-          if (request2 === void 0) {
+        for (let request of requests) {
+          if (request === void 0) {
             throw webidl.errors.conversionFailed({
               prefix,
               argument: "Argument 1",
               types: ["undefined is not allowed"]
             });
           }
-          request2 = webidl.converters.RequestInfo(request2);
-          if (typeof request2 === "string") {
+          request = webidl.converters.RequestInfo(request);
+          if (typeof request === "string") {
             continue;
           }
-          const r = getRequestState(request2);
+          const r = getRequestState(request);
           if (!urlIsHttpHttpsScheme(r.url) || r.method !== "GET") {
             throw webidl.errors.exception({
               header: prefix,
@@ -25393,8 +23551,8 @@ var require_cache3 = __commonJS({
           }
         }
         const fetchControllers = [];
-        for (const request2 of requests) {
-          const r = getRequestState(new Request2(request2));
+        for (const request of requests) {
+          const r = getRequestState(new Request2(request));
           if (!urlIsHttpHttpsScheme(r.url)) {
             throw webidl.errors.exception({
               header: prefix,
@@ -25474,17 +23632,17 @@ var require_cache3 = __commonJS({
         });
         return cacheJobPromise.promise;
       }
-      async put(request2, response) {
+      async put(request, response) {
         webidl.brandCheck(this, webidl.is.Cache);
         const prefix = "Cache.put";
         webidl.argumentLengthCheck(arguments, 2, prefix);
-        request2 = webidl.converters.RequestInfo(request2);
+        request = webidl.converters.RequestInfo(request);
         response = webidl.converters.Response(response, prefix, "response");
         let innerRequest = null;
-        if (webidl.is.Request(request2)) {
-          innerRequest = getRequestState(request2);
+        if (webidl.is.Request(request)) {
+          innerRequest = getRequestState(request);
         } else {
-          innerRequest = getRequestState(new Request2(request2));
+          innerRequest = getRequestState(new Request2(request));
         }
         if (!urlIsHttpHttpsScheme(innerRequest.url) || innerRequest.method !== "GET") {
           throw webidl.errors.exception({
@@ -25555,21 +23713,21 @@ var require_cache3 = __commonJS({
         });
         return cacheJobPromise.promise;
       }
-      async delete(request2, options = {}) {
+      async delete(request, options = {}) {
         webidl.brandCheck(this, webidl.is.Cache);
         const prefix = "Cache.delete";
         webidl.argumentLengthCheck(arguments, 1, prefix);
-        request2 = webidl.converters.RequestInfo(request2);
+        request = webidl.converters.RequestInfo(request);
         options = webidl.converters.CacheQueryOptions(options, prefix, "options");
         let r = null;
-        if (webidl.is.Request(request2)) {
-          r = getRequestState(request2);
+        if (webidl.is.Request(request)) {
+          r = getRequestState(request);
           if (r.method !== "GET" && !options.ignoreMethod) {
             return false;
           }
         } else {
-          assert(typeof request2 === "string");
-          r = getRequestState(new Request2(request2));
+          assert(typeof request === "string");
+          r = getRequestState(new Request2(request));
         }
         const operations = [];
         const operation = {
@@ -25601,25 +23759,25 @@ var require_cache3 = __commonJS({
        * @param {import('../../../types/cache').CacheQueryOptions} options
        * @returns {Promise<readonly Request[]>}
        */
-      async keys(request2 = void 0, options = {}) {
+      async keys(request = void 0, options = {}) {
         webidl.brandCheck(this, webidl.is.Cache);
         const prefix = "Cache.keys";
-        if (request2 !== void 0) request2 = webidl.converters.RequestInfo(request2);
+        if (request !== void 0) request = webidl.converters.RequestInfo(request);
         options = webidl.converters.CacheQueryOptions(options, prefix, "options");
         let r = null;
-        if (request2 !== void 0) {
-          if (webidl.is.Request(request2)) {
-            r = getRequestState(request2);
+        if (request !== void 0) {
+          if (webidl.is.Request(request)) {
+            r = getRequestState(request);
             if (r.method !== "GET" && !options.ignoreMethod) {
               return [];
             }
-          } else if (typeof request2 === "string") {
-            r = getRequestState(new Request2(request2));
+          } else if (typeof request === "string") {
+            r = getRequestState(new Request2(request));
           }
         }
         const promise = Promise.withResolvers();
         const requests = [];
-        if (request2 === void 0) {
+        if (request === void 0) {
           for (const requestResponse of this.#relevantRequestResponseList) {
             requests.push(requestResponse[0]);
           }
@@ -25631,9 +23789,9 @@ var require_cache3 = __commonJS({
         }
         queueMicrotask(() => {
           const requestList = [];
-          for (const request3 of requests) {
+          for (const request2 of requests) {
             const requestObject = fromInnerRequest(
-              request3,
+              request2,
               void 0,
               new AbortController().signal,
               "immutable"
@@ -25752,9 +23910,9 @@ var require_cache3 = __commonJS({
        * @param {import('../../../types/cache').CacheQueryOptions | undefined} options
        * @returns {boolean}
        */
-      #requestMatchesCachedItem(requestQuery, request2, response = null, options) {
+      #requestMatchesCachedItem(requestQuery, request, response = null, options) {
         const queryURL = new URL(requestQuery.url);
-        const cachedURL = new URL(request2.url);
+        const cachedURL = new URL(request.url);
         if (options?.ignoreSearch) {
           cachedURL.search = "";
           queryURL.search = "";
@@ -25770,7 +23928,7 @@ var require_cache3 = __commonJS({
           if (fieldValue === "*") {
             return false;
           }
-          const requestValue = request2.headersList.get(fieldValue);
+          const requestValue = request.headersList.get(fieldValue);
           const queryValue = requestQuery.headersList.get(fieldValue);
           if (requestValue !== queryValue) {
             return false;
@@ -25778,20 +23936,20 @@ var require_cache3 = __commonJS({
         }
         return true;
       }
-      #internalMatchAll(request2, options, maxResponses = Infinity) {
+      #internalMatchAll(request, options, maxResponses = Infinity) {
         let r = null;
-        if (request2 !== void 0) {
-          if (webidl.is.Request(request2)) {
-            r = getRequestState(request2);
+        if (request !== void 0) {
+          if (webidl.is.Request(request)) {
+            r = getRequestState(request);
             if (r.method !== "GET" && !options.ignoreMethod) {
               return [];
             }
-          } else if (typeof request2 === "string") {
-            r = getRequestState(new Request2(request2));
+          } else if (typeof request === "string") {
+            r = getRequestState(new Request2(request));
           }
         }
         const responses = [];
-        if (request2 === void 0) {
+        if (request === void 0) {
           for (const requestResponse of this.#relevantRequestResponseList) {
             responses.push(requestResponse[1]);
           }
@@ -25888,21 +24046,21 @@ var require_cachestorage = __commonJS({
         }
         webidl.util.markAsUncloneable(this);
       }
-      async match(request2, options = {}) {
+      async match(request, options = {}) {
         webidl.brandCheck(this, webidl.is.CacheStorage);
         webidl.argumentLengthCheck(arguments, 1, "CacheStorage.match");
-        request2 = webidl.converters.RequestInfo(request2);
+        request = webidl.converters.RequestInfo(request);
         options = webidl.converters.MultiCacheQueryOptions(options);
         if (options.cacheName != null) {
           if (this.#caches.has(options.cacheName)) {
             const cacheList = this.#caches.get(options.cacheName);
             const cache5 = new Cache(kConstruct, cacheList);
-            return await cache5.match(request2, options);
+            return await cache5.match(request, options);
           }
         } else {
           for (const cacheList of this.#caches.values()) {
             const cache5 = new Cache(kConstruct, cacheList);
-            const response = await cache5.match(request2, options);
+            const response = await cache5.match(request, options);
             if (response !== void 0) {
               return response;
             }
@@ -27121,7 +25279,7 @@ var require_connection = __commonJS({
     function establishWebSocketConnection(url, protocols, client, handler, options) {
       const requestURL = url;
       requestURL.protocol = url.protocol === "ws:" ? "http:" : "https:";
-      const request2 = makeRequest({
+      const request = makeRequest({
         urlList: [requestURL],
         client,
         serviceWorkers: "none",
@@ -27134,18 +25292,18 @@ var require_connection = __commonJS({
       });
       if (options.headers) {
         const headersList = getHeadersList(new Headers2(options.headers));
-        request2.headersList = headersList;
+        request.headersList = headersList;
       }
       const keyValue = crypto2.randomBytes(16).toString("base64");
-      request2.headersList.append("sec-websocket-key", keyValue, true);
-      request2.headersList.append("sec-websocket-version", "13", true);
+      request.headersList.append("sec-websocket-key", keyValue, true);
+      request.headersList.append("sec-websocket-version", "13", true);
       for (const protocol of protocols) {
-        request2.headersList.append("sec-websocket-protocol", protocol, true);
+        request.headersList.append("sec-websocket-protocol", protocol, true);
       }
       const permessageDeflate = "permessage-deflate; client_max_window_bits";
-      request2.headersList.append("sec-websocket-extensions", permessageDeflate, true);
+      request.headersList.append("sec-websocket-extensions", permessageDeflate, true);
       const controller = fetching({
-        request: request2,
+        request,
         useParallelQueue: true,
         dispatcher: options.dispatcher,
         processResponse(response) {
@@ -27194,7 +25352,7 @@ var require_connection = __commonJS({
           }
           const secProtocol = response.headersList.get("Sec-WebSocket-Protocol");
           if (secProtocol !== null) {
-            const requestProtocols = getDecodeSplit("sec-websocket-protocol", request2.headersList);
+            const requestProtocols = getDecodeSplit("sec-websocket-protocol", request.headersList);
             if (requestProtocols === null || !requestProtocols.includes(secProtocol)) {
               failHandshake(handler, response, 1002, "Protocol was not set in the opening handshake.");
               return;
@@ -29190,12 +27348,12 @@ var require_eventsource = __commonJS({
           corsAttributeState = USE_CREDENTIALS;
           this.#withCredentials = true;
         }
-        const request2 = createPotentialCORSRequest(urlRecord, "", corsAttributeState);
-        request2.client = environmentSettingsObject.settingsObject;
-        request2.headersList.set("Accept", "text/event-stream");
-        request2.cache = "no-store";
-        request2.initiator = "other";
-        this.#request = request2;
+        const request = createPotentialCORSRequest(urlRecord, "", corsAttributeState);
+        request.client = environmentSettingsObject.settingsObject;
+        request.headersList.set("Accept", "text/event-stream");
+        request.cache = "no-store";
+        request.initiator = "other";
+        this.#request = request;
         this.#connect();
       }
       /**
@@ -29450,7 +27608,7 @@ var require_undici = __commonJS({
     var Pool2 = require_pool();
     var BalancedPool = require_balanced_pool();
     var RoundRobinPool = require_round_robin_pool();
-    var Agent2 = require_agent();
+    var Agent3 = require_agent();
     var Dispatcher1Wrapper2 = require_dispatcher1_wrapper();
     var ProxyAgent2 = require_proxy_agent();
     var Socks5ProxyAgent = require_socks5_proxy_agent();
@@ -29478,7 +27636,7 @@ var require_undici = __commonJS({
     module.exports.Pool = Pool2;
     module.exports.BalancedPool = BalancedPool;
     module.exports.RoundRobinPool = RoundRobinPool;
-    module.exports.Agent = Agent2;
+    module.exports.Agent = Agent3;
     module.exports.Dispatcher1Wrapper = Dispatcher1Wrapper2;
     module.exports.ProxyAgent = ProxyAgent2;
     module.exports.Socks5ProxyAgent = Socks5ProxyAgent;
@@ -29638,9 +27796,1851 @@ ${captureLines}` : capture.stack;
   }
 });
 
+// node_modules/jose/dist/webapi/lib/buffer_utils.js
+function concat(...buffers) {
+  const size = buffers.reduce((acc, { length }) => acc + length, 0);
+  const buf = new Uint8Array(size);
+  let i = 0;
+  for (const buffer of buffers) {
+    buf.set(buffer, i);
+    i += buffer.length;
+  }
+  return buf;
+}
+function encode(string) {
+  const bytes = new Uint8Array(string.length);
+  for (let i = 0; i < string.length; i++) {
+    const code = string.charCodeAt(i);
+    if (code > 127) {
+      throw new TypeError("non-ASCII string encountered in encode()");
+    }
+    bytes[i] = code;
+  }
+  return bytes;
+}
+var encoder, decoder, MAX_INT32;
+var init_buffer_utils = __esm({
+  "node_modules/jose/dist/webapi/lib/buffer_utils.js"() {
+    encoder = new TextEncoder();
+    decoder = new TextDecoder();
+    MAX_INT32 = 2 ** 32;
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/base64.js
+function encodeBase64(input) {
+  if (Uint8Array.prototype.toBase64) {
+    return input.toBase64();
+  }
+  const CHUNK_SIZE = 32768;
+  const arr = [];
+  for (let i = 0; i < input.length; i += CHUNK_SIZE) {
+    arr.push(String.fromCharCode.apply(null, input.subarray(i, i + CHUNK_SIZE)));
+  }
+  return btoa(arr.join(""));
+}
+function decodeBase64(encoded) {
+  if (Uint8Array.fromBase64) {
+    return Uint8Array.fromBase64(encoded);
+  }
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+var init_base64 = __esm({
+  "node_modules/jose/dist/webapi/lib/base64.js"() {
+  }
+});
+
+// node_modules/jose/dist/webapi/util/base64url.js
+function decode(input) {
+  if (Uint8Array.fromBase64) {
+    return Uint8Array.fromBase64(typeof input === "string" ? input : decoder.decode(input), {
+      alphabet: "base64url"
+    });
+  }
+  let encoded = input;
+  if (encoded instanceof Uint8Array) {
+    encoded = decoder.decode(encoded);
+  }
+  encoded = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return decodeBase64(encoded);
+  } catch {
+    throw new TypeError("The input to be decoded is not correctly encoded.");
+  }
+}
+function encode2(input) {
+  let unencoded = input;
+  if (typeof unencoded === "string") {
+    unencoded = encoder.encode(unencoded);
+  }
+  if (Uint8Array.prototype.toBase64) {
+    return unencoded.toBase64({ alphabet: "base64url", omitPadding: true });
+  }
+  return encodeBase64(unencoded).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+var init_base64url = __esm({
+  "node_modules/jose/dist/webapi/util/base64url.js"() {
+    init_buffer_utils();
+    init_base64();
+  }
+});
+
+// node_modules/jose/dist/webapi/util/errors.js
+var JOSEError, JOSENotSupported, JWSInvalid, JWTInvalid;
+var init_errors = __esm({
+  "node_modules/jose/dist/webapi/util/errors.js"() {
+    JOSEError = class extends Error {
+      static code = "ERR_JOSE_GENERIC";
+      code = "ERR_JOSE_GENERIC";
+      constructor(message2, options) {
+        super(message2, options);
+        this.name = this.constructor.name;
+        Error.captureStackTrace?.(this, this.constructor);
+      }
+    };
+    JOSENotSupported = class extends JOSEError {
+      static code = "ERR_JOSE_NOT_SUPPORTED";
+      code = "ERR_JOSE_NOT_SUPPORTED";
+    };
+    JWSInvalid = class extends JOSEError {
+      static code = "ERR_JWS_INVALID";
+      code = "ERR_JWS_INVALID";
+    };
+    JWTInvalid = class extends JOSEError {
+      static code = "ERR_JWT_INVALID";
+      code = "ERR_JWT_INVALID";
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/crypto_key.js
+function getHashLength(hash) {
+  return parseInt(hash.name.slice(4), 10);
+}
+function getNamedCurve(alg) {
+  switch (alg) {
+    case "ES256":
+      return "P-256";
+    case "ES384":
+      return "P-384";
+    case "ES512":
+      return "P-521";
+    default:
+      throw new Error("unreachable");
+  }
+}
+function checkUsage(key, usage) {
+  if (usage && !key.usages.includes(usage)) {
+    throw new TypeError(`CryptoKey does not support this operation, its usages must include ${usage}.`);
+  }
+}
+function checkSigCryptoKey(key, alg, usage) {
+  switch (alg) {
+    case "HS256":
+    case "HS384":
+    case "HS512": {
+      if (!isAlgorithm(key.algorithm, "HMAC"))
+        throw unusable("HMAC");
+      const expected = parseInt(alg.slice(2), 10);
+      const actual = getHashLength(key.algorithm.hash);
+      if (actual !== expected)
+        throw unusable(`SHA-${expected}`, "algorithm.hash");
+      break;
+    }
+    case "RS256":
+    case "RS384":
+    case "RS512": {
+      if (!isAlgorithm(key.algorithm, "RSASSA-PKCS1-v1_5"))
+        throw unusable("RSASSA-PKCS1-v1_5");
+      const expected = parseInt(alg.slice(2), 10);
+      const actual = getHashLength(key.algorithm.hash);
+      if (actual !== expected)
+        throw unusable(`SHA-${expected}`, "algorithm.hash");
+      break;
+    }
+    case "PS256":
+    case "PS384":
+    case "PS512": {
+      if (!isAlgorithm(key.algorithm, "RSA-PSS"))
+        throw unusable("RSA-PSS");
+      const expected = parseInt(alg.slice(2), 10);
+      const actual = getHashLength(key.algorithm.hash);
+      if (actual !== expected)
+        throw unusable(`SHA-${expected}`, "algorithm.hash");
+      break;
+    }
+    case "Ed25519":
+    case "EdDSA": {
+      if (!isAlgorithm(key.algorithm, "Ed25519"))
+        throw unusable("Ed25519");
+      break;
+    }
+    case "ML-DSA-44":
+    case "ML-DSA-65":
+    case "ML-DSA-87": {
+      if (!isAlgorithm(key.algorithm, alg))
+        throw unusable(alg);
+      break;
+    }
+    case "ES256":
+    case "ES384":
+    case "ES512": {
+      if (!isAlgorithm(key.algorithm, "ECDSA"))
+        throw unusable("ECDSA");
+      const expected = getNamedCurve(alg);
+      const actual = key.algorithm.namedCurve;
+      if (actual !== expected)
+        throw unusable(expected, "algorithm.namedCurve");
+      break;
+    }
+    default:
+      throw new TypeError("CryptoKey does not support this operation");
+  }
+  checkUsage(key, usage);
+}
+var unusable, isAlgorithm;
+var init_crypto_key = __esm({
+  "node_modules/jose/dist/webapi/lib/crypto_key.js"() {
+    unusable = (name2, prop = "algorithm.name") => new TypeError(`CryptoKey does not support this operation, its ${prop} must be ${name2}`);
+    isAlgorithm = (algorithm, name2) => algorithm.name === name2;
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/invalid_key_input.js
+function message(msg, actual, ...types) {
+  types = types.filter(Boolean);
+  if (types.length > 2) {
+    const last = types.pop();
+    msg += `one of type ${types.join(", ")}, or ${last}.`;
+  } else if (types.length === 2) {
+    msg += `one of type ${types[0]} or ${types[1]}.`;
+  } else {
+    msg += `of type ${types[0]}.`;
+  }
+  if (actual == null) {
+    msg += ` Received ${actual}`;
+  } else if (typeof actual === "function" && actual.name) {
+    msg += ` Received function ${actual.name}`;
+  } else if (typeof actual === "object" && actual != null) {
+    if (actual.constructor?.name) {
+      msg += ` Received an instance of ${actual.constructor.name}`;
+    }
+  }
+  return msg;
+}
+var invalidKeyInput, withAlg;
+var init_invalid_key_input = __esm({
+  "node_modules/jose/dist/webapi/lib/invalid_key_input.js"() {
+    invalidKeyInput = (actual, ...types) => message("Key must be ", actual, ...types);
+    withAlg = (alg, actual, ...types) => message(`Key for the ${alg} algorithm must be `, actual, ...types);
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/is_key_like.js
+var isCryptoKey, isKeyObject, isKeyLike;
+var init_is_key_like = __esm({
+  "node_modules/jose/dist/webapi/lib/is_key_like.js"() {
+    isCryptoKey = (key) => {
+      if (key?.[Symbol.toStringTag] === "CryptoKey")
+        return true;
+      try {
+        return key instanceof CryptoKey;
+      } catch {
+        return false;
+      }
+    };
+    isKeyObject = (key) => key?.[Symbol.toStringTag] === "KeyObject";
+    isKeyLike = (key) => isCryptoKey(key) || isKeyObject(key);
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/is_disjoint.js
+function isDisjoint(...headers) {
+  const sources = headers.filter(Boolean);
+  if (sources.length === 0 || sources.length === 1) {
+    return true;
+  }
+  let acc;
+  for (const header of sources) {
+    const parameters = Object.keys(header);
+    if (!acc || acc.size === 0) {
+      acc = new Set(parameters);
+      continue;
+    }
+    for (const parameter of parameters) {
+      if (acc.has(parameter)) {
+        return false;
+      }
+      acc.add(parameter);
+    }
+  }
+  return true;
+}
+var init_is_disjoint = __esm({
+  "node_modules/jose/dist/webapi/lib/is_disjoint.js"() {
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/is_object.js
+function isObject(input) {
+  if (!isObjectLike(input) || Object.prototype.toString.call(input) !== "[object Object]") {
+    return false;
+  }
+  if (Object.getPrototypeOf(input) === null) {
+    return true;
+  }
+  let proto = input;
+  while (Object.getPrototypeOf(proto) !== null) {
+    proto = Object.getPrototypeOf(proto);
+  }
+  return Object.getPrototypeOf(input) === proto;
+}
+var isObjectLike;
+var init_is_object = __esm({
+  "node_modules/jose/dist/webapi/lib/is_object.js"() {
+    isObjectLike = (value) => typeof value === "object" && value !== null;
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/check_key_length.js
+function checkKeyLength(alg, key) {
+  if (alg.startsWith("RS") || alg.startsWith("PS")) {
+    const { modulusLength } = key.algorithm;
+    if (typeof modulusLength !== "number" || modulusLength < 2048) {
+      throw new TypeError(`${alg} requires key modulusLength to be 2048 bits or larger`);
+    }
+  }
+}
+var init_check_key_length = __esm({
+  "node_modules/jose/dist/webapi/lib/check_key_length.js"() {
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/jwk_to_key.js
+function subtleMapping(jwk) {
+  let algorithm;
+  let keyUsages;
+  switch (jwk.kty) {
+    case "AKP": {
+      switch (jwk.alg) {
+        case "ML-DSA-44":
+        case "ML-DSA-65":
+        case "ML-DSA-87":
+          algorithm = { name: jwk.alg };
+          keyUsages = jwk.priv ? ["sign"] : ["verify"];
+          break;
+        default:
+          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
+      }
+      break;
+    }
+    case "RSA": {
+      switch (jwk.alg) {
+        case "PS256":
+        case "PS384":
+        case "PS512":
+          algorithm = { name: "RSA-PSS", hash: `SHA-${jwk.alg.slice(-3)}` };
+          keyUsages = jwk.d ? ["sign"] : ["verify"];
+          break;
+        case "RS256":
+        case "RS384":
+        case "RS512":
+          algorithm = { name: "RSASSA-PKCS1-v1_5", hash: `SHA-${jwk.alg.slice(-3)}` };
+          keyUsages = jwk.d ? ["sign"] : ["verify"];
+          break;
+        case "RSA-OAEP":
+        case "RSA-OAEP-256":
+        case "RSA-OAEP-384":
+        case "RSA-OAEP-512":
+          algorithm = {
+            name: "RSA-OAEP",
+            hash: `SHA-${parseInt(jwk.alg.slice(-3), 10) || 1}`
+          };
+          keyUsages = jwk.d ? ["decrypt", "unwrapKey"] : ["encrypt", "wrapKey"];
+          break;
+        default:
+          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
+      }
+      break;
+    }
+    case "EC": {
+      switch (jwk.alg) {
+        case "ES256":
+          algorithm = { name: "ECDSA", namedCurve: "P-256" };
+          keyUsages = jwk.d ? ["sign"] : ["verify"];
+          break;
+        case "ES384":
+          algorithm = { name: "ECDSA", namedCurve: "P-384" };
+          keyUsages = jwk.d ? ["sign"] : ["verify"];
+          break;
+        case "ES512":
+          algorithm = { name: "ECDSA", namedCurve: "P-521" };
+          keyUsages = jwk.d ? ["sign"] : ["verify"];
+          break;
+        case "ECDH-ES":
+        case "ECDH-ES+A128KW":
+        case "ECDH-ES+A192KW":
+        case "ECDH-ES+A256KW":
+          algorithm = { name: "ECDH", namedCurve: jwk.crv };
+          keyUsages = jwk.d ? ["deriveBits"] : [];
+          break;
+        default:
+          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
+      }
+      break;
+    }
+    case "OKP": {
+      switch (jwk.alg) {
+        case "Ed25519":
+        case "EdDSA":
+          algorithm = { name: "Ed25519" };
+          keyUsages = jwk.d ? ["sign"] : ["verify"];
+          break;
+        case "ECDH-ES":
+        case "ECDH-ES+A128KW":
+        case "ECDH-ES+A192KW":
+        case "ECDH-ES+A256KW":
+          algorithm = { name: jwk.crv };
+          keyUsages = jwk.d ? ["deriveBits"] : [];
+          break;
+        default:
+          throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
+      }
+      break;
+    }
+    default:
+      throw new JOSENotSupported('Invalid or unsupported JWK "kty" (Key Type) Parameter value');
+  }
+  return { algorithm, keyUsages };
+}
+async function jwkToKey(jwk) {
+  if (!jwk.alg) {
+    throw new TypeError('"alg" argument is required when "jwk.alg" is not present');
+  }
+  const { algorithm, keyUsages } = subtleMapping(jwk);
+  const keyData = { ...jwk };
+  if (keyData.kty !== "AKP") {
+    delete keyData.alg;
+  }
+  delete keyData.use;
+  return crypto.subtle.importKey("jwk", keyData, algorithm, jwk.ext ?? (jwk.d || jwk.priv ? false : true), jwk.key_ops ?? keyUsages);
+}
+var init_jwk_to_key = __esm({
+  "node_modules/jose/dist/webapi/lib/jwk_to_key.js"() {
+    init_errors();
+  }
+});
+
+// node_modules/jose/dist/webapi/key/import.js
+async function importJWK(jwk, alg, options) {
+  if (!isObject(jwk)) {
+    throw new TypeError("JWK must be an object");
+  }
+  let ext;
+  alg ??= jwk.alg;
+  ext ??= options?.extractable ?? jwk.ext;
+  switch (jwk.kty) {
+    case "oct":
+      if (typeof jwk.k !== "string" || !jwk.k) {
+        throw new TypeError('missing "k" (Key Value) Parameter value');
+      }
+      return decode(jwk.k);
+    case "RSA":
+      if ("oth" in jwk && jwk.oth !== void 0) {
+        throw new JOSENotSupported('RSA JWK "oth" (Other Primes Info) Parameter value is not supported');
+      }
+      return jwkToKey({ ...jwk, alg, ext });
+    case "AKP": {
+      if (typeof jwk.alg !== "string" || !jwk.alg) {
+        throw new TypeError('missing "alg" (Algorithm) Parameter value');
+      }
+      if (alg !== void 0 && alg !== jwk.alg) {
+        throw new TypeError("JWK alg and alg option value mismatch");
+      }
+      return jwkToKey({ ...jwk, ext });
+    }
+    case "EC":
+    case "OKP":
+      return jwkToKey({ ...jwk, alg, ext });
+    default:
+      throw new JOSENotSupported('Unsupported "kty" (Key Type) Parameter value');
+  }
+}
+var init_import = __esm({
+  "node_modules/jose/dist/webapi/key/import.js"() {
+    init_base64url();
+    init_jwk_to_key();
+    init_errors();
+    init_is_object();
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/validate_crit.js
+function validateCrit(Err, recognizedDefault, recognizedOption, protectedHeader, joseHeader) {
+  if (joseHeader.crit !== void 0 && protectedHeader?.crit === void 0) {
+    throw new Err('"crit" (Critical) Header Parameter MUST be integrity protected');
+  }
+  if (!protectedHeader || protectedHeader.crit === void 0) {
+    return /* @__PURE__ */ new Set();
+  }
+  if (!Array.isArray(protectedHeader.crit) || protectedHeader.crit.length === 0 || protectedHeader.crit.some((input) => typeof input !== "string" || input.length === 0)) {
+    throw new Err('"crit" (Critical) Header Parameter MUST be an array of non-empty strings when present');
+  }
+  let recognized;
+  if (recognizedOption !== void 0) {
+    recognized = new Map([...Object.entries(recognizedOption), ...recognizedDefault.entries()]);
+  } else {
+    recognized = recognizedDefault;
+  }
+  for (const parameter of protectedHeader.crit) {
+    if (!recognized.has(parameter)) {
+      throw new JOSENotSupported(`Extension Header Parameter "${parameter}" is not recognized`);
+    }
+    if (joseHeader[parameter] === void 0) {
+      throw new Err(`Extension Header Parameter "${parameter}" is missing`);
+    }
+    if (recognized.get(parameter) && protectedHeader[parameter] === void 0) {
+      throw new Err(`Extension Header Parameter "${parameter}" MUST be integrity protected`);
+    }
+  }
+  return new Set(protectedHeader.crit);
+}
+var init_validate_crit = __esm({
+  "node_modules/jose/dist/webapi/lib/validate_crit.js"() {
+    init_errors();
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/is_jwk.js
+var isJWK, isPrivateJWK, isPublicJWK, isSecretJWK;
+var init_is_jwk = __esm({
+  "node_modules/jose/dist/webapi/lib/is_jwk.js"() {
+    init_is_object();
+    isJWK = (key) => isObject(key) && typeof key.kty === "string";
+    isPrivateJWK = (key) => key.kty !== "oct" && (key.kty === "AKP" && typeof key.priv === "string" || typeof key.d === "string");
+    isPublicJWK = (key) => key.kty !== "oct" && key.d === void 0 && key.priv === void 0;
+    isSecretJWK = (key) => key.kty === "oct" && typeof key.k === "string";
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/normalize_key.js
+async function normalizeKey(key, alg) {
+  if (key instanceof Uint8Array) {
+    return key;
+  }
+  if (isCryptoKey(key)) {
+    return key;
+  }
+  if (isKeyObject(key)) {
+    if (key.type === "secret") {
+      return key.export();
+    }
+    if ("toCryptoKey" in key && typeof key.toCryptoKey === "function") {
+      try {
+        return handleKeyObject(key, alg);
+      } catch (err) {
+        if (err instanceof TypeError) {
+          throw err;
+        }
+      }
+    }
+    let jwk = key.export({ format: "jwk" });
+    return handleJWK(key, jwk, alg);
+  }
+  if (isJWK(key)) {
+    if (key.k) {
+      return decode(key.k);
+    }
+    return handleJWK(key, key, alg, true);
+  }
+  throw new Error("unreachable");
+}
+var cache3, handleJWK, handleKeyObject;
+var init_normalize_key = __esm({
+  "node_modules/jose/dist/webapi/lib/normalize_key.js"() {
+    init_is_jwk();
+    init_base64url();
+    init_jwk_to_key();
+    init_is_key_like();
+    handleJWK = async (key, jwk, alg, freeze = false) => {
+      cache3 ||= /* @__PURE__ */ new WeakMap();
+      let cached2 = cache3.get(key);
+      if (cached2?.[alg]) {
+        return cached2[alg];
+      }
+      const cryptoKey = await jwkToKey({ ...jwk, alg });
+      if (freeze)
+        Object.freeze(key);
+      if (!cached2) {
+        cache3.set(key, { [alg]: cryptoKey });
+      } else {
+        cached2[alg] = cryptoKey;
+      }
+      return cryptoKey;
+    };
+    handleKeyObject = (keyObject, alg) => {
+      cache3 ||= /* @__PURE__ */ new WeakMap();
+      let cached2 = cache3.get(keyObject);
+      if (cached2?.[alg]) {
+        return cached2[alg];
+      }
+      const isPublic = keyObject.type === "public";
+      const extractable = isPublic ? true : false;
+      let cryptoKey;
+      if (keyObject.asymmetricKeyType === "x25519") {
+        switch (alg) {
+          case "ECDH-ES":
+          case "ECDH-ES+A128KW":
+          case "ECDH-ES+A192KW":
+          case "ECDH-ES+A256KW":
+            break;
+          default:
+            throw new TypeError("given KeyObject instance cannot be used for this algorithm");
+        }
+        cryptoKey = keyObject.toCryptoKey(keyObject.asymmetricKeyType, extractable, isPublic ? [] : ["deriveBits"]);
+      }
+      if (keyObject.asymmetricKeyType === "ed25519") {
+        if (alg !== "EdDSA" && alg !== "Ed25519") {
+          throw new TypeError("given KeyObject instance cannot be used for this algorithm");
+        }
+        cryptoKey = keyObject.toCryptoKey(keyObject.asymmetricKeyType, extractable, [
+          isPublic ? "verify" : "sign"
+        ]);
+      }
+      switch (keyObject.asymmetricKeyType) {
+        case "ml-dsa-44":
+        case "ml-dsa-65":
+        case "ml-dsa-87": {
+          if (alg !== keyObject.asymmetricKeyType.toUpperCase()) {
+            throw new TypeError("given KeyObject instance cannot be used for this algorithm");
+          }
+          cryptoKey = keyObject.toCryptoKey(keyObject.asymmetricKeyType, extractable, [
+            isPublic ? "verify" : "sign"
+          ]);
+        }
+      }
+      if (keyObject.asymmetricKeyType === "rsa") {
+        let hash;
+        switch (alg) {
+          case "RSA-OAEP":
+            hash = "SHA-1";
+            break;
+          case "RS256":
+          case "PS256":
+          case "RSA-OAEP-256":
+            hash = "SHA-256";
+            break;
+          case "RS384":
+          case "PS384":
+          case "RSA-OAEP-384":
+            hash = "SHA-384";
+            break;
+          case "RS512":
+          case "PS512":
+          case "RSA-OAEP-512":
+            hash = "SHA-512";
+            break;
+          default:
+            throw new TypeError("given KeyObject instance cannot be used for this algorithm");
+        }
+        if (alg.startsWith("RSA-OAEP")) {
+          return keyObject.toCryptoKey({
+            name: "RSA-OAEP",
+            hash
+          }, extractable, isPublic ? ["encrypt"] : ["decrypt"]);
+        }
+        cryptoKey = keyObject.toCryptoKey({
+          name: alg.startsWith("PS") ? "RSA-PSS" : "RSASSA-PKCS1-v1_5",
+          hash
+        }, extractable, [isPublic ? "verify" : "sign"]);
+      }
+      if (keyObject.asymmetricKeyType === "ec") {
+        const nist = /* @__PURE__ */ new Map([
+          ["prime256v1", "P-256"],
+          ["secp384r1", "P-384"],
+          ["secp521r1", "P-521"]
+        ]);
+        const namedCurve = nist.get(keyObject.asymmetricKeyDetails?.namedCurve);
+        if (!namedCurve) {
+          throw new TypeError("given KeyObject instance cannot be used for this algorithm");
+        }
+        if (alg === "ES256" && namedCurve === "P-256") {
+          cryptoKey = keyObject.toCryptoKey({
+            name: "ECDSA",
+            namedCurve
+          }, extractable, [isPublic ? "verify" : "sign"]);
+        }
+        if (alg === "ES384" && namedCurve === "P-384") {
+          cryptoKey = keyObject.toCryptoKey({
+            name: "ECDSA",
+            namedCurve
+          }, extractable, [isPublic ? "verify" : "sign"]);
+        }
+        if (alg === "ES512" && namedCurve === "P-521") {
+          cryptoKey = keyObject.toCryptoKey({
+            name: "ECDSA",
+            namedCurve
+          }, extractable, [isPublic ? "verify" : "sign"]);
+        }
+        if (alg.startsWith("ECDH-ES")) {
+          cryptoKey = keyObject.toCryptoKey({
+            name: "ECDH",
+            namedCurve
+          }, extractable, isPublic ? [] : ["deriveBits"]);
+        }
+      }
+      if (!cryptoKey) {
+        throw new TypeError("given KeyObject instance cannot be used for this algorithm");
+      }
+      if (!cached2) {
+        cache3.set(keyObject, { [alg]: cryptoKey });
+      } else {
+        cached2[alg] = cryptoKey;
+      }
+      return cryptoKey;
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/check_key_type.js
+function checkKeyType(alg, key, usage) {
+  switch (alg.substring(0, 2)) {
+    case "A1":
+    case "A2":
+    case "di":
+    case "HS":
+    case "PB":
+      symmetricTypeCheck(alg, key, usage);
+      break;
+    default:
+      asymmetricTypeCheck(alg, key, usage);
+  }
+}
+var tag, jwkMatchesOp, symmetricTypeCheck, asymmetricTypeCheck;
+var init_check_key_type = __esm({
+  "node_modules/jose/dist/webapi/lib/check_key_type.js"() {
+    init_invalid_key_input();
+    init_is_key_like();
+    init_is_jwk();
+    tag = (key) => key?.[Symbol.toStringTag];
+    jwkMatchesOp = (alg, key, usage) => {
+      if (key.use !== void 0) {
+        let expected;
+        switch (usage) {
+          case "sign":
+          case "verify":
+            expected = "sig";
+            break;
+          case "encrypt":
+          case "decrypt":
+            expected = "enc";
+            break;
+        }
+        if (key.use !== expected) {
+          throw new TypeError(`Invalid key for this operation, its "use" must be "${expected}" when present`);
+        }
+      }
+      if (key.alg !== void 0 && key.alg !== alg) {
+        throw new TypeError(`Invalid key for this operation, its "alg" must be "${alg}" when present`);
+      }
+      if (Array.isArray(key.key_ops)) {
+        let expectedKeyOp;
+        switch (true) {
+          case (usage === "sign" || usage === "verify"):
+          case alg === "dir":
+          case alg.includes("CBC-HS"):
+            expectedKeyOp = usage;
+            break;
+          case alg.startsWith("PBES2"):
+            expectedKeyOp = "deriveBits";
+            break;
+          case /^A\d{3}(?:GCM)?(?:KW)?$/.test(alg):
+            if (!alg.includes("GCM") && alg.endsWith("KW")) {
+              expectedKeyOp = usage === "encrypt" ? "wrapKey" : "unwrapKey";
+            } else {
+              expectedKeyOp = usage;
+            }
+            break;
+          case (usage === "encrypt" && alg.startsWith("RSA")):
+            expectedKeyOp = "wrapKey";
+            break;
+          case usage === "decrypt":
+            expectedKeyOp = alg.startsWith("RSA") ? "unwrapKey" : "deriveBits";
+            break;
+        }
+        if (expectedKeyOp && key.key_ops?.includes?.(expectedKeyOp) === false) {
+          throw new TypeError(`Invalid key for this operation, its "key_ops" must include "${expectedKeyOp}" when present`);
+        }
+      }
+      return true;
+    };
+    symmetricTypeCheck = (alg, key, usage) => {
+      if (key instanceof Uint8Array)
+        return;
+      if (isJWK(key)) {
+        if (isSecretJWK(key) && jwkMatchesOp(alg, key, usage))
+          return;
+        throw new TypeError(`JSON Web Key for symmetric algorithms must have JWK "kty" (Key Type) equal to "oct" and the JWK "k" (Key Value) present`);
+      }
+      if (!isKeyLike(key)) {
+        throw new TypeError(withAlg(alg, key, "CryptoKey", "KeyObject", "JSON Web Key", "Uint8Array"));
+      }
+      if (key.type !== "secret") {
+        throw new TypeError(`${tag(key)} instances for symmetric algorithms must be of type "secret"`);
+      }
+    };
+    asymmetricTypeCheck = (alg, key, usage) => {
+      if (isJWK(key)) {
+        switch (usage) {
+          case "decrypt":
+          case "sign":
+            if (isPrivateJWK(key) && jwkMatchesOp(alg, key, usage))
+              return;
+            throw new TypeError(`JSON Web Key for this operation must be a private JWK`);
+          case "encrypt":
+          case "verify":
+            if (isPublicJWK(key) && jwkMatchesOp(alg, key, usage))
+              return;
+            throw new TypeError(`JSON Web Key for this operation must be a public JWK`);
+        }
+      }
+      if (!isKeyLike(key)) {
+        throw new TypeError(withAlg(alg, key, "CryptoKey", "KeyObject", "JSON Web Key"));
+      }
+      if (key.type === "secret") {
+        throw new TypeError(`${tag(key)} instances for asymmetric algorithms must not be of type "secret"`);
+      }
+      if (key.type === "public") {
+        switch (usage) {
+          case "sign":
+            throw new TypeError(`${tag(key)} instances for asymmetric algorithm signing must be of type "private"`);
+          case "decrypt":
+            throw new TypeError(`${tag(key)} instances for asymmetric algorithm decryption must be of type "private"`);
+        }
+      }
+      if (key.type === "private") {
+        switch (usage) {
+          case "verify":
+            throw new TypeError(`${tag(key)} instances for asymmetric algorithm verifying must be of type "public"`);
+          case "encrypt":
+            throw new TypeError(`${tag(key)} instances for asymmetric algorithm encryption must be of type "public"`);
+        }
+      }
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/key_to_jwk.js
+async function keyToJWK(key) {
+  if (isKeyObject(key)) {
+    if (key.type === "secret") {
+      key = key.export();
+    } else {
+      return key.export({ format: "jwk" });
+    }
+  }
+  if (key instanceof Uint8Array) {
+    return {
+      kty: "oct",
+      k: encode2(key)
+    };
+  }
+  if (!isCryptoKey(key)) {
+    throw new TypeError(invalidKeyInput(key, "CryptoKey", "KeyObject", "Uint8Array"));
+  }
+  if (!key.extractable) {
+    throw new TypeError("non-extractable CryptoKey cannot be exported as a JWK");
+  }
+  const { ext, key_ops, alg, use, ...jwk } = await crypto.subtle.exportKey("jwk", key);
+  if (jwk.kty === "AKP") {
+    ;
+    jwk.alg = alg;
+  }
+  return jwk;
+}
+var init_key_to_jwk = __esm({
+  "node_modules/jose/dist/webapi/lib/key_to_jwk.js"() {
+    init_invalid_key_input();
+    init_base64url();
+    init_is_key_like();
+  }
+});
+
+// node_modules/jose/dist/webapi/key/export.js
+async function exportJWK(key) {
+  return keyToJWK(key);
+}
+var init_export = __esm({
+  "node_modules/jose/dist/webapi/key/export.js"() {
+    init_key_to_jwk();
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/subtle_dsa.js
+function subtleAlgorithm(alg, algorithm) {
+  const hash = `SHA-${alg.slice(-3)}`;
+  switch (alg) {
+    case "HS256":
+    case "HS384":
+    case "HS512":
+      return { hash, name: "HMAC" };
+    case "PS256":
+    case "PS384":
+    case "PS512":
+      return { hash, name: "RSA-PSS", saltLength: parseInt(alg.slice(-3), 10) >> 3 };
+    case "RS256":
+    case "RS384":
+    case "RS512":
+      return { hash, name: "RSASSA-PKCS1-v1_5" };
+    case "ES256":
+    case "ES384":
+    case "ES512":
+      return { hash, name: "ECDSA", namedCurve: algorithm.namedCurve };
+    case "Ed25519":
+    case "EdDSA":
+      return { name: "Ed25519" };
+    case "ML-DSA-44":
+    case "ML-DSA-65":
+    case "ML-DSA-87":
+      return { name: alg };
+    default:
+      throw new JOSENotSupported(`alg ${alg} is not supported either by JOSE or your javascript runtime`);
+  }
+}
+var init_subtle_dsa = __esm({
+  "node_modules/jose/dist/webapi/lib/subtle_dsa.js"() {
+    init_errors();
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/get_sign_verify_key.js
+async function getSigKey(alg, key, usage) {
+  if (key instanceof Uint8Array) {
+    if (!alg.startsWith("HS")) {
+      throw new TypeError(invalidKeyInput(key, "CryptoKey", "KeyObject", "JSON Web Key"));
+    }
+    return crypto.subtle.importKey("raw", key, { hash: `SHA-${alg.slice(-3)}`, name: "HMAC" }, false, [usage]);
+  }
+  checkSigCryptoKey(key, alg, usage);
+  return key;
+}
+var init_get_sign_verify_key = __esm({
+  "node_modules/jose/dist/webapi/lib/get_sign_verify_key.js"() {
+    init_crypto_key();
+    init_invalid_key_input();
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/jwt_claims_set.js
+function secs(str) {
+  const matched = REGEX.exec(str);
+  if (!matched || matched[4] && matched[1]) {
+    throw new TypeError("Invalid time period format");
+  }
+  const value = parseFloat(matched[2]);
+  const unit = matched[3].toLowerCase();
+  let numericDate;
+  switch (unit) {
+    case "sec":
+    case "secs":
+    case "second":
+    case "seconds":
+    case "s":
+      numericDate = Math.round(value);
+      break;
+    case "minute":
+    case "minutes":
+    case "min":
+    case "mins":
+    case "m":
+      numericDate = Math.round(value * minute);
+      break;
+    case "hour":
+    case "hours":
+    case "hr":
+    case "hrs":
+    case "h":
+      numericDate = Math.round(value * hour);
+      break;
+    case "day":
+    case "days":
+    case "d":
+      numericDate = Math.round(value * day);
+      break;
+    case "week":
+    case "weeks":
+    case "w":
+      numericDate = Math.round(value * week);
+      break;
+    default:
+      numericDate = Math.round(value * year);
+      break;
+  }
+  if (matched[1] === "-" || matched[4] === "ago") {
+    return -numericDate;
+  }
+  return numericDate;
+}
+function validateInput(label, input) {
+  if (!Number.isFinite(input)) {
+    throw new TypeError(`Invalid ${label} input`);
+  }
+  return input;
+}
+var epoch, minute, hour, day, week, year, REGEX, JWTClaimsBuilder;
+var init_jwt_claims_set = __esm({
+  "node_modules/jose/dist/webapi/lib/jwt_claims_set.js"() {
+    init_buffer_utils();
+    init_is_object();
+    epoch = (date) => Math.floor(date.getTime() / 1e3);
+    minute = 60;
+    hour = minute * 60;
+    day = hour * 24;
+    week = day * 7;
+    year = day * 365.25;
+    REGEX = /^(\+|\-)? ?(\d+|\d+\.\d+) ?(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)(?: (ago|from now))?$/i;
+    JWTClaimsBuilder = class {
+      #payload;
+      constructor(payload) {
+        if (!isObject(payload)) {
+          throw new TypeError("JWT Claims Set MUST be an object");
+        }
+        this.#payload = structuredClone(payload);
+      }
+      data() {
+        return encoder.encode(JSON.stringify(this.#payload));
+      }
+      get iss() {
+        return this.#payload.iss;
+      }
+      set iss(value) {
+        this.#payload.iss = value;
+      }
+      get sub() {
+        return this.#payload.sub;
+      }
+      set sub(value) {
+        this.#payload.sub = value;
+      }
+      get aud() {
+        return this.#payload.aud;
+      }
+      set aud(value) {
+        this.#payload.aud = value;
+      }
+      set jti(value) {
+        this.#payload.jti = value;
+      }
+      set nbf(value) {
+        if (typeof value === "number") {
+          this.#payload.nbf = validateInput("setNotBefore", value);
+        } else if (value instanceof Date) {
+          this.#payload.nbf = validateInput("setNotBefore", epoch(value));
+        } else {
+          this.#payload.nbf = epoch(/* @__PURE__ */ new Date()) + secs(value);
+        }
+      }
+      set exp(value) {
+        if (typeof value === "number") {
+          this.#payload.exp = validateInput("setExpirationTime", value);
+        } else if (value instanceof Date) {
+          this.#payload.exp = validateInput("setExpirationTime", epoch(value));
+        } else {
+          this.#payload.exp = epoch(/* @__PURE__ */ new Date()) + secs(value);
+        }
+      }
+      set iat(value) {
+        if (value === void 0) {
+          this.#payload.iat = epoch(/* @__PURE__ */ new Date());
+        } else if (value instanceof Date) {
+          this.#payload.iat = validateInput("setIssuedAt", epoch(value));
+        } else if (typeof value === "string") {
+          this.#payload.iat = validateInput("setIssuedAt", epoch(/* @__PURE__ */ new Date()) + secs(value));
+        } else {
+          this.#payload.iat = validateInput("setIssuedAt", value);
+        }
+      }
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/lib/sign.js
+async function sign(alg, key, data) {
+  const cryptoKey = await getSigKey(alg, key, "sign");
+  checkKeyLength(alg, cryptoKey);
+  const signature = await crypto.subtle.sign(subtleAlgorithm(alg, cryptoKey.algorithm), cryptoKey, data);
+  return new Uint8Array(signature);
+}
+var init_sign = __esm({
+  "node_modules/jose/dist/webapi/lib/sign.js"() {
+    init_subtle_dsa();
+    init_check_key_length();
+    init_get_sign_verify_key();
+  }
+});
+
+// node_modules/jose/dist/webapi/jws/flattened/sign.js
+var FlattenedSign;
+var init_sign2 = __esm({
+  "node_modules/jose/dist/webapi/jws/flattened/sign.js"() {
+    init_base64url();
+    init_sign();
+    init_is_disjoint();
+    init_errors();
+    init_buffer_utils();
+    init_check_key_type();
+    init_validate_crit();
+    init_normalize_key();
+    FlattenedSign = class {
+      #payload;
+      #protectedHeader;
+      #unprotectedHeader;
+      constructor(payload) {
+        if (!(payload instanceof Uint8Array)) {
+          throw new TypeError("payload must be an instance of Uint8Array");
+        }
+        this.#payload = payload;
+      }
+      setProtectedHeader(protectedHeader) {
+        if (this.#protectedHeader) {
+          throw new TypeError("setProtectedHeader can only be called once");
+        }
+        this.#protectedHeader = protectedHeader;
+        return this;
+      }
+      setUnprotectedHeader(unprotectedHeader) {
+        if (this.#unprotectedHeader) {
+          throw new TypeError("setUnprotectedHeader can only be called once");
+        }
+        this.#unprotectedHeader = unprotectedHeader;
+        return this;
+      }
+      async sign(key, options) {
+        if (!this.#protectedHeader && !this.#unprotectedHeader) {
+          throw new JWSInvalid("either setProtectedHeader or setUnprotectedHeader must be called before #sign()");
+        }
+        if (!isDisjoint(this.#protectedHeader, this.#unprotectedHeader)) {
+          throw new JWSInvalid("JWS Protected and JWS Unprotected Header Parameter names must be disjoint");
+        }
+        const joseHeader = {
+          ...this.#protectedHeader,
+          ...this.#unprotectedHeader
+        };
+        const extensions = validateCrit(JWSInvalid, /* @__PURE__ */ new Map([["b64", true]]), options?.crit, this.#protectedHeader, joseHeader);
+        let b64 = true;
+        if (extensions.has("b64")) {
+          b64 = this.#protectedHeader.b64;
+          if (typeof b64 !== "boolean") {
+            throw new JWSInvalid('The "b64" (base64url-encode payload) Header Parameter must be a boolean');
+          }
+        }
+        const { alg } = joseHeader;
+        if (typeof alg !== "string" || !alg) {
+          throw new JWSInvalid('JWS "alg" (Algorithm) Header Parameter missing or invalid');
+        }
+        checkKeyType(alg, key, "sign");
+        let payloadS;
+        let payloadB;
+        if (b64) {
+          payloadS = encode2(this.#payload);
+          payloadB = encode(payloadS);
+        } else {
+          payloadB = this.#payload;
+          payloadS = "";
+        }
+        let protectedHeaderString;
+        let protectedHeaderBytes;
+        if (this.#protectedHeader) {
+          protectedHeaderString = encode2(JSON.stringify(this.#protectedHeader));
+          protectedHeaderBytes = encode(protectedHeaderString);
+        } else {
+          protectedHeaderString = "";
+          protectedHeaderBytes = new Uint8Array();
+        }
+        const data = concat(protectedHeaderBytes, encode("."), payloadB);
+        const k = await normalizeKey(key, alg);
+        const signature = await sign(alg, k, data);
+        const jws = {
+          signature: encode2(signature),
+          payload: payloadS
+        };
+        if (this.#unprotectedHeader) {
+          jws.header = this.#unprotectedHeader;
+        }
+        if (this.#protectedHeader) {
+          jws.protected = protectedHeaderString;
+        }
+        return jws;
+      }
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/jws/compact/sign.js
+var CompactSign;
+var init_sign3 = __esm({
+  "node_modules/jose/dist/webapi/jws/compact/sign.js"() {
+    init_sign2();
+    CompactSign = class {
+      #flattened;
+      constructor(payload) {
+        this.#flattened = new FlattenedSign(payload);
+      }
+      setProtectedHeader(protectedHeader) {
+        this.#flattened.setProtectedHeader(protectedHeader);
+        return this;
+      }
+      async sign(key, options) {
+        const jws = await this.#flattened.sign(key, options);
+        if (jws.payload === void 0) {
+          throw new TypeError("use the flattened module for creating JWS with b64: false");
+        }
+        return `${jws.protected}.${jws.payload}.${jws.signature}`;
+      }
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/jwt/sign.js
+var SignJWT;
+var init_sign4 = __esm({
+  "node_modules/jose/dist/webapi/jwt/sign.js"() {
+    init_sign3();
+    init_errors();
+    init_jwt_claims_set();
+    SignJWT = class {
+      #protectedHeader;
+      #jwt;
+      constructor(payload = {}) {
+        this.#jwt = new JWTClaimsBuilder(payload);
+      }
+      setIssuer(issuer) {
+        this.#jwt.iss = issuer;
+        return this;
+      }
+      setSubject(subject) {
+        this.#jwt.sub = subject;
+        return this;
+      }
+      setAudience(audience) {
+        this.#jwt.aud = audience;
+        return this;
+      }
+      setJti(jwtId) {
+        this.#jwt.jti = jwtId;
+        return this;
+      }
+      setNotBefore(input) {
+        this.#jwt.nbf = input;
+        return this;
+      }
+      setExpirationTime(input) {
+        this.#jwt.exp = input;
+        return this;
+      }
+      setIssuedAt(input) {
+        this.#jwt.iat = input;
+        return this;
+      }
+      setProtectedHeader(protectedHeader) {
+        this.#protectedHeader = protectedHeader;
+        return this;
+      }
+      async sign(key, options) {
+        const sig = new CompactSign(this.#jwt.data());
+        sig.setProtectedHeader(this.#protectedHeader);
+        if (Array.isArray(this.#protectedHeader?.crit) && this.#protectedHeader.crit.includes("b64") && this.#protectedHeader.b64 === false) {
+          throw new JWTInvalid("JWTs MUST NOT use unencoded payload");
+        }
+        return sig.sign(key, options);
+      }
+    };
+  }
+});
+
+// node_modules/jose/dist/webapi/key/generate_key_pair.js
+function getModulusLengthOption(options) {
+  const modulusLength = options?.modulusLength ?? 2048;
+  if (typeof modulusLength !== "number" || modulusLength < 2048) {
+    throw new JOSENotSupported("Invalid or unsupported modulusLength option provided, 2048 bits or larger keys must be used");
+  }
+  return modulusLength;
+}
+async function generateKeyPair(alg, options) {
+  let algorithm;
+  let keyUsages;
+  switch (alg) {
+    case "PS256":
+    case "PS384":
+    case "PS512":
+      algorithm = {
+        name: "RSA-PSS",
+        hash: `SHA-${alg.slice(-3)}`,
+        publicExponent: Uint8Array.of(1, 0, 1),
+        modulusLength: getModulusLengthOption(options)
+      };
+      keyUsages = ["sign", "verify"];
+      break;
+    case "RS256":
+    case "RS384":
+    case "RS512":
+      algorithm = {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: `SHA-${alg.slice(-3)}`,
+        publicExponent: Uint8Array.of(1, 0, 1),
+        modulusLength: getModulusLengthOption(options)
+      };
+      keyUsages = ["sign", "verify"];
+      break;
+    case "RSA-OAEP":
+    case "RSA-OAEP-256":
+    case "RSA-OAEP-384":
+    case "RSA-OAEP-512":
+      algorithm = {
+        name: "RSA-OAEP",
+        hash: `SHA-${parseInt(alg.slice(-3), 10) || 1}`,
+        publicExponent: Uint8Array.of(1, 0, 1),
+        modulusLength: getModulusLengthOption(options)
+      };
+      keyUsages = ["decrypt", "unwrapKey", "encrypt", "wrapKey"];
+      break;
+    case "ES256":
+      algorithm = { name: "ECDSA", namedCurve: "P-256" };
+      keyUsages = ["sign", "verify"];
+      break;
+    case "ES384":
+      algorithm = { name: "ECDSA", namedCurve: "P-384" };
+      keyUsages = ["sign", "verify"];
+      break;
+    case "ES512":
+      algorithm = { name: "ECDSA", namedCurve: "P-521" };
+      keyUsages = ["sign", "verify"];
+      break;
+    case "Ed25519":
+    case "EdDSA": {
+      keyUsages = ["sign", "verify"];
+      algorithm = { name: "Ed25519" };
+      break;
+    }
+    case "ML-DSA-44":
+    case "ML-DSA-65":
+    case "ML-DSA-87": {
+      keyUsages = ["sign", "verify"];
+      algorithm = { name: alg };
+      break;
+    }
+    case "ECDH-ES":
+    case "ECDH-ES+A128KW":
+    case "ECDH-ES+A192KW":
+    case "ECDH-ES+A256KW": {
+      keyUsages = ["deriveBits"];
+      const crv = options?.crv ?? "P-256";
+      switch (crv) {
+        case "P-256":
+        case "P-384":
+        case "P-521": {
+          algorithm = { name: "ECDH", namedCurve: crv };
+          break;
+        }
+        case "X25519":
+          algorithm = { name: "X25519" };
+          break;
+        default:
+          throw new JOSENotSupported("Invalid or unsupported crv option provided, supported values are P-256, P-384, P-521, and X25519");
+      }
+      break;
+    }
+    default:
+      throw new JOSENotSupported('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');
+  }
+  return crypto.subtle.generateKey(algorithm, options?.extractable ?? false, keyUsages);
+}
+var init_generate_key_pair = __esm({
+  "node_modules/jose/dist/webapi/key/generate_key_pair.js"() {
+    init_errors();
+  }
+});
+
+// node_modules/jose/dist/webapi/index.js
+var init_webapi = __esm({
+  "node_modules/jose/dist/webapi/index.js"() {
+    init_sign4();
+    init_export();
+    init_import();
+    init_generate_key_pair();
+  }
+});
+
+// vendor/channel-pack/src/oauth.ts
+import { createHash as createHash5, randomBytes as randomBytes4 } from "node:crypto";
+function generatePkcePair() {
+  const codeVerifier = randomBytes4(48).toString("base64url");
+  const codeChallenge = createHash5("sha256").update(codeVerifier).digest("base64url");
+  return { codeVerifier, codeChallenge };
+}
+async function generateDpopKeyPair() {
+  const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true, crv: "P-256" });
+  return {
+    privateKeyJwk: await exportJWK(privateKey),
+    publicKeyJwk: await exportJWK(publicKey)
+  };
+}
+async function signDpopJws(keyPair, htm, htu) {
+  const key = await importJWK(keyPair.privateKeyJwk, "ES256", { extractable: false });
+  const payload = {
+    htm,
+    htu,
+    iat: Math.floor(Date.now() / 1e3),
+    jti: randomBytes4(32).toString("hex")
+  };
+  return new SignJWT(payload).setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk: keyPair.publicKeyJwk }).sign(key);
+}
+async function requestToken(body, keyPair, fetcher = fetch) {
+  const dpop = await signDpopJws(keyPair, "POST", STS_TOKEN_ENDPOINT);
+  let response;
+  try {
+    response = await fetcher(STS_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: {
+        DPoP: dpop,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams(body).toString(),
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS)
+    });
+  } catch (error) {
+    throw new Error(`CodeArts token request network error: ${String(error)}`);
+  }
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+  if (!response.ok || !data?.credentials) {
+    const message2 = `CodeArts token request failed: ${response.status}${data ? ` ${JSON.stringify(data)}` : ""}`;
+    const errorCode = String(data?.error_code ?? "");
+    if (data?.error === "invalid_grant" || errorCode.includes("ExpiredRefreshToken")) {
+      throw new RefreshTokenExpiredError(message2);
+    }
+    throw new Error(message2);
+  }
+  return data;
+}
+async function exchangeAuthorizationCode(code, codeVerifier, port, keyPair, fetcher = fetch) {
+  return requestToken({
+    client_id: CLIENT_ID,
+    code,
+    code_verifier: codeVerifier,
+    grant_type: GRANT_AUTHORIZATION_CODE,
+    redirect_uri: `http://127.0.0.1:${port}${REDIRECT_PATH}`
+  }, keyPair, fetcher);
+}
+async function exchangeRefreshToken(refreshToken, codeVerifier, keyPair, fetcher = fetch) {
+  return requestToken({
+    client_id: CLIENT_ID,
+    code_verifier: codeVerifier,
+    grant_type: GRANT_REFRESH_TOKEN,
+    refresh_token: refreshToken
+  }, keyPair, fetcher);
+}
+function credentialFromTokenResponse(token, pkce, keyPair) {
+  const credentials = token.credentials ?? {};
+  return {
+    access_key_id: credentials.access_key_id ?? "",
+    secret_access_key: credentials.secret_access_key ?? "",
+    security_token: credentials.security_token ?? "",
+    expires_at: credentials.expiration ?? "",
+    refresh_token: token.refresh_token,
+    code_verifier: pkce.codeVerifier,
+    dpop_private_key_jwk: keyPair.privateKeyJwk
+  };
+}
+function keyPairFromStoredJwk(jwk) {
+  return {
+    privateKeyJwk: jwk,
+    publicKeyJwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }
+  };
+}
+var CLIENT_ID, REDIRECT_PATH, STS_TOKEN_ENDPOINT, TOKEN_TIMEOUT_MS, GRANT_AUTHORIZATION_CODE, GRANT_REFRESH_TOKEN, RefreshTokenExpiredError;
+var init_oauth = __esm({
+  "vendor/channel-pack/src/oauth.ts"() {
+    "use strict";
+    init_webapi();
+    CLIENT_ID = "codearts-agent";
+    REDIRECT_PATH = "/oauth/callback";
+    STS_TOKEN_ENDPOINT = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens";
+    TOKEN_TIMEOUT_MS = 6e4;
+    GRANT_AUTHORIZATION_CODE = "authorization_code";
+    GRANT_REFRESH_TOKEN = "refresh_token";
+    RefreshTokenExpiredError = class extends Error {
+      constructor(message2) {
+        super(message2);
+        this.name = "RefreshTokenExpiredError";
+      }
+    };
+  }
+});
+
+// vendor/channel-pack/src/login.ts
+var login_exports = {};
+__export(login_exports, {
+  CODEARTS_LOGIN_BASE: () => CODEARTS_LOGIN_BASE,
+  CREDENTIAL_ENDPOINT: () => CREDENTIAL_ENDPOINT,
+  HUAWEI_AUTH_BASE: () => HUAWEI_AUTH_BASE,
+  LOGIN_PLUGIN_NAME: () => LOGIN_PLUGIN_NAME,
+  LOGIN_PLUGIN_VERSION: () => LOGIN_PLUGIN_VERSION,
+  OAUTH_LOCALE: () => OAUTH_LOCALE,
+  OAUTH_THEME: () => OAUTH_THEME,
+  PORTAL_AUTHORIZE_BASE: () => PORTAL_AUTHORIZE_BASE,
+  PORTAL_LOGIN_BASE: () => PORTAL_LOGIN_BASE,
+  buildLoginUrl: () => buildLoginUrl,
+  buildOAuthLoginUrl: () => buildOAuthLoginUrl,
+  buildPortalLoginResultUrl: () => buildPortalLoginResultUrl,
+  expiresFromCredential: () => expiresFromCredential,
+  generateRandomSecret: () => generateRandomSecret,
+  openBrowser: () => openBrowser,
+  parseCredentialResponse: () => parseCredentialResponse,
+  pollForCredential: () => pollForCredential,
+  runLoginFlow: () => runLoginFlow,
+  runOAuthFlow: () => runOAuthFlow,
+  startCallbackServer: () => startCallbackServer,
+  startOAuthCallbackServer: () => startOAuthCallbackServer,
+  startOAuthFlow: () => startOAuthFlow
+});
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { getRandomValues, randomUUID as randomUUID2, randomBytes as randomBytes5 } from "node:crypto";
+function generateRandomSecret() {
+  const bytes = getRandomValues(new Uint8Array(32));
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function buildLoginUrl(port, ticketId) {
+  const callbackUrl = `http://127.0.0.1:${port}/authentication`;
+  const redirectUrl = `${CODEARTS_LOGIN_BASE}?IdeaType=jetbrains&auth_callback_url=${encodeURIComponent(callbackUrl)}&plugin-name=${PLUGIN_NAME}&plugin-version=${PLUGIN_VERSION}&ticket_id=${encodeURIComponent(ticketId)}`;
+  const loginUrl = `${HUAWEI_AUTH_BASE}?service=${encodeURIComponent(redirectUrl)}`;
+  return { redirectUrl, loginUrl };
+}
+function parseCredentialResponse(data) {
+  if (data.credential) {
+    const access = data.credential.access ?? "";
+    const st = data.credential.securitytoken ?? data.credential.securityToken ?? "";
+    if (access && st) {
+      return {
+        access_key_id: access,
+        secret_access_key: data.credential.secret ?? "",
+        security_token: st,
+        expires_at: data.credential.expires_at ?? data.credential.expiresAt ?? "",
+        domain_id: data.domain_id ?? "",
+        user_id: data.user_id ?? "",
+        user_name: data.user_name ?? ""
+      };
+    }
+  }
+  if (data.result) {
+    const ak = data.result.accessKeyId ?? "";
+    const st = data.result.securityToken ?? "";
+    if (ak && st) {
+      return {
+        access_key_id: ak,
+        secret_access_key: data.result.secretAccessKey ?? "",
+        security_token: st,
+        expires_at: data.result.expiration ?? data.result.expiresAt ?? ""
+      };
+    }
+  }
+  return null;
+}
+function expiresFromCredential(credential) {
+  if (credential.expires_at) {
+    const parsed = Date.parse(credential.expires_at);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Date.now() + 864e5;
+}
+async function pollForCredential(ticketId, secret, options = {}) {
+  const fetcher = options.fetcher ?? fetch;
+  const maxAttempts = options.maxAttempts ?? 120;
+  const pluginName = options.pluginName ?? PLUGIN_NAME;
+  const pluginVersion = options.pluginVersion ?? PLUGIN_VERSION;
+  const url = `${CREDENTIAL_ENDPOINT}?ticket_id=${encodeURIComponent(ticketId)}&secret=${encodeURIComponent(secret)}`;
+  for (let i = 0; i < maxAttempts; i++) {
+    if (i > 0) await new Promise((resolve2) => setTimeout(resolve2, 1e3));
+    let response;
+    try {
+      response = await fetcher(url, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json;charset=UTF-8",
+          "plugin-name": pluginName,
+          "plugin-version": pluginVersion
+        }
+      });
+    } catch {
+      continue;
+    }
+    if (!response.ok) continue;
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      continue;
+    }
+    const credential = data ? parseCredentialResponse(data) : null;
+    if (credential) return credential;
+  }
+  throw new Error("CodeArts login timed out");
+}
+function openBrowser(url) {
+  const warn = (error) => {
+    console.error("[codearts-auth] failed to open browser; open manually:", url, error);
+  };
+  const win = process.platform === "win32";
+  if (win) {
+    const args = ["/c", "start", '""', `"${url}"`];
+    try {
+      const child = spawn("cmd", args, { detached: true, stdio: "ignore", windowsVerbatimArguments: true });
+      child.on("error", warn);
+      child.unref();
+      return;
+    } catch (error) {
+      warn(error);
+      return;
+    }
+  }
+  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    const child = spawn(cmd, [url], { detached: true, stdio: "ignore" });
+    child.on("error", warn);
+    child.unref();
+  } catch (error) {
+    warn(error);
+  }
+}
+function pickToken(params) {
+  return params.get("token") ?? params.get("access_token") ?? params.get("accessToken") ?? params.get("authCode") ?? "";
+}
+function startCallbackServer(ticketId, secret, options) {
+  let resolveResult;
+  let rejectResult;
+  const result = new Promise((resolve2, reject) => {
+    resolveResult = resolve2;
+    rejectResult = reject;
+  });
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", `http://127.0.0.1:${request.socket.localPort}`);
+    if (url.pathname !== "/authentication" && !url.pathname.startsWith("/authentication")) {
+      response.writeHead(404).end("Not found");
+      return;
+    }
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, CORS_HEADERS).end();
+      return;
+    }
+    const params = url.searchParams;
+    const directToken = pickToken(params);
+    if (directToken) {
+      response.writeHead(200, CORS_HEADERS).end();
+      resolveResult({ access: directToken, expires: Date.now() + 864e5, loginUrl: "" });
+      return;
+    }
+    const fingerprint = params.get("fingerprint");
+    if (fingerprint) {
+      try {
+        const decoded = Buffer.from(fingerprint, "base64").toString();
+        const fpToken = pickToken(new URL(decoded).searchParams);
+        if (fpToken) {
+          response.writeHead(200, CORS_HEADERS).end();
+          resolveResult({ access: fpToken, expires: Date.now() + 864e5, loginUrl: "" });
+          return;
+        }
+      } catch {
+      }
+    }
+    const callbackSecret = params.get("secret");
+    if (callbackSecret) {
+      response.writeHead(200, CORS_HEADERS).end();
+      void pollForCredential(ticketId, callbackSecret, options).then(
+        (credential) => resolveResult({
+          access: JSON.stringify(credential),
+          expires: expiresFromCredential(credential),
+          loginUrl: ""
+        }),
+        (error) => rejectResult(error)
+      );
+      return;
+    }
+    response.writeHead(400).end("Missing token or secret");
+  });
+  return new Promise((resolveStart, rejectStart) => {
+    server.on("error", (error) => rejectStart(error));
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      resolveStart({ port, server, result });
+    });
+  });
+}
+async function runLoginFlow(options = {}) {
+  const ticketId = randomUUID2();
+  const secret = generateRandomSecret();
+  const { port, server, result } = await startCallbackServer(ticketId, secret, options);
+  const { loginUrl } = buildLoginUrl(port, ticketId);
+  try {
+    const opener = options.openBrowser ?? openBrowser;
+    await opener(loginUrl);
+    const outcome = await result;
+    return { ...outcome, loginUrl };
+  } finally {
+    await new Promise((resolve2) => server.close(resolve2));
+  }
+}
+function buildPortalLoginResultUrl(succeeded) {
+  return `${PORTAL_LOGIN_BASE}?login_succeed=${succeeded}&uri_scheme=${CLIENT_ID}&locale=${OAUTH_LOCALE}`;
+}
+function buildOAuthLoginUrl(port, pkce, ticketId) {
+  return `${PORTAL_AUTHORIZE_BASE}?theme=${OAUTH_THEME}&locale=${OAUTH_LOCALE}&uri_scheme=${CLIENT_ID}&client_id=${CLIENT_ID}&port=${port}&code_challenge=${pkce.codeChallenge}&code_challenge_method=SHA-256&ticket_id=${ticketId}&plugin-name=${LOGIN_PLUGIN_NAME}&plugin-version=${LOGIN_PLUGIN_VERSION}`;
+}
+function startOAuthCallbackServer(ticketId, pkce, keyPair, options) {
+  let resolveResult;
+  let rejectResult;
+  const result = new Promise((resolve2, reject) => {
+    resolveResult = resolve2;
+    rejectResult = reject;
+  });
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", `http://127.0.0.1:${request.socket.localPort}`);
+    if (url.pathname !== REDIRECT_PATH && !url.pathname.startsWith(REDIRECT_PATH)) {
+      response.writeHead(404).end("Not found");
+      return;
+    }
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, CORS_HEADERS).end();
+      return;
+    }
+    const callbackSecret = url.searchParams.get("secret");
+    if (callbackSecret) {
+      const redirectTo = url.searchParams.get("redirect") ?? buildPortalLoginResultUrl(true);
+      response.writeHead(307, { ...CORS_HEADERS, Location: redirectTo }).end();
+      void pollForCredential(ticketId, callbackSecret, {
+        ...options,
+        pluginName: LOGIN_PLUGIN_NAME,
+        pluginVersion: LOGIN_PLUGIN_VERSION
+      }).then(
+        (credential) => resolveResult({ access: JSON.stringify(credential), expires: expiresFromCredential(credential), loginUrl: "" }),
+        (error) => rejectResult(error)
+      );
+      return;
+    }
+    const code = url.searchParams.get("code");
+    if (code) {
+      void exchangeAuthorizationCode(code, pkce.codeVerifier, request.socket.localPort ?? 0, keyPair, options.fetcher).then(
+        (token) => {
+          const credential = credentialFromTokenResponse(token, pkce, keyPair);
+          response.writeHead(307, { ...CORS_HEADERS, Location: buildPortalLoginResultUrl(true) }).end();
+          resolveResult({ access: JSON.stringify(credential), expires: expiresFromCredential(credential), loginUrl: "" });
+        },
+        (error) => {
+          response.writeHead(307, { ...CORS_HEADERS, Location: buildPortalLoginResultUrl(false) }).end();
+          rejectResult(error);
+        }
+      );
+      return;
+    }
+    response.writeHead(400).end("Missing authorization code or secret");
+  });
+  return listenOnCallbackPort(server).then((port) => ({ port, server, result }));
+}
+function listenOnCallbackPort(server) {
+  return new Promise((resolve2, reject) => {
+    const tryListen = (port) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => {
+        const address = server.address();
+        const assigned = typeof address === "object" && address ? address.port : 0;
+        if (assigned >= MIN_CALLBACK_PORT) {
+          resolve2(assigned);
+          return;
+        }
+        server.close(() => {
+          const retry = Math.floor(Math.random() * (65536 - MIN_CALLBACK_PORT)) + MIN_CALLBACK_PORT;
+          tryListen(retry);
+        });
+      });
+    };
+    tryListen(0);
+  });
+}
+async function startOAuthFlow(options = {}) {
+  const ticketId = randomBytes5(32).toString("hex");
+  const pkce = generatePkcePair();
+  const keyPair = await generateDpopKeyPair();
+  const { port, server, result } = await startOAuthCallbackServer(ticketId, pkce, keyPair, options);
+  const loginUrl = buildOAuthLoginUrl(port, pkce, ticketId);
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await new Promise((resolve2) => server.close(() => resolve2()));
+  };
+  const resultWithUrl = Promise.race([
+    result,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("CodeArts OAuth login timed out")), OAUTH_CALLBACK_TIMEOUT_MS);
+      timer.unref?.();
+    })
+  ]).then((outcome) => ({ ...outcome, loginUrl }));
+  resultWithUrl.catch(() => {
+  }).finally(() => {
+    void close();
+  });
+  return { loginUrl, result: resultWithUrl, close };
+}
+async function runOAuthFlow(options = {}) {
+  const started = await startOAuthFlow(options);
+  try {
+    const opener = options.openBrowser ?? openBrowser;
+    await opener(started.loginUrl);
+    return await started.result;
+  } finally {
+    await started.close();
+  }
+}
+var CODEARTS_LOGIN_BASE, HUAWEI_AUTH_BASE, CREDENTIAL_ENDPOINT, PLUGIN_NAME, PLUGIN_VERSION, CORS_HEADERS, PORTAL_AUTHORIZE_BASE, PORTAL_LOGIN_BASE, LOGIN_PLUGIN_NAME, LOGIN_PLUGIN_VERSION, OAUTH_THEME, OAUTH_LOCALE, OAUTH_CALLBACK_TIMEOUT_MS, MIN_CALLBACK_PORT;
+var init_login = __esm({
+  "vendor/channel-pack/src/login.ts"() {
+    "use strict";
+    init_oauth();
+    CODEARTS_LOGIN_BASE = "https://devcloud.cn-north-4.huaweicloud.com/doer/redirect";
+    HUAWEI_AUTH_BASE = "https://auth.huaweicloud.com/authui/login.html";
+    CREDENTIAL_ENDPOINT = "https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/login/ticket";
+    PLUGIN_NAME = "snap_jetbrains";
+    PLUGIN_VERSION = "26.3.3";
+    CORS_HEADERS = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+      "Access-Control-Max-Age": "86400"
+    };
+    PORTAL_AUTHORIZE_BASE = "https://codearts.huaweicloud.com/portal/authorize";
+    PORTAL_LOGIN_BASE = "https://codearts.huaweicloud.com/portal/login";
+    LOGIN_PLUGIN_NAME = "snap_AIIDE";
+    LOGIN_PLUGIN_VERSION = "5.2.0";
+    OAUTH_THEME = "2";
+    OAUTH_LOCALE = "zh-cn";
+    OAUTH_CALLBACK_TIMEOUT_MS = 18e4;
+    MIN_CALLBACK_PORT = 1e4;
+  }
+});
+
 // vendor/channel-pack/src/index.ts
-import { credentialRef as credentialRef16 } from "@deepseek-ai/dsh-credentials";
-import { LlmError as LlmError20 } from "@deepseek-ai/dsh-llm";
+import { credentialRef as credentialRef15 } from "@deepseek-ai/dsh-credentials";
+import { LlmError as LlmError19 } from "@deepseek-ai/dsh-llm";
 import Schema2 from "@deepseek-ai/schemastery";
 
 // vendor/channel-pack/src/llm-adapter.ts
@@ -30659,40 +30659,6 @@ var AccountPool = class {
   async listAllAccounts() {
     return this.readAccounts();
   }
-  /**
-   * 清理「凭据域名与当前产品配置不符」的账号。
-   *
-   * 用途：WorkBuddy provider 从中国版（copilot.tencent.com）改造为国际版
-   * （www.workbuddy.ai）后，旧账号存的仍是中国版凭据 —— 它们的
-   * `token.domain` 指向旧端点，用新 endpoint 发请求必然失败（且会一直续期失败）。
-   * 这类条目已无修复价值，直接删除，让用户在 Channel Pack 重新登录。
-   *
-   * 判据是**凭据里记录的 domain 与产品配置的 apiDomain 不一致**（而不是简单按
-   * provider 名删），这样只清理真正失配的条目，不会误删已在新端点登录的账号。
-   *
-   * @returns 被删除的账号 id 列表（供调用方记日志）。
-   */
-  async pruneAccountsWithForeignDomain(product) {
-    const removed = [];
-    for (const entry of this.readAccounts()) {
-      if (entry.provider !== product.id) continue;
-      let domain = "";
-      try {
-        const resolved = await this.ctx.credentials.resolve(credentialRef(entry.credentialRef));
-        if (resolved === void 0) continue;
-        const parsed = JSON.parse(resolved.value);
-        domain = typeof parsed.domain === "string" ? parsed.domain : "";
-      } catch {
-        continue;
-      }
-      if (domain.length === 0) continue;
-      if (domain !== product.apiDomain) {
-        await this.removeAccount(entry.id);
-        removed.push(entry.id);
-      }
-    }
-    return removed;
-  }
   /** 添加新账号（登录成功后调用） */
   async addAccount(entry) {
     const accounts = [...this.readAccounts(), entry];
@@ -31358,6 +31324,626 @@ function queueDelayMs(info) {
   return Math.min(Math.trunc(raw), QUEUE_MAX_DELAY_MS);
 }
 
+// vendor/channel-pack/src/direct-fetch.ts
+var import_undici3 = __toESM(require_undici(), 1);
+
+// vendor/channel-pack/src/channel-fetch.ts
+var import_undici2 = __toESM(require_undici(), 1);
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import path from "node:path";
+
+// vendor/channel-pack/src/opencode.ts
+import { createHash, randomBytes } from "node:crypto";
+
+// vendor/channel-pack/src/retry-after.ts
+function parseRetryAfterMs(raw, nowMs = Date.now()) {
+  if (raw === void 0 || raw === null || raw === "") return void 0;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? Math.ceil(seconds * 1e3) : void 0;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : void 0;
+}
+function retryAfterMsFromResponse(headers, nowMs = Date.now()) {
+  if (headers === null || headers === void 0) return void 0;
+  return parseRetryAfterMs(headers.get("retry-after"), nowMs);
+}
+function retryAfterMsFromRecord(headers, nowMs = Date.now()) {
+  if (headers === void 0) return void 0;
+  return parseRetryAfterMs(headers["retry-after"] ?? headers["Retry-After"], nowMs);
+}
+
+// vendor/channel-pack/src/opencode-product.ts
+var OPENCODE = {
+  id: "opencode",
+  // ⚠️ 必须与客户端 `PROVIDERS` 里的 label 逐字一致（rail 宽度算式依赖它，
+  // 且 `opencode-client-panel.spec.ts` 有跨文件一致性断言）。
+  displayName: "OpenCode",
+  // 免费模型的新入口统一挂在 /inference/v1；/zen/v1 对匿名免费模型
+  // 会返回 FreeTierError。这里保留 v1 后缀拆分，便于复用下方路径字段。
+  baseUrl: "https://opencode.ai/inference",
+  chatPath: "/v1/chat/completions",
+  modelsPath: "/v1/models",
+  // ⚠️ 与本仓库其余 provider 的流式超时常量同档（保守值）。
+  chatHeaderTimeoutMs: 6e4,
+  chatChunkTimeoutMs: 12e4,
+  // ⚠️ 匿名凭证是**字面量** `public`：opencode 官方 CLI 在没有 key 时自己就用它
+  // （其 provider.ts 的 opencode 分支：`options: ok ? {} : { apiKey: 'public' }`）。
+  anonymousKey: "public",
+  // ⚠️ 兜底 UA。**v2 形状**（`opencode/<channel>/<version>/<client>`，major ≥ 2）：
+  // 旧的 `opencode/1.18.22` 自 2026-10-14 起被上游按名字拒掉（403 FreeTierError）。
+  // 接线层会用真机 `opencode --version` 的结果改写成同形状（`opencode.ts` 的
+  // `opencodeUserAgentForVersion`）。
+  defaultUserAgent: "opencode/latest/2.0.26/cli",
+  /**
+   * 模型能力元数据源（**远端**，能力的主来源）。
+   *
+   * ⚠️ 不是 `/zen/v1/models` —— 实测它只返回 `id`/`object`/`created`/
+   * `owned_by` 四个字段，**不含任何能力信息**（85 条全如此）。
+   * 能力在 **models.dev** 的 `opencode` 条目里，官方 CLI 自己就用它
+   * （`packages/core/src/models-dev.ts`）。见 `opencode-capability.ts`。
+   */
+  modelsDevUrl: "https://models.dev/api.json",
+  /** 能力表缓存 TTL（与官方 CLI 的 60 分钟同档）。 */
+  modelsDevTtlMs: 60 * 60 * 1e3
+};
+var OPENCODE_MODELS_DEV_URL = OPENCODE.modelsDevUrl;
+var OPENCODE_MODELS_DEV_TTL_MS = OPENCODE.modelsDevTtlMs;
+var OPENCODE_FALLBACK_MODELS = [
+  // ── 匿名可用（chat 端点，无需 key）──
+  { id: "big-pickle", name: "Big Pickle", isFree: true, contextWindow: 262144 },
+  { id: "space-bunny-free", name: "Space Bunny Free", isFree: true, contextWindow: 262144 },
+  { id: "longcat-2.5-preview-free", name: "LongCat 2.5 Preview Free", isFree: true, contextWindow: 262144 },
+  { id: "mimo-v2.6-flash-free", name: "MiMo-V2.6-Flash Free", isFree: true, contextWindow: 262144 },
+  { id: "mimo-v2.5-free", name: "MiMo-V2.5 Free", isFree: true, contextWindow: 262144 },
+  { id: "deepseek-v4.1-flash-free", name: "DeepSeek V4.1 Flash Free", isFree: true, contextWindow: 2e5 },
+  { id: "glm-5.3-flash-free", name: "GLM 5.3 Flash Free", isFree: true, contextWindow: 2e5 },
+  // ⚠️ 这两个官方 docs 标注走 `/v1/models/{id}`（Gemini 风格），但**实测
+  // chat 端点也通** ⇒ 按 chat 处理。**以实测为准，不以 docs 为准。**
+  { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", isFree: true, contextWindow: 262144 },
+  { id: "nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning Free", isFree: true, contextWindow: 262144 },
+  // ── 需付费 key（chat 端点；实测匿名为 401）──
+  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", isFree: false, contextWindow: 262144 },
+  { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash", isFree: false, contextWindow: 262144 },
+  { id: "glm-5.2", name: "GLM 5.2", isFree: false, contextWindow: 262144 },
+  { id: "kimi-k2.5", name: "Kimi K2.5", isFree: false, contextWindow: 262144 },
+  { id: "minimax-m2.7", name: "minimax M2.7", isFree: false, contextWindow: 262144 },
+  { id: "minimax-m3", name: "minimax M3", isFree: false, contextWindow: 262144 },
+  { id: "qwen3.8-max", name: "Qwen3.8 Max", isFree: false, contextWindow: 262144 }
+];
+var FREE_IDS = new Set(OPENCODE_FALLBACK_MODELS.filter((m) => m.isFree).map((m) => m.id));
+var REACHABLE_IDS = new Set(OPENCODE_FALLBACK_MODELS.map((m) => m.id));
+function isFreeOpencodeModel(id) {
+  return FREE_IDS.has(id);
+}
+function isReachableOpencodeModel(id) {
+  return REACHABLE_IDS.has(id);
+}
+function readableDetail(body) {
+  const text = body.trim();
+  if (text === "") return "\uFF08\u4E0A\u6E38\u672A\u8FD4\u56DE\u9519\u8BEF\u8BE6\u60C5\uFF09";
+  try {
+    const data = JSON.parse(text);
+    const nested = typeof data.error === "object" && data.error !== null ? data.error.message : data.error;
+    const parts = [data.message, nested, data.msg].filter((v) => typeof v === "string" && v.length > 0);
+    if (parts.length > 0) return parts.join(" ");
+  } catch {
+  }
+  return text.length > 500 ? `${text.slice(0, 500)}\u2026` : text;
+}
+function classifyOpencodeError(status, body, headers) {
+  const retryAfterMs = retryAfterMsFromRecord(headers);
+  const detail = readableDetail(body);
+  const lower = body.toLowerCase();
+  if (body.includes("FreeUsageLimitError")) {
+    return { kind: "free_usage_limit", ...retryAfterMs === void 0 ? {} : { retryAfterMs }, detail };
+  }
+  if (body.includes("GoUsageLimitError")) {
+    return { kind: "go_usage_limit", ...retryAfterMs === void 0 ? {} : { retryAfterMs }, detail };
+  }
+  if (body.includes("FreeTierError")) {
+    return { kind: "free_tier", detail };
+  }
+  if (status === 429 || lower.includes("too many requests") || lower.includes("rate limit")) {
+    return { kind: "rate_limit", ...retryAfterMs === void 0 ? {} : { retryAfterMs }, detail };
+  }
+  if (status === 0 || lower.includes("fetch failed") || lower.includes("terminated") || lower.includes("econnreset") || lower.includes("socket hang up") || lower.includes("getaddrinfo") || lower.includes("econnrefused")) {
+    return { kind: "transport", detail };
+  }
+  if (status === 402 || lower.includes("insufficient account funds") || lower.includes("insufficient funds") || lower.includes("insufficient balance")) {
+    return { kind: "quota", detail };
+  }
+  if (status === 401 || status === 403) return { kind: "auth", detail };
+  if (status >= 500) return { kind: "server", detail };
+  return { kind: "auth", detail };
+}
+
+// vendor/channel-pack/src/opencode.ts
+var BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+var SESSION_TAIL_LENGTH = 26;
+var SESSION_RANDOM_LENGTH = SESSION_TAIL_LENGTH - 12;
+function randomBase62(length) {
+  const bytes = randomBytes(length);
+  let out = "";
+  for (let i = 0; i < length; i++) out += BASE62[bytes[i] % BASE62.length];
+  return out;
+}
+function deriveProjectId(identity, generation) {
+  const inner = createHash("sha256").update(`${identity} ${generation}`).digest("hex");
+  return createHash("sha1").update(`git-remote:opencode/${inner}`).digest("hex");
+}
+function deriveSessionId() {
+  const timestamp = Date.now();
+  if (timestamp !== lastSessionStamp) {
+    lastSessionStamp = timestamp;
+    sessionSequence = 0;
+  }
+  sessionSequence += 1;
+  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(sessionSequence));
+  let hex = "";
+  for (let i = 0; i < 6; i += 1) {
+    hex += Number(value >> BigInt(40 - 8 * i) & 0xffn).toString(16).padStart(2, "0");
+  }
+  return `ses_${hex}${randomBase62(SESSION_RANDOM_LENGTH)}`;
+}
+var lastSessionStamp = 0;
+var sessionSequence = 0;
+var OPENCODE_V2_UA = /^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i;
+function opencodeUserAgent(override) {
+  const value = override?.trim();
+  if (value !== void 0 && value.length > 0 && OPENCODE_V2_UA.test(value)) return value;
+  return OPENCODE.defaultUserAgent;
+}
+function opencodeUserAgentForVersion(version) {
+  const value = version?.trim();
+  if (value === void 0 || !/^\d+\.\d+\.\d+$/.test(value)) return void 0;
+  const [major] = value.split(".");
+  if (Number(major) < 2) return void 0;
+  return `opencode/latest/${value}/cli`;
+}
+function opencodeHeaders(fingerprint, sessionId, userAgent) {
+  return {
+    "x-opencode-project": fingerprint.projectId,
+    "x-opencode-session": sessionId,
+    // v2：这四个头同值，缺一即 403。
+    "x-opencode-session-id": sessionId,
+    "x-session-affinity": sessionId,
+    "x-session-id": sessionId,
+    "x-opencode-client": "cli",
+    "user-agent": userAgent
+  };
+}
+function maskLabel(url) {
+  return url.replace(/^(\w+:\/\/[^:@/]+):[^@/]*@/, "$1:***@");
+}
+function authorityOf(raw) {
+  const afterScheme = raw.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
+  const cut = afterScheme.search(/[/?#]/);
+  return cut === -1 ? afterScheme : afterScheme.slice(0, cut);
+}
+function hasExplicitPort(authority) {
+  const hostPart = authority.includes("@") ? authority.slice(authority.lastIndexOf("@") + 1) : authority;
+  return /:\d+$/.test(hostPart);
+}
+function normalizeProxy(input) {
+  const raw = input.trim();
+  if (raw.length === 0) return { ok: false, reason: "\u4EE3\u7406\u5730\u5740\u4E3A\u7A7A\uFF08\u5982\u9700\u6E05\u9664\uFF0C\u8BF7\u70B9\u300C\u6E05\u9664\u4EE3\u7406\u300D\uFF09" };
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) ? raw : `http://${raw}`;
+  const url = withScheme.replace(/^socks5h:\/\//, "socks5://");
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, reason: "\u65E0\u6CD5\u89E3\u6790\u4E3A URL\uFF08\u5F62\u5982 http://host:port\uFF09" };
+  }
+  const kind = parsed.protocol === "http:" || parsed.protocol === "https:" ? "http" : parsed.protocol === "socks5:" ? "socks5" : void 0;
+  if (kind === void 0) {
+    return { ok: false, reason: `\u4E0D\u652F\u6301\u7684\u534F\u8BAE ${parsed.protocol.replace(":", "")}\uFF08\u4EC5\u652F\u6301 http/https/socks5\uFF09` };
+  }
+  if (parsed.hostname.length === 0) return { ok: false, reason: "\u7F3A\u5C11\u4E3B\u673A\u540D" };
+  if (!hasExplicitPort(authorityOf(raw))) return { ok: false, reason: "\u7F3A\u5C11\u7AEF\u53E3\uFF08\u5982 http://127.0.0.1:7897\uFF09" };
+  const scheme = kind === "socks5" ? "socks5" : parsed.protocol.replace(":", "");
+  const auth = parsed.username.length > 0 ? `${parsed.username}${parsed.password.length > 0 ? `:${parsed.password}` : ""}@` : "";
+  const rawHostPort = authorityOf(raw);
+  const hostOnly = auth.length > 0 ? rawHostPort.slice(rawHostPort.lastIndexOf("@") + 1) : rawHostPort;
+  const portMatch = /:(\d+)$/.exec(hostOnly);
+  const port = portMatch?.[1] ?? parsed.port;
+  const normalized = `${scheme}://${auth}${parsed.hostname}:${port}`;
+  return { ok: true, proxy: { kind, url: normalized, label: maskLabel(normalized) } };
+}
+
+// vendor/channel-pack/src/opencode-proxy.ts
+var import_undici = __toESM(require_undici(), 1);
+import { connect as netConnect } from "node:net";
+import { URL as URL2 } from "node:url";
+var PROXY_CACHE_LIMIT = 16;
+var cache = /* @__PURE__ */ new Map();
+function buildProxyDispatcher(proxy) {
+  const existing = cache.get(proxy.url);
+  if (existing !== void 0) return existing;
+  const created = createProxyDispatcher(proxy);
+  cache.delete(proxy.url);
+  cache.set(proxy.url, created);
+  while (cache.size > PROXY_CACHE_LIMIT) {
+    const oldest = cache.keys().next();
+    if (oldest.done === true) break;
+    const victim = cache.get(oldest.value);
+    cache.delete(oldest.value);
+    if (victim !== void 0) {
+      void Promise.resolve(victim.close?.()).catch(() => {
+      });
+    }
+  }
+  return created;
+}
+function createProxyDispatcher(proxy) {
+  return proxy.kind === "http" ? buildHttpDispatcher(proxy.url) : buildSocksDispatcher(proxy);
+}
+async function closeAllProxyDispatchers() {
+  const all = [...cache.values()];
+  cache.clear();
+  await Promise.allSettled(all.map(async (d) => {
+    try {
+      await d.close();
+    } catch {
+    }
+  }));
+}
+function buildHttpDispatcher(url) {
+  return new import_undici.ProxyAgent({
+    uri: url,
+    // ⚠️ `pipelining: 0` 是必需的（见模块头）；`clientFactory` 由 undici 在
+    // 每次建连时调用，用它把默认 Pool 换成禁用复用的 Pool。
+    clientFactory: (origin, opts) => new import_undici.Pool(origin, { ...opts, pipelining: 0 })
+  });
+}
+function buildSocks5Handshake(proxy) {
+  const parsed = new URL2(proxy.url);
+  const wantsAuth = parsed.username.length > 0;
+  return wantsAuth ? new Uint8Array([5, 2, 0, 2]) : new Uint8Array([5, 1, 0]);
+}
+async function openSocks5Tunnel(proxy, host, port) {
+  const parsed = new URL2(proxy.url);
+  const socket = await new Promise((resolve2, reject) => {
+    const s = netConnect({ host: parsed.hostname, port: Number(parsed.port) });
+    s.once("connect", () => resolve2(s));
+    s.once("error", reject);
+  });
+  const fail = (error) => {
+    throw error;
+  };
+  const write = (bytes) => new Promise((resolve2, reject) => {
+    socket.write(Buffer.from(bytes), (err) => err ? reject(err) : resolve2());
+  });
+  let leftover = Buffer.alloc(0);
+  let pending;
+  const detach = () => {
+    socket.off("data", onData);
+    socket.off("error", onError);
+    socket.off("close", onClose);
+  };
+  const fulfill = () => {
+    if (pending === void 0 || leftover.length < pending.n) return;
+    const n = pending.n;
+    const target = pending;
+    pending = void 0;
+    const value = new Uint8Array(leftover.subarray(0, n));
+    leftover = leftover.subarray(n);
+    detach();
+    target.resolve(value);
+  };
+  const onData = (chunk) => {
+    leftover = leftover.length === 0 ? chunk : Buffer.concat([leftover, chunk]);
+    fulfill();
+  };
+  const onError = (error) => {
+    const target = pending;
+    pending = void 0;
+    detach();
+    target?.reject(error);
+  };
+  const onClose = () => {
+    const target = pending;
+    pending = void 0;
+    detach();
+    target?.reject(new Error("SOCKS5 \u4EE3\u7406\u5728\u63E1\u624B\u5B8C\u6210\u524D\u5173\u95ED\u4E86\u8FDE\u63A5"));
+  };
+  const read = (n) => new Promise((resolve2, reject) => {
+    if (n <= 0) {
+      resolve2(new Uint8Array(0));
+      return;
+    }
+    pending = { n, resolve: resolve2, reject };
+    socket.on("data", onData);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    fulfill();
+  });
+  try {
+    await write(buildSocks5Handshake(proxy));
+    const methodReply = await read(2);
+    const method = methodReply[1];
+    if (method === 2) {
+      const user = Buffer.from(decodeURIComponent(parsed.username), "utf8");
+      const pass = Buffer.from(decodeURIComponent(parsed.password), "utf8");
+      await write(new Uint8Array([1, user.length, ...user, pass.length, ...pass]));
+      const authReply = await read(2);
+      if (authReply[1] !== 0) fail(new Error("SOCKS5 \u7528\u6237\u540D/\u5BC6\u7801\u8BA4\u8BC1\u5931\u8D25"));
+    } else if (method !== 0) {
+      fail(new Error(`SOCKS5 \u670D\u52A1\u7AEF\u8981\u6C42\u672A\u77E5\u8BA4\u8BC1\u65B9\u5F0F 0x${(method ?? 0).toString(16)}`));
+    }
+    const target = Buffer.from(host, "utf8");
+    await write(new Uint8Array([
+      5,
+      1,
+      0,
+      3,
+      target.length,
+      ...target,
+      port >>> 8 & 255,
+      port & 255
+    ]));
+    const reply2 = await read(4);
+    if (reply2[1] !== 0) {
+      fail(new Error(`SOCKS5 CONNECT \u88AB\u62D2\u7EDD\uFF08\u5E94\u7B54\u7801 0x${(reply2[1] ?? 0).toString(16)}\uFF09`));
+    }
+    const atyp = reply2[3];
+    if (atyp === 1) await read(4 + 2);
+    else if (atyp === 4) await read(16 + 2);
+    else if (atyp === 3) await read(1).then((lenByte) => read((lenByte[0] ?? 0) + 2));
+    else fail(new Error(`SOCKS5 \u5E94\u7B54\u7684\u5730\u5740\u7C7B\u578B 0x${(atyp ?? 0).toString(16)} \u4E0D\u53D7\u652F\u6301`));
+    return socket;
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
+}
+function buildSocksDispatcher(proxy) {
+  return new import_undici.Agent({
+    connect: ((opts, callback) => {
+      const host = String(opts.hostname ?? opts.host ?? "");
+      const port = Number(opts.port ?? 443);
+      if (host.length === 0) {
+        callback(new Error("SOCKS5 \u4EE3\u7406\uFF1A\u76EE\u6807 host \u4E3A\u7A7A"), void 0);
+        return;
+      }
+      openSocks5Tunnel(proxy, host, port).then((socket) => {
+        callback(null, socket);
+      }).catch((error) => {
+        callback(error, void 0);
+      });
+    })
+  });
+}
+
+// vendor/channel-pack/src/channel-fetch.ts
+function parseWindowsProxy(output) {
+  const value = (name2) => new RegExp(`^\\s*${name2}\\s+REG_\\w+\\s+(.+)$`, "mi").exec(output)?.[1]?.trim() ?? "";
+  if (Number(value("ProxyEnable")) !== 1 || value("ProxyServer") === "") return void 0;
+  return { server: value("ProxyServer"), bypass: value("ProxyOverride") };
+}
+async function readWindowsProxy() {
+  const executable = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe");
+  try {
+    const { stdout } = await promisify(execFile)(executable, [
+      "query",
+      "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
+    ], { windowsHide: true, timeout: 2e3, maxBuffer: 64 * 1024, encoding: "utf8" });
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+function loopback(host) {
+  return host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+function channelProxyBypassed(target, patterns, windows = false) {
+  const hostname = target.hostname.toLowerCase();
+  const port = target.port || (target.protocol === "https:" ? "443" : "80");
+  return patterns.split(/[;,\s]+/).filter(Boolean).some((raw) => {
+    let pattern = raw.toLowerCase();
+    if (pattern === "*") return true;
+    if (windows && pattern === "<local>") return !hostname.includes(".") && !hostname.includes(":");
+    const withPort = /^(.*):(\d+)$/.exec(pattern);
+    if (withPort) {
+      if (withPort[2] !== port) return false;
+      pattern = withPort[1];
+    }
+    if (pattern.includes("*")) {
+      const escaped = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+      return new RegExp(`^${escaped}$`, "i").test(hostname);
+    }
+    const domain = pattern.replace(/^\./, "");
+    return hostname === domain || !windows && hostname.endsWith(`.${domain}`);
+  });
+}
+function windowsProxyFor(target, config) {
+  if (channelProxyBypassed(target, config.bypass, true)) return void 0;
+  if (!config.server.includes("=")) return config.server;
+  const entries = new Map(config.server.split(";").map((row) => {
+    const at = row.indexOf("=");
+    return [row.slice(0, at).trim().toLowerCase(), row.slice(at + 1).trim()];
+  }));
+  const selected = entries.get(target.protocol.slice(0, -1));
+  if (selected) return selected;
+  const socks = entries.get("socks");
+  return socks ? `socks5://${socks.replace(/^socks5h?:\/\//, "")}` : void 0;
+}
+var ChannelNetworkError = class extends Error {
+  name = "ChannelNetworkError";
+};
+function networkFailure(error, route) {
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) return error;
+  const codes = /* @__PURE__ */ new Set();
+  let current = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const record = current;
+    if (typeof record.code === "string" && /^[A-Z][A-Z0-9_]{1,80}$/.test(record.code)) codes.add(record.code);
+    current = record.cause;
+  }
+  return new ChannelNetworkError(`\u6E20\u9053\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF08${route}${codes.size ? `\uFF1B${[...codes].join("\u3001")}` : ""}\uFF09\uFF1A\u8BF7\u68C0\u67E5\u4EE3\u7406\u8FDE\u901A\u6027\u540E\u91CD\u8BD5`, { cause: error });
+}
+function createChannelFetch(options = {}) {
+  const dispatchers = /* @__PURE__ */ new Map();
+  let system;
+  let systemAt = 0;
+  let closed = false;
+  const fetchImpl = (input, init) => (options.fetchImpl ?? globalThis.fetch)(input, init);
+  const fetcher = async (input, init) => {
+    if (closed) throw new Error("\u6E20\u9053\u51FA\u7F51\u670D\u52A1\u5DF2\u505C\u6B62");
+    const target = new URL(input instanceof Request ? input.url : String(input));
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : void 0);
+    signal?.throwIfAborted();
+    let route = "\u76F4\u8FDE";
+    try {
+      if (init?.dispatcher !== void 0) {
+        route = "\u8C03\u7528\u65B9\u6307\u5B9A\u4EE3\u7406";
+        return await fetchImpl(input, init);
+      }
+      if (loopback(target.hostname)) {
+        return await fetchImpl(input, init);
+      }
+      if (options.outlet?.active()) {
+        route = "\u63D2\u4EF6\u51FA\u53E3\u4EE3\u7406";
+        return await options.outlet.fetch(input, { ...init, redirect: "error" });
+      }
+      const env = options.environment ?? process.env;
+      const envValue = (name2) => env[name2.toLowerCase()] ?? env[name2];
+      const proxy = (target.protocol === "https:" ? envValue("HTTPS_PROXY") : envValue("HTTP_PROXY")) || envValue("ALL_PROXY");
+      let address;
+      if (proxy) {
+        route = "\u73AF\u5883\u4EE3\u7406";
+        if (!channelProxyBypassed(target, envValue("NO_PROXY") ?? "")) address = proxy;
+      } else if ((options.platform ?? process.platform) === "win32") {
+        if (!system || Date.now() - systemAt >= 3e4) {
+          systemAt = Date.now();
+          system = (options.readSystemProxy ?? readWindowsProxy)().then(parseWindowsProxy);
+        }
+        const config = await system;
+        signal?.throwIfAborted();
+        if (closed) throw new Error("\u6E20\u9053\u51FA\u7F51\u670D\u52A1\u5DF2\u505C\u6B62");
+        if (config) {
+          address = windowsProxyFor(target, config);
+          route = "Windows \u7CFB\u7EDF\u4EE3\u7406";
+        }
+      }
+      if (!address) {
+        if (route !== "\u76F4\u8FDE") route = "\u76F4\u8FDE\uFF0C\u4EE3\u7406\u4F8B\u5916\u6216\u5F53\u524D\u534F\u8BAE\u65E0\u4EE3\u7406";
+        return await fetchImpl(input, init);
+      }
+      const proxyUrl = new URL(address.includes("://") ? address : `http://${address}`);
+      const authority = `${proxyUrl.hostname}:${proxyUrl.port || (proxyUrl.protocol === "https:" ? "443" : proxyUrl.protocol.startsWith("socks") ? "1080" : "80")}`;
+      const auth = proxyUrl.username ? `${proxyUrl.username}${proxyUrl.password ? `:${proxyUrl.password}` : ""}@` : "";
+      const parsed = normalizeProxy(`${proxyUrl.protocol}//${auth}${authority}`);
+      if (!parsed.ok) throw new Error("\u4EE3\u7406\u5730\u5740\u65E0\u6548");
+      let dispatcher = dispatchers.get(parsed.proxy.url);
+      if (!dispatcher) {
+        dispatcher = options.dispatcherFor ? options.dispatcherFor(parsed.proxy) : new import_undici2.Dispatcher1Wrapper(createProxyDispatcher(parsed.proxy));
+        dispatchers.set(parsed.proxy.url, dispatcher);
+      }
+      return await fetchImpl(input, { ...init, dispatcher });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      throw networkFailure(error, route);
+    }
+  };
+  return {
+    fetch: fetcher,
+    async close() {
+      closed = true;
+      const all = [...dispatchers.values()];
+      dispatchers.clear();
+      await Promise.allSettled(all.map((dispatcher) => dispatcher.destroy()));
+    }
+  };
+}
+
+// vendor/channel-pack/src/direct-fetch.ts
+var directLane = { fetch: null };
+function createDirectFetch(options = {}) {
+  const agent = new import_undici3.Agent();
+  const lifetime = new AbortController();
+  let closing;
+  const send = async (input, init) => {
+    const injected = options.fetchImpl ?? directLane.fetch;
+    if (injected) return injected(input, init);
+    const dispatcher = init?.dispatcher ?? agent;
+    let target = input;
+    let requestInit = init;
+    if (input instanceof Request) {
+      const request = new Request(input, init);
+      target = request.url;
+      requestInit = {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+        signal: request.signal,
+        redirect: request.redirect,
+        credentials: request.credentials,
+        cache: request.cache,
+        integrity: request.integrity,
+        keepalive: request.keepalive,
+        mode: request.mode,
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
+        ...request.body ? { duplex: "half" } : {}
+      };
+    }
+    return (0, import_undici3.fetch)(target, { ...requestInit, dispatcher });
+  };
+  const outlet = options.outlet;
+  const network = createChannelFetch({
+    ...options,
+    fetchImpl: send,
+    outlet: outlet && {
+      active: () => outlet.active(),
+      fetch: (input, init) => {
+        if (!outlet.fetchSigned) {
+          throw new Error("\u6240\u9009\u63D2\u4EF6\u51FA\u53E3\u5C1A\u672A\u63A5\u5165\u7B7E\u540D\u4F20\u8F93\uFF0C\u8BF7\u5347\u7EA7\u51FA\u53E3\u9002\u914D\uFF1B\u8BF7\u6C42\u672A\u7ED5\u8FC7\u8BE5\u51FA\u53E3");
+        }
+        return outlet.fetchSigned(input, init, send);
+      }
+    }
+  });
+  return {
+    fetch: async (input, init) => {
+      lifetime.signal.throwIfAborted();
+      const signal = init?.signal ?? (input instanceof Request ? input.signal : void 0);
+      const combined = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+      combined.throwIfAborted();
+      return network.fetch(input, { ...init, signal: combined });
+    },
+    close() {
+      if (!closing) {
+        lifetime.abort(new DOMException("CodeArts \u7B7E\u540D\u4F20\u8F93\u5DF2\u505C\u6B62", "AbortError"));
+        closing = Promise.allSettled([network.close(), agent.destroy()]).then(() => {
+        });
+      }
+      return closing;
+    }
+  };
+}
+var mounted = /* @__PURE__ */ new Set();
+function attachDirectFetch(fetcher) {
+  const binding = { fetch: fetcher };
+  mounted.add(binding);
+  return () => {
+    mounted.delete(binding);
+  };
+}
+var fallback;
+var directFetch = (input, init) => {
+  const injected = directLane.fetch ?? [...mounted].at(-1)?.fetch;
+  if (injected) return injected(input, init);
+  fallback ??= createDirectFetch();
+  return fallback.fetch(input, init);
+};
+async function closeDirectFetch() {
+  const previous = fallback;
+  fallback = void 0;
+  await previous?.close();
+}
+
 // vendor/channel-pack/src/models.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync4, writeFileSync as writeFileSync4 } from "node:fs";
 
@@ -31470,7 +32056,7 @@ async function fetchSignedGet(fetcher, url, ak, sk, st, extraUnsignedHeaders) {
     return void 0;
   }
 }
-async function fetchCodeArtsRemoteModels(credential, fetcher = fetch) {
+async function fetchCodeArtsRemoteModels(credential, fetcher = directFetch) {
   const { access_key_id: ak, secret_access_key: sk, security_token: st } = credential;
   if (!ak || !sk) return [];
   const models = [];
@@ -32076,7 +32662,7 @@ var FileDeadModelStore = class {
   }
 };
 var store;
-var cache;
+var cache2;
 var logger;
 var injectedCtx;
 function ensureStore() {
@@ -32093,16 +32679,16 @@ function ensureStore() {
 function configureDeadModelStore(ctx) {
   logger = ctx.logger;
   injectedCtx = ctx;
-  if (cache !== void 0 && Object.keys(cache).length > 0 && tryPersist()) {
+  if (cache2 !== void 0 && Object.keys(cache2).length > 0 && tryPersist()) {
     store = void 0;
-    cache = void 0;
+    cache2 = void 0;
     return;
   }
   store = void 0;
 }
 function tryPersist(prunedCount = 0) {
   try {
-    ensureStore().save(cache ?? {});
+    ensureStore().save(cache2 ?? {});
     if (prunedCount > 0) {
       logger?.warn(`[channel-pack] \u5DF2\u5931\u6548\u6A21\u578B\u8BB0\u5F55\u6E05\u7406 ${prunedCount} \u6761\uFF08\u8D85\u8FC7 TTL\uFF09`);
     }
@@ -32116,7 +32702,7 @@ function persist(prunedCount = 0) {
   tryPersist(prunedCount);
 }
 function loadRecords() {
-  if (cache !== void 0) return cache;
+  if (cache2 !== void 0) return cache2;
   const raw = ensureStore().load();
   const ttl = ttlMs();
   const now = Date.now();
@@ -32136,7 +32722,7 @@ function loadRecords() {
     }
     if (Object.keys(keep).length > 0) out[provider] = keep;
   }
-  cache = out;
+  cache2 = out;
   if (pruned > 0) persist(pruned);
   return out;
 }
@@ -33145,7 +33731,7 @@ var CodeArtsAdapter = class extends LlmAdapter {
   constructor(options) {
     super();
     this.options = options;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? directFetch;
     this.chatId = options.chatId ?? crypto.randomUUID().replace(/-/g, "");
     this.sessionId = options.sessionId ?? crypto.randomUUID().replace(/-/g, "");
   }
@@ -33581,15 +34167,16 @@ var CodeArtsAdapter = class extends LlmAdapter {
           } catch {
             continue;
           }
-          if (typeof data.error_code === "string" && data.error_code.length > 0) {
-            const message2 = typeof data.error_msg === "string" && data.error_msg.length > 0 ? data.error_msg : data.error_code;
-            if (isSseQuotaExhaustedErrorCode(data.error_code, message2)) {
-              throw new SseQuotaExhaustedError(data.error_code, message2);
+          if (typeof data.error_code === "string" && data.error_code.length > 0 || data.error_code === 4004) {
+            const errorCode = String(data.error_code);
+            const message2 = typeof data.error_msg === "string" && data.error_msg.length > 0 ? data.error_msg : errorCode;
+            if (isSseQuotaExhaustedErrorCode(errorCode, message2)) {
+              throw new SseQuotaExhaustedError(errorCode, message2);
             }
-            if (isSseQueueErrorCode(data.error_code)) {
-              throw new SseQueueRetryError(data.error_code, message2);
+            if (isSseQueueErrorCode(errorCode)) {
+              throw new SseQueueRetryError(errorCode, message2);
             }
-            if (data.error_code === CODEARTS_BENEFIT_NOT_FOUND_ERROR_CODE) {
+            if (errorCode === CODEARTS_BENEFIT_NOT_FOUND_ERROR_CODE || errorCode === "4004") {
               throw new LlmError2(`codearts: ${message2}`, BENEFIT_NOT_FOUND_CODE, { status: 200 });
             }
             throw new LlmError2(`codearts: ${message2}`, "INVALID_REQUEST", { status: 200 });
@@ -33824,18 +34411,6 @@ function registerCodeArtsLlm(ctx, options) {
 }
 var RATE_LIMIT_BUSINESS_CODE = 6004;
 var RATE_LIMIT_PATTERN = /频率限制|频率超出|使用量已超出|重置|rate.?limit|frequency limit|usage exceeds|too many requests/i;
-var MODEL_SATURATION_BUSINESS_CODE = 14003;
-var MODEL_SATURATION_PATTERN = /模型繁忙|请求量饱和|model\s+busy|currently\s+saturated/i;
-function isModelSaturationError(status, body) {
-  if (typeof status === "number" && status < 400) return false;
-  if (body.length === 0) return false;
-  try {
-    const code = JSON.parse(body).code;
-    if (code === MODEL_SATURATION_BUSINESS_CODE || code === String(MODEL_SATURATION_BUSINESS_CODE)) return true;
-  } catch {
-  }
-  return MODEL_SATURATION_PATTERN.test(body);
-}
 function hasRateLimitBusinessCode(body) {
   try {
     const data = JSON.parse(body);
@@ -33852,7 +34427,7 @@ function isRateLimited(body, status) {
 var RESET_TIME_PATTERN = /(?:将在|reset at)\s+([\d-]+\s+[\d:]+)\s+(UTC[+-]\d+(?::\d+)?)/i;
 var RATE_LIMIT_FALLBACK_MS = 36e5;
 function parseRateLimitError(body, currentModel, status) {
-  const fallback = () => ({
+  const fallback2 = () => ({
     modelId: currentModel,
     resetTimeMs: Date.now() + RATE_LIMIT_FALLBACK_MS
   });
@@ -33867,52 +34442,27 @@ function parseRateLimitError(body, currentModel, status) {
       }
     }
     if (isRateLimited(body, status)) {
-      return fallback();
+      return fallback2();
     }
     return null;
   } catch {
-    return status === 429 ? fallback() : null;
+    return status === 429 ? fallback2() : null;
   }
 }
 
-// vendor/channel-pack/src/buddy-adapter.ts
+// vendor/channel-pack/src/lobsterai-adapter.ts
 import {
-  attributionHeaders as attributionHeaders2,
-  CONTEXT_WINDOW_EXCEEDED_CODE as CONTEXT_WINDOW_EXCEEDED_CODE2,
-  isContextWindowExceededError as isContextWindowExceededError2,
   LlmAdapter as LlmAdapter2,
   LlmError as LlmError3,
   ReasoningEffortId as ReasoningEffortId2
 } from "@deepseek-ai/dsh-llm";
 import { ToolCallId as ToolCallId2 } from "@deepseek-ai/dsh-llm";
 
+// vendor/channel-pack/src/lobsterai.ts
+import { createHash as createHash2 } from "node:crypto";
+
 // vendor/channel-pack/src/buddy.ts
-var AUTH_STATE_PATH = "/v2/plugin/auth/state";
-var AUTH_TOKEN_PATH = "/v2/plugin/auth/token";
-var LOGIN_ACCOUNT_PATH = "/v2/plugin/login/account";
-var AUTH_REFRESH_PATH = "/v2/plugin/auth/token/refresh";
-var CONFIG_PATH = "/v3/config";
 var LOGIN_TIMEOUT_MS = 5 * 60 * 1e3;
-var POLL_INTERVAL_MS = 1e3;
-var STATE_REQUEST_TIMEOUT_MS = 1e4;
-var REQUEST_TIMEOUT_MS = 6e4;
-var CODE_TOKEN_NOT_READY = 11217;
-var CODE_ACCOUNT_NOT_READY = 12151;
-var HTTP_HEADER_DOMAIN = "X-Domain";
-var HTTP_HEADER_ENTERPRISE_ID = "X-Enterprise-Id";
-var HTTP_HEADER_TENANT_ID = "X-Tenant-Id";
-var HTTP_HEADER_NO_AUTHORIZATION = "X-No-Authorization";
-var HTTP_HEADER_NO_USER_ID = "X-No-User-Id";
-var HTTP_HEADER_NO_ENTERPRISE_ID = "X-No-Enterprise-Id";
-var HTTP_HEADER_NO_DEPARTMENT_INFO = "X-No-Department-Info";
-var HTTP_HEADER_REFRESH_TOKEN = "X-Refresh-Token";
-var HTTP_HEADER_AUTH_REFRESH_SOURCE = "X-Auth-Refresh-Source";
-var HTTP_HEADER_PRODUCT = "X-Product";
-var HTTP_HEADER_PRODUCT_CODE = "X-Product-Code";
-var BUDDY_USER_AGENT = "CodeBuddyIDE/1.106.1";
-var BUDDY_DEPLOYMENT_TYPE = "SaaS";
-var AUTH_REFRESH_SOURCE = "ide-main";
-var API_DOMAIN = "copilot.tencent.com";
 function credentialExpiresAtMs(credential) {
   const raw = credential.expires_at;
   if (typeof raw === "string" && raw.length > 0) {
@@ -33936,2071 +34486,8 @@ function jwtExpiresAtMs(token) {
     return void 0;
   }
 }
-function jwtNickname(token) {
-  if (typeof token !== "string" || token.length === 0) return "";
-  const parts = token.split(".");
-  if (parts.length < 2) return "";
-  try {
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    const nickname = payload.nickname ?? payload.preferred_username ?? payload.name;
-    return typeof nickname === "string" ? stripControlChars(nickname) : "";
-  } catch {
-    return "";
-  }
-}
-function isExpired(credential) {
-  const expiresAt = credentialExpiresAtMs(credential);
-  return expiresAt === void 0 ? false : Date.now() >= expiresAt;
-}
-function isRefreshable(credential) {
-  return credential.refresh_token.length > 0;
-}
-function credentialRequestHeaders(credential) {
-  const headers = {
-    [HTTP_HEADER_DOMAIN]: credential.domain || API_DOMAIN,
-    "User-Agent": BUDDY_USER_AGENT
-  };
-  if (credential.enterprise_id !== void 0 && credential.enterprise_id.length > 0) {
-    headers[HTTP_HEADER_ENTERPRISE_ID] = credential.enterprise_id;
-    headers[HTTP_HEADER_TENANT_ID] = credential.enterprise_id;
-  }
-  return headers;
-}
-function credentialAuthHeaders(credential) {
-  return {
-    ...credentialRequestHeaders(credential),
-    Authorization: `Bearer ${credential.access_token}`
-  };
-}
-function readStringField(data, key) {
-  const value = data[key];
-  if (typeof value === "string") return stripControlChars(value);
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return "";
-}
-function stripControlChars(value) {
-  return value.replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s{2,}/g, " ").trim();
-}
-function readNumberField(data, key) {
-  const value = data[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())) return Number(value);
-  return void 0;
-}
-function absoluteExpiryMs(record, absoluteKey, relativeKey, accessToken) {
-  const absolute = readStringField(record, absoluteKey);
-  if (absolute.length > 0) {
-    const asNumber = /^\d+$/.test(absolute) ? Number(absolute) : Date.parse(absolute);
-    if (Number.isFinite(asNumber)) {
-      const ms = asNumber > 1e12 ? asNumber : asNumber * 1e3;
-      return String(ms);
-    }
-    return absolute;
-  }
-  const relativeSeconds = readNumberField(record, relativeKey);
-  if (relativeSeconds === void 0) {
-    return absoluteKey === "expiresAt" ? "" : "";
-  }
-  const baseMs = jwtIssuedAtMs(accessToken) ?? Date.now();
-  return String(baseMs + relativeSeconds * 1e3);
-}
-function jwtIssuedAtMs(token) {
-  if (typeof token !== "string" || token.length === 0) return void 0;
-  const parts = token.split(".");
-  if (parts.length < 2) return void 0;
-  try {
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    return typeof payload.iat === "number" && Number.isFinite(payload.iat) ? payload.iat * 1e3 : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function parseTokenData(data) {
-  const record = typeof data === "object" && data !== null ? data : {};
-  const tokenType = readStringField(record, "tokenType");
-  const accessToken = readStringField(record, "accessToken");
-  return {
-    accessToken,
-    refreshToken: readStringField(record, "refreshToken"),
-    expiresAt: absoluteExpiryMs(record, "expiresAt", "expiresIn", accessToken),
-    refreshExpiresAt: absoluteExpiryMs(record, "refreshExpiresAt", "refreshExpiresIn", accessToken),
-    tokenType: tokenType.length > 0 ? tokenType : "Bearer",
-    scope: readStringField(record, "scope"),
-    domain: readStringField(record, "domain")
-  };
-}
-function parseAccountData(data) {
-  const record = typeof data === "object" && data !== null ? data : {};
-  const accountType = readStringField(record, "type");
-  return {
-    uid: readStringField(record, "uid"),
-    nickname: readStringField(record, "nickname"),
-    enterpriseId: readStringField(record, "enterpriseId"),
-    accountType: accountType.length > 0 ? accountType : "personal"
-  };
-}
-function buildCredential(token, account) {
-  const nickname = account.nickname.length > 0 ? account.nickname : jwtNickname(token.accessToken);
-  return {
-    access_token: token.accessToken,
-    refresh_token: token.refreshToken,
-    expires_at: token.expiresAt,
-    refresh_expires_at: token.refreshExpiresAt,
-    token_type: token.tokenType,
-    scope: token.scope,
-    domain: token.domain,
-    user_id: account.uid.length > 0 ? account.uid : jwtSubject(token.accessToken),
-    nickname,
-    enterprise_id: account.enterpriseId,
-    account_type: account.accountType
-  };
-}
-function jwtSubject(token) {
-  if (typeof token !== "string" || token.length === 0) return "";
-  const parts = token.split(".");
-  if (parts.length < 2) return "";
-  try {
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    return typeof payload.sub === "string" ? payload.sub : "";
-  } catch {
-    return "";
-  }
-}
-var MODEL_DISPLAY_NAMES = {
-  "deepseek-v4-flash": "DeepSeek V4 Flash",
-  "deepseek-v4-pro": "DeepSeek V4 Pro",
-  "hy4-preview": "Hy4 Preview",
-  "hy4-preview-x": "Hy4 Preview X",
-  "hy3": "Hy3",
-  "hy3-x": "Hy3 X",
-  "glm-5.3": "GLM-5.3",
-  "glm-5.3-flash": "GLM-5.3 Flash",
-  "glm-5.2": "GLM-5.2",
-  "glm-5.1": "GLM-5.1",
-  "glm-5v-turbo": "GLM-5V Turbo",
-  "kimi-k3-1": "Kimi K3-1",
-  "kimi-k2.7": "Kimi K2.7",
-  "kimi-k2.6": "Kimi K2.6",
-  "minimax-m3": "MiniMax M3"
-};
-function displayNameForModel(id) {
-  return MODEL_DISPLAY_NAMES[id] ?? id;
-}
-function normalizeCreditsRate(value) {
-  return normalizeRate(value, /^(?:x(\d+(?:\.\d+)?))\b/i, /^(\d+(?:\.\d+)?)x\b/i);
-}
-function normalizeDiscountedRate(value) {
-  return normalizeRate(value, /^(?:x(\d+(?:\.\d+)?))\b/i, /^(\d+(?:\.\d+)?)x\b/i);
-}
-function normalizeRate(value, prefixed, suffixed) {
-  if (typeof value !== "string") return void 0;
-  const text = value.trim();
-  const head = text.split(/\s+/)[0] ?? "";
-  const match = prefixed.exec(head) ?? suffixed.exec(head);
-  return match?.[1] !== void 0 ? `x${match[1]}` : void 0;
-}
-function parseHHMM(value) {
-  if (typeof value !== "string") return void 0;
-  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-  if (m === null) return void 0;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  return h < 24 && min < 60 ? h * 60 + min : void 0;
-}
-function zonedMinutes(now, timeZone) {
-  const zone = typeof timeZone === "string" && timeZone.length > 0 ? timeZone : "Asia/Shanghai";
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: zone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    }).formatToParts(now);
-    const h = Number(parts.find((p) => p.type === "hour")?.value);
-    const m = Number(parts.find((p) => p.type === "minute")?.value);
-    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function hasTimeWindow(schedule) {
-  return Array.isArray(schedule.daily) && schedule.daily.length > 0 || schedule.validFrom !== void 0 || schedule.validUntil !== void 0;
-}
-function promotionActiveNow(item, now) {
-  const raw = item.schedule;
-  if (typeof raw !== "object" || raw === null) return true;
-  const schedule = raw;
-  const from = typeof schedule.validFrom === "string" ? Date.parse(schedule.validFrom) : Number.NaN;
-  const until = typeof schedule.validUntil === "string" ? Date.parse(schedule.validUntil) : Number.NaN;
-  if (Number.isFinite(from) && now.getTime() < from) return false;
-  if (Number.isFinite(until) && now.getTime() >= until) return false;
-  if (!Array.isArray(schedule.daily) || schedule.daily.length === 0) return true;
-  const minutes = zonedMinutes(now, schedule.timezone);
-  if (minutes === void 0) return true;
-  return schedule.daily.some((slot2) => {
-    if (typeof slot2 !== "object" || slot2 === null) return false;
-    const start = parseHHMM(slot2.start);
-    const end = parseHHMM(slot2.end);
-    if (start === void 0 || end === void 0) return false;
-    return start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
-  });
-}
-function parsePromotions(record, now = /* @__PURE__ */ new Date()) {
-  const result = /* @__PURE__ */ new Map();
-  const chosen = /* @__PURE__ */ new Map();
-  const promotions = record.modelPromotions;
-  if (!Array.isArray(promotions)) return result;
-  const sorted = [...promotions].sort((a, b) => priorityOf(a) - priorityOf(b));
-  for (const item of sorted) {
-    if (typeof item !== "object" || item === null) continue;
-    const promotion = item;
-    if (promotion.enabled === false) continue;
-    if (!promotionActiveNow(promotion, now)) continue;
-    const discount = promotion.discount;
-    if (typeof discount !== "object" || discount === null) continue;
-    const detail = discount;
-    const factor = typeof detail.factor === "number" ? detail.factor : void 0;
-    const rawSchedule = promotion.schedule;
-    const windowed = typeof rawSchedule === "object" && rawSchedule !== null && hasTimeWindow(rawSchedule);
-    let rate;
-    if (factor === 0) {
-      if (!windowed) continue;
-      rate = "\u514D\u8D39";
-    } else {
-      rate = normalizeDiscountedRate(detail.discountedCredits);
-      if (rate === "x0") continue;
-    }
-    if (rate === void 0) continue;
-    const modelIds = promotion.modelIds;
-    if (!Array.isArray(modelIds)) continue;
-    const priority = priorityOf(promotion);
-    for (const id of modelIds) {
-      if (typeof id !== "string" || id.length === 0) continue;
-      const previous = chosen.get(id);
-      if (previous !== void 0 && previous > priority) continue;
-      chosen.set(id, priority);
-      result.set(id, rate);
-    }
-  }
-  return result;
-}
-function priorityOf(item) {
-  if (typeof item !== "object" || item === null) return 0;
-  const priority = item.priority;
-  return typeof priority === "number" && Number.isFinite(priority) ? priority : 0;
-}
-function formatCreditsRate(rate, discounted) {
-  if (rate === void 0) return discounted;
-  return discounted !== void 0 ? `${rate}\u2192${discounted}` : rate;
-}
-function parseModelsFromConfig(body) {
-  if (typeof body !== "object" || body === null) return [];
-  const data = body.data;
-  if (typeof data !== "object" || data === null) return [];
-  const record = data;
-  const metaById = /* @__PURE__ */ new Map();
-  if (Array.isArray(record.models)) {
-    for (const model of record.models) {
-      if (typeof model !== "object" || model === null) continue;
-      const entry = model;
-      if (typeof entry.id === "string") metaById.set(entry.id, entry);
-    }
-  }
-  const promotions = parsePromotions(record);
-  const agentReferencedIds = /* @__PURE__ */ new Set();
-  if (Array.isArray(record.agents)) {
-    for (const agent of record.agents) {
-      if (typeof agent !== "object" || agent === null) continue;
-      const models = agent.models;
-      if (!Array.isArray(models)) continue;
-      for (const model of models) if (typeof model === "string") agentReferencedIds.add(model);
-    }
-  }
-  const parsed = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (id) => {
-    if (isAutoSelectAlias(id) || seen.has(id) || !isChatModel(id, metaById.get(id))) return;
-    seen.add(id);
-    const meta = metaById.get(id);
-    const remoteName = typeof meta?.name === "string" && meta.name.length > 0 ? meta.name : void 0;
-    const rate = normalizeCreditsRate(meta?.credits);
-    const discounted = promotions.get(id);
-    parsed.push({
-      id,
-      name: remoteName ?? displayNameForModel(id),
-      ...parseModelMeta(meta),
-      ...rate !== void 0 ? { creditsRate: rate } : {},
-      ...discounted !== void 0 ? { discountedCreditsRate: discounted } : {},
-      ...agentReferencedIds.has(id) ? { agentReferenced: true } : {}
-    });
-  };
-  for (const agentName of PREFERRED_AGENT_NAMES) {
-    let found = false;
-    const agents = record.agents;
-    if (!Array.isArray(agents)) break;
-    for (const agent of agents) {
-      if (typeof agent !== "object" || agent === null) continue;
-      const agentRecord = agent;
-      if (agentRecord.name !== agentName) continue;
-      if (Array.isArray(agentRecord.models)) {
-        for (const model of agentRecord.models) {
-          if (typeof model === "string") push(model);
-        }
-      }
-      found = true;
-      break;
-    }
-    if (found) break;
-  }
-  for (const id of metaById.keys()) push(id);
-  for (const id of trialModelIds(record)) {
-    if (isAutoSelectAlias(id) || seen.has(id)) continue;
-    seen.add(id);
-    const meta = metaById.get(id);
-    const rate = normalizeCreditsRate(meta?.credits);
-    const discounted = promotions.get(id);
-    parsed.push({
-      id,
-      name: displayNameForModel(id),
-      ...parseModelMeta(meta),
-      ...rate !== void 0 ? { creditsRate: rate } : {},
-      ...discounted !== void 0 ? { discountedCreditsRate: discounted } : {},
-      // 试用横幅本身就是「服务端推荐可用」的信号，与 agent 引用同义。
-      agentReferenced: true
-    });
-  }
-  return parsed;
-}
-var PREFERRED_AGENT_NAMES = ["cli", "craft"];
-function trialModelIds(data) {
-  const features = data.productFeaturesConfig;
-  if (typeof features !== "object" || features === null) return [];
-  const banner = features.ModelTrialBanner;
-  if (typeof banner !== "object" || banner === null) return [];
-  const banners = banner.banners;
-  if (!Array.isArray(banners)) return [];
-  const ids = [];
-  for (const item of banners) {
-    if (typeof item !== "object" || item === null) continue;
-    const target = item.targetModelId;
-    if (typeof target === "string" && target.length > 0) ids.push(target);
-  }
-  return ids;
-}
-function isAutoSelectAlias(id) {
-  return id === "auto" || id === "default";
-}
-function isChatModel(id, meta) {
-  if (id.startsWith("nes-") || id.startsWith("completion-") || id.startsWith("codewise-")) return false;
-  if (meta?.supportsExtra === true) return false;
-  const maxOutput = meta?.maxOutputTokens;
-  if (typeof maxOutput === "number" && maxOutput > 0 && maxOutput <= 256) return false;
-  const tags = meta?.tags;
-  if (Array.isArray(tags) && tags.some((tag2) => tag2 === "text-to-image")) return false;
-  return true;
-}
-function parseModelMeta(record) {
-  if (record === void 0) return {};
-  const meta = {};
-  const limit = record.maxInputTokens;
-  if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) meta.contextWindow = limit;
-  const maxOutput = record.maxOutputTokens;
-  if (typeof maxOutput === "number" && Number.isFinite(maxOutput) && maxOutput > 0) {
-    meta.maxOutputTokens = maxOutput;
-  }
-  if (typeof record.supportsImages === "boolean") meta.supportsImages = record.supportsImages;
-  const reasoning = record.reasoning;
-  if (typeof reasoning === "object" && reasoning !== null) {
-    const fields = reasoning;
-    if (Array.isArray(fields.supportedEfforts)) {
-      const efforts = fields.supportedEfforts.filter((e) => typeof e === "string" && e.length > 0);
-      if (efforts.length > 0) meta.reasoningEfforts = efforts;
-    }
-    if (typeof fields.defaultEffort === "string" && fields.defaultEffort.length > 0) {
-      meta.defaultReasoningEffort = fields.defaultEffort;
-    }
-  }
-  return meta;
-}
-
-// vendor/channel-pack/src/product.ts
-var WORKBUDDY_UA_INTL = "WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2";
-var WORKBUDDY_UA_CN = "WorkBuddy/5.5.2 WorkBuddy/5.5.2 CLI/5.5.2";
-var CODEBUDDY_FALLBACK_MODELS = [
-  {
-    id: "hy4-preview",
-    name: "Hy4 preview",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    id: "hy3",
-    name: "Hy3",
-    contextWindow: 192e3,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    id: "hy3-x",
-    name: "Hy3",
-    contextWindow: 192e3,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    // maxOutputTokens 实测（2026-09-19）：scoped 端点 128000、/v3/config 131072。
-    // 取 **128000**（两个端点的较小者）：它是服务端真正接受的额度，131072 是
-    // /v3/config 的声明值。取小者避免因端点差异被上游拒绝；远端可用时仍以
-    // 远端下发值为准，本字段只在远端缺失时补位。
-    id: "deepseek-v4.1-flash",
-    name: "Deepseek-V4.1-Flash",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "deepseek-v4-pro",
-    name: "Deepseek-V4-Pro",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "xhigh"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    // 2026-09 补录：远端 /v3/config 与 scoped 端点均返回该模型，且实测能看图
-    // （纯红图问答答出「红色」）。它不在 craft/cli agent 白名单里，但可正常调用，
-    // 也是适配器 DEFAULT_MODEL 的取值。
-    //
-    // 档位沿用适配器静态表 REASONING_EFFORTS 的既有取值 [low,high,max]（该表有
-    // 实测依据：三档会显著改变返回的 reasoning_content 长度）。注意上游
-    // /v3/config 声明的是 [low,high,xhigh]，与本表不一致；实测服务端对 low /
-    // medium / high / xhigh / max 一律返回 200（不报非法参数），无法据此判定
-    // 哪一组才真实生效，故不擅自改动既有行为，仅记录该分歧待后续验证。
-    id: "deepseek-v4-flash",
-    name: "Deepseek-V4-Flash",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 5e4
-  },
-  {
-    id: "glm-5.3",
-    name: "GLM-5.3",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    id: "glm-5.3-flash",
-    name: "GLM-5.3-Flash",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 32e3
-  },
-  {
-    id: "glm-5.2",
-    name: "GLM-5.2",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["high", "xhigh"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    // supportsImages 为 true 有实测依据：纯红图问答答出「红色」。
-    // 注意 scoped 端点（/console/enterprises/personal/models）对它返回
-    // supportsImages=false，与 /v3/config、IDE 缓存、wb2api 清单三处矛盾；
-    // 实测以「能看到图」为准，故保留 true（远端若下发 true 则两者一致，
-    // 只有 scoped 端点先命中时才会被它的 false 覆盖，见 buddy-adapter 的
-    // supportsImagesFor 修正）。
-    id: "glm-5.1",
-    name: "GLM-5.1",
-    contextWindow: 2e5,
-    supportsImages: true,
-    reasoningEfforts: ["medium"],
-    maxOutputTokens: 48e3
-  },
-  {
-    id: "glm-5v-turbo",
-    name: "GLM-5V-Turbo",
-    contextWindow: 2e5,
-    supportsImages: true,
-    reasoningEfforts: ["medium"],
-    maxOutputTokens: 64e3
-  },
-  {
-    id: "kimi-k3-1",
-    name: "Kimi-K3-1",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["medium"],
-    maxOutputTokens: 32e3
-  },
-  {
-    // 2026-09 补录：旧注释曾把它列为「service info not found」而排除，但实测
-    // 可正常调用且能看图（纯红图问答答出「红色」），远端两端点也都在下发。
-    id: "kimi-k2.8-preview",
-    name: "Kimi-K2.8-Preview",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    id: "kimi-k2.7",
-    name: "Kimi-K2.7",
-    contextWindow: 256e3,
-    supportsImages: true,
-    reasoningEfforts: ["medium"],
-    maxOutputTokens: 32e3
-  },
-  {
-    id: "kimi-k2.6",
-    name: "Kimi-K2.6",
-    contextWindow: 256e3,
-    supportsImages: true,
-    reasoningEfforts: ["medium"],
-    maxOutputTokens: 32e3
-  },
-  {
-    id: "minimax-m3",
-    name: "MiniMax-M3",
-    contextWindow: 512e3,
-    supportsImages: true,
-    reasoningEfforts: ["medium"],
-    maxOutputTokens: 64e3
-  }
-];
-var CODEBUDDY = {
-  id: "buddy",
-  platform: "ide",
-  endpoint: "https://copilot.tencent.com",
-  apiDomain: "copilot.tencent.com",
-  displayName: "CodeBuddy (\u817E\u8BAF)",
-  productCode: "codebuddy",
-  userAgent: "CodeBuddyIDE/1.106.1",
-  // 中国版只有一条产品线，无需按模型分档：全部模型沿用 IDE UA。
-  userAgentByModelFamily: [],
-  attributionName: "CodeBuddy",
-  clientVersion: "1.106.1",
-  cliVersion: "2.137.1",
-  defaultCredentialRef: "BUDDY_ACCESS_TOKEN",
-  appendSessionParams: false,
-  fallbackModels: CODEBUDDY_FALLBACK_MODELS
-};
-var WORKBUDDY_FALLBACK_MODELS = [
-  // 注：以下 maxOutputTokens 全部来自 2026-09-19 对国际版 `/v3/config` 的实测
-  // （`node scripts/dump-max-output.mjs`）。该值就是用户在 IDE 里实际拿到的
-  // 单次输出额度，远端不可用时由本表顶替。远端未下发的模型保持 undefined。
-  { id: "default-model", name: "Auto", contextWindow: 176e3, supportsImages: true, maxOutputTokens: 24e3 },
-  { id: "fast-model", name: "Fast", contextWindow: 2e5, supportsImages: true, reasoningEfforts: ["medium"], maxOutputTokens: 32e3 },
-  { id: "balanced-model", name: "Balanced", contextWindow: 256e3, supportsImages: true, reasoningEfforts: ["medium"], maxOutputTokens: 32e3 },
-  { id: "primary-model", name: "Primary", contextWindow: 272e3, supportsImages: true, reasoningEfforts: ["high"], maxOutputTokens: 72e3 },
-  { id: "deep-model", name: "Deep", contextWindow: 176e3, supportsImages: true, maxOutputTokens: 24e3 },
-  {
-    id: "hy4-preview-f",
-    name: "Hy4 preview",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    // 2026-09 补录：/v3/config 的 cli agent 白名单里有它，但兜底表原先漏了，
-    // 于是被 reconcileWithFallback 丢弃、模型选择器里看不到。实测能看图。
-    id: "hy4-preview",
-    name: "Hy4 preview",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  {
-    id: "hy3",
-    name: "Hy3",
-    contextWindow: 192e3,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 64e3
-  },
-  { id: "deepseek-v4.1-flash", name: "Deepseek-V4.1-Flash", contextWindow: 1e6, supportsImages: true, reasoningEfforts: ["high"], defaultReasoningEffort: "high", maxOutputTokens: 128e3 },
-  {
-    // 2026-09 补录：新加坡区的同代模型（-sg 后缀），远端下发且实测能看图。
-    id: "deepseek-v4.1-flash-sg",
-    name: "Deepseek-V4.1-Flash",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["high"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "gpt-6-astra",
-    name: "GPT-6-Astra",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6-Sol",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "gpt-5.6-terra",
-    name: "GPT-5.6-Terra",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "gpt-5.6-luna",
-    name: "GPT-5.6-Luna",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "gpt-5.5",
-    name: "GPT-5.5",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 128e3
-  },
-  {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    contextWindow: 272e3,
-    supportsImages: true,
-    reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 72e3
-  },
-  // gpt-5.3-codex：远端未下发 maxOutputTokens，故不填（保持 undefined，
-  // 交由网关默认），不臆造数值。
-  { id: "gpt-5.3-codex", name: "GPT-5.3-Codex", contextWindow: 272e3, supportsImages: true, reasoningEfforts: ["medium"] },
-  { id: "gemini-3.5-flash", name: "Gemini-3.5-Flash", contextWindow: 1e6, supportsImages: true, reasoningEfforts: ["medium"], maxOutputTokens: 65536 },
-  {
-    id: "glm-5.3",
-    name: "GLM-5.3",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 48e3
-  },
-  {
-    id: "glm-5.2",
-    name: "GLM-5.2",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["high", "xhigh"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 48e3
-  },
-  { id: "kimi-k3", name: "Kimi-K3", contextWindow: 1e6, supportsImages: true, reasoningEfforts: ["medium"], maxOutputTokens: 32e3 },
-  {
-    // 2026-09 补录：远端 /v3/config 的 cli agent 白名单里有它，兜底表原先漏了。
-    id: "kimi-k2.8-preview",
-    name: "Kimi-K2.8-Preview",
-    contextWindow: 1e6,
-    supportsImages: true,
-    reasoningEfforts: ["low", "high", "max"],
-    defaultReasoningEffort: "high",
-    maxOutputTokens: 32e3
-  },
-  { id: "kimi-k2.6", name: "Kimi-K2.6", contextWindow: 256e3, supportsImages: true, reasoningEfforts: ["medium"], maxOutputTokens: 32e3 }
-];
-var WORKBUDDY = {
-  id: "workbuddy",
-  platform: "workbuddy-ai",
-  endpoint: "https://www.workbuddy.ai",
-  apiDomain: "www.workbuddy.ai",
-  displayName: "WorkBuddy (\u56FD\u9645\u7248)",
-  productCode: "workbuddy",
-  // 默认档：国际版产品形态（无按模型命中时使用）。
-  userAgent: WORKBUDDY_UA_INTL,
-  userAgentByModelFamily: [
-    // 国际版独有模型线（GPT / Gemini / Claude 系）→ 国际版形态。
-    { match: "gpt-", ua: WORKBUDDY_UA_INTL },
-    { match: "gemini-", ua: WORKBUDDY_UA_INTL },
-    { match: "claude-", ua: WORKBUDDY_UA_INTL },
-    // 国内系模型（glm / hy / kimi / minimax）→ 国内客户端形态。
-    { match: "glm-", ua: WORKBUDDY_UA_CN },
-    { match: "hy", ua: WORKBUDDY_UA_CN },
-    { match: "kimi-", ua: WORKBUDDY_UA_CN },
-    { match: "minimax-", ua: WORKBUDDY_UA_CN }
-  ],
-  attributionName: "WorkBuddy",
-  clientVersion: "5.5.2",
-  cliVersion: "5.5.2",
-  defaultCredentialRef: "WORKBUDDY_ACCESS_TOKEN",
-  appendSessionParams: true,
-  pluginVersion: "5.5.2",
-  fallbackModels: WORKBUDDY_FALLBACK_MODELS
-};
-var ALL_PRODUCTS = [CODEBUDDY, WORKBUDDY];
-function productById(id) {
-  return ALL_PRODUCTS.find((product) => product.id === id);
-}
-function resolveUserAgent(product, model) {
-  for (const rule of product.userAgentByModelFamily ?? []) {
-    if (model.startsWith(rule.match)) return rule.ua;
-  }
-  return product.userAgent;
-}
-
-// vendor/channel-pack/src/image-budget.ts
-var REQUEST_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
-var RACCOON_REQUEST_IMAGE_MAX_BYTES = 512 * 1024;
-var DEFAULT_BODY_LIMITED_IMAGE_MAX_BYTES = 1024 * 1024;
-var DEFAULT_IMAGE_PIXEL_BUDGET = 64e4;
-function fitImageToPixelBudget(width, height, maxPixels) {
-  if (!isPositiveFinite(width) || !isPositiveFinite(height)) return void 0;
-  if (!isPositiveFinite(maxPixels)) return void 0;
-  if (width * height <= maxPixels) return { width: Math.floor(width), height: Math.floor(height) };
-  const scale = Math.sqrt(maxPixels / (width * height));
-  const targetWidth = Math.max(1, Math.floor(width * scale));
-  const targetHeight = Math.max(1, Math.floor(height * scale));
-  return { width: targetWidth, height: targetHeight };
-}
-function requestImageTargetFor(width, height, maxPixels, maxBytes = REQUEST_IMAGE_MAX_BYTES) {
-  const fitted = fitImageToPixelBudget(width, height, maxPixels ?? DEFAULT_IMAGE_PIXEL_BUDGET);
-  if (fitted === void 0) return void 0;
-  return { width: fitted.width, height: fitted.height, maxBytes: maxBytes ?? REQUEST_IMAGE_MAX_BYTES };
-}
-async function projectRequestImage(attachment, options) {
-  const readImageRequest = options.readImageRequest;
-  if (readImageRequest === void 0) return void 0;
-  const { width, height } = attachment;
-  if (typeof width !== "number" || typeof height !== "number") return void 0;
-  const target = requestImageTargetFor(width, height, options.pixelBudget, options.maxBytes);
-  if (target === void 0) return void 0;
-  try {
-    return await readImageRequest(attachment, target);
-  } catch {
-    return void 0;
-  }
-}
-function isPositiveFinite(value) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-// vendor/channel-pack/src/buddy-adapter.ts
-function isDeepSeekModel(model) {
-  return /^deepseek/i.test(model.trim());
-}
-var DEFAULT_MODELS2 = [
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-  "hy4-preview",
-  "hy4-preview-x",
-  "hy3",
-  "hy3-x",
-  "glm-5.3",
-  "glm-5.3-flash",
-  "glm-5.2",
-  "glm-5.1",
-  "glm-5v-turbo",
-  "kimi-k3-1",
-  "kimi-k2.7",
-  "kimi-k2.6",
-  "minimax-m3"
-];
-var CONTEXT_WINDOWS2 = /* @__PURE__ */ new Map([
-  ["deepseek-v4-flash", 1e6],
-  ["deepseek-v4-pro", 1e6],
-  ["hy4-preview", 1e6],
-  ["hy4-preview-x", 1e6],
-  ["hy3", 192e3],
-  ["hy3-x", 192e3],
-  ["glm-5.3", 1e6],
-  ["glm-5.3-flash", 1e6],
-  ["glm-5.2", 1e6],
-  ["glm-5.1", 2e5],
-  ["glm-5v-turbo", 2e5],
-  ["kimi-k3-1", 1e6],
-  ["kimi-k2.7", 256e3],
-  ["kimi-k2.6", 256e3],
-  ["minimax-m3", 512e3]
-]);
-var IMAGE_MODELS = /* @__PURE__ */ new Set([
-  "deepseek-v4-flash",
-  "deepseek-v4.1-flash",
-  "deepseek-v4.1-flash-sg",
-  "deepseek-v4-pro",
-  "hy4-preview",
-  "hy4-preview-f",
-  "hy4-preview-x",
-  "hy3",
-  "hy3-x",
-  "glm-5.3",
-  "glm-5.3-flash",
-  "glm-5.2",
-  "glm-5.1",
-  "glm-5v-turbo",
-  "kimi-k3",
-  "kimi-k3-1",
-  "kimi-k2.8-preview",
-  "kimi-k2.7",
-  "kimi-k2.6",
-  "minimax-m3"
-]);
-var REASONING_EFFORTS = /* @__PURE__ */ new Map([
-  ["deepseek-v4-flash", ["low", "high", "max"]],
-  ["deepseek-v4.1-flash", ["low", "high", "max"]],
-  ["deepseek-v4-pro", ["low", "high", "xhigh"]],
-  ["hy4-preview", ["high"]],
-  ["hy4-preview-x", ["high"]],
-  ["hy3", ["low", "high"]],
-  ["hy3-x", ["low", "high"]],
-  ["glm-5.3", ["low", "high", "max"]],
-  ["glm-5.3-flash", ["low", "high", "max"]],
-  ["glm-5.2", ["high", "xhigh"]]
-]);
-var EFFORT_NAMES = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "XHigh",
-  max: "Max"
-};
-function contentToText2(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => String(block.text)).join("");
-}
-var TOOL_RESULT_IMAGE_TEXT = "Attached image(s) from tool result:";
-function serializeMessages2(messages, imageUrls) {
-  const wire = [];
-  let pendingToolImages = [];
-  const flushToolImages = () => {
-    if (pendingToolImages.length === 0) return;
-    wire.push({
-      role: "user",
-      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT }, ...pendingToolImages]
-    });
-    pendingToolImages = [];
-  };
-  const normalized = normalizeHarnessMessages(messages);
-  const { keepCallIds, keepResultIds } = resolveToolPairing(normalized);
-  for (const message2 of normalized) {
-    if (message2.role === "assistant") {
-      const content2 = stripCourseLeakFromHistoryContent(
-        message2.role,
-        Array.isArray(message2.content) ? message2.content : []
-      );
-      const toolCallBlocks = content2.filter((block) => typeof block === "object" && block !== null && block.type === "tool-call").filter((block) => keepCallIds.has(String(block.id)));
-      const toolCalls = toolCallBlocks.map((block) => ({
-        id: String(block.id),
-        type: "function",
-        function: { name: String(block.name), arguments: normalizeToolArguments(String(block.arguments)) }
-      }));
-      const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
-      const text2 = contentToText2(content2);
-      if (text2.trim().length === 0 && toolCalls.length === 0) continue;
-      flushToolImages();
-      wire.push({
-        role: "assistant",
-        // 正文为空且有工具调用时 content 必须为 null（对齐 openai_chat.rs）。
-        content: text2.length === 0 && toolCalls.length > 0 ? null : text2,
-        reasoning_content: reasoning,
-        ...toolCalls.length > 0 ? { tool_calls: toolCalls } : {}
-      });
-      continue;
-    }
-    if (message2.role === "system") {
-      flushToolImages();
-      wire.push({ role: "system", content: contentToText2(message2.content) });
-      continue;
-    }
-    const content = Array.isArray(message2.content) ? message2.content : [];
-    const toolResults = content.filter((block) => typeof block === "object" && block !== null && block.type === "tool-result");
-    const text = contentToText2(message2.content);
-    const regular = content.filter((block) => !(typeof block === "object" && block !== null && block.type === "tool-result"));
-    const regularImageUrls = imageUrls;
-    const parts = regularImageUrls === void 0 ? void 0 : userContentParts(regular, regularImageUrls);
-    if (parts !== void 0) {
-      flushToolImages();
-      wire.push({ role: "user", content: parts });
-    } else if (text.trim().length > 0) {
-      flushToolImages();
-      wire.push({ role: "user", content: text });
-    }
-    for (const result of toolResults) {
-      if (!keepResultIds.has(String(result.toolCallId))) continue;
-      let resultText = "(no output)";
-      if (regularImageUrls !== void 0 && Array.isArray(result.content)) {
-        const resultParts = userContentParts(result.content, regularImageUrls);
-        if (resultParts !== void 0) {
-          pendingToolImages.push(...resultParts.filter((part) => part.type !== "text"));
-          const joined = resultParts.filter((part) => part.type === "text").map((part) => String(part.text)).join("");
-          if (joined.length > 0) resultText = joined;
-        } else {
-          resultText = contentToText2(result.content) || "(no output)";
-        }
-      } else {
-        resultText = contentToText2(result.content) || "(no output)";
-      }
-      wire.push({
-        role: "tool",
-        tool_call_id: String(result.toolCallId),
-        content: resultText
-      });
-    }
-  }
-  flushToolImages();
-  return wire;
-}
-function errorMessage2(error) {
-  if (error instanceof Error) return error.message;
-  try {
-    return String(error);
-  } catch {
-    return "unknown error";
-  }
-}
-function isContentRejection(body) {
-  if (body.length === 0) return false;
-  try {
-    const data = JSON.parse(body);
-    if (data?.code === 11128 || data?.code === "11128") return false;
-    if (data?.code === 11140 || data?.code === "11140") return true;
-  } catch {
-  }
-  return /request illegal/i.test(body) || /安全审核|safety review/i.test(body);
-}
-var BUDDY_POLICY_BLOCK_COOLDOWN_MS = 30 * 6e4;
-function contentRejectionError(productId, status, body, rotated) {
-  const scope = rotated ? `\u5168\u90E8\u8D26\u53F7\u5747\u88AB\u670D\u52A1\u7AEF\u5B89\u5168\u7B56\u7565\u62E6\u622A\uFF08HTTP ${status}\uFF0C\u5DF2\u9010\u4E2A\u6362\u53F7\u91CD\u8BD5\uFF09` : `\u5F53\u524D\u8D26\u53F7\u88AB\u670D\u52A1\u7AEF\u5B89\u5168\u7B56\u7565\u62E6\u622A\uFF08HTTP ${status}\uFF0C\u6D41\u5185\u9519\u8BEF\u5E27\u4E0B\u53D1\uFF09`;
-  return new LlmError3(
-    `${productId}: ${scope}\u3002\u8BE5\u62E6\u622A\u6309\u8D26\u53F7\u751F\u6548\uFF08\u540C\u4E00\u8BF7\u6C42\u5728\u5176\u4ED6\u8D26\u53F7\u53EF\u6B63\u5E38\u8FD4\u56DE\uFF09\uFF0C\u8BF7\u5728 Channel Pack \u505C\u7528\u6216\u66F4\u6362\u88AB\u62E6\u8D26\u53F7\uFF1A${errorDetail2(body)}`,
-    "PERMISSION_DENIED",
-    { status }
-  );
-}
-function policyBlockResetAtMs(nowMs) {
-  return nowMs + BUDDY_POLICY_BLOCK_COOLDOWN_MS;
-}
-async function markPolicyBlockedAccount(pool, productId, accountId, modelId) {
-  if (pool === void 0 || accountId.length === 0 || modelId.length === 0) return;
-  try {
-    await pool.updateModelRateLimit(accountId, modelId, policyBlockResetAtMs(Date.now()));
-  } catch (error) {
-    console.warn(`[${productId}] \u5B89\u5168\u7B56\u7565\u62E6\u622A\u7684\u51B7\u5374\u6807\u8BB0\u5199\u5165\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u672C\u6B21\u8BF7\u6C42\uFF09:`, error);
-  }
-}
-function errorDetail2(body) {
-  try {
-    const data = JSON.parse(body);
-    const error = typeof data.error === "object" && data.error !== null ? data.error : void 0;
-    const display = typeof data.displayMsg === "object" && data.displayMsg !== null ? data.displayMsg : void 0;
-    const localized = typeof display?.zh === "string" ? display.zh : typeof display?.en === "string" ? display.en : void 0;
-    const parts = [
-      // 本地化文案最可读，排在最前。
-      localized,
-      typeof error?.code === "string" ? error.code : void 0,
-      typeof error?.type === "string" ? error.type : void 0,
-      typeof error?.message === "string" ? error.message : void 0,
-      // 腾讯系用 `msg` 而非 `message`。
-      typeof data.msg === "string" ? data.msg : void 0,
-      typeof data.message === "string" ? data.message : void 0
-    ].filter((value) => value !== void 0);
-    if (parts.length > 0) return parts.join(" ");
-  } catch {
-  }
-  return body;
-}
-var GATEWAY_PROMPT_TOO_LONG = /\bprompt\s+is\s+too\s+long\b[\s\S]{0,40}?\b\d[\d,]*\s+tokens?\s*>/i;
-function httpErrorCode2(status, body) {
-  if (status === 401 || status === 403) return "AUTH";
-  if (status === 429) return "RATE_LIMIT";
-  if (status === 400) {
-    if (isContextWindowExceededError2(body) || GATEWAY_PROMPT_TOO_LONG.test(body)) {
-      return CONTEXT_WINDOW_EXCEEDED_CODE2;
-    }
-    return "INVALID_REQUEST";
-  }
-  if (status >= 500) return "SERVER";
-  return `HTTP_${status}`;
-}
-function resolveFirstTokenTimeoutMs2() {
-  return Number.parseInt(process.env.DSH_BUDDY_SSE_FIRST_TOKEN_TIMEOUT_MS ?? "", 10) || 12e4;
-}
-function resolveChunkTimeoutMs2() {
-  return Number.parseInt(process.env.DSH_BUDDY_SSE_CHUNK_TIMEOUT_MS ?? "", 10) || 12e4;
-}
-var BUDDY_SATURATION_MAX_RETRIES = 2;
-var BUDDY_SATURATION_BASE_DELAY_MS = 2e3;
-function buddySaturationDelayMs(attempt) {
-  const raw = process.env.DSH_BUDDY_SATURATION_DELAY_MS;
-  const base = raw === void 0 || raw === "" ? BUDDY_SATURATION_BASE_DELAY_MS : Number(raw);
-  const resolved = Number.isFinite(base) && base >= 0 ? base : BUDDY_SATURATION_BASE_DELAY_MS;
-  return resolved * (attempt + 1);
-}
-function sleepMs(ms) {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve2) => {
-    setTimeout(resolve2, ms);
-  });
-}
-function isTransportError2(error) {
-  if (!(error instanceof Error)) return false;
-  const message2 = error.message.toLowerCase();
-  if (message2.includes("terminated")) return true;
-  if (error.name.startsWith("UND_ERR_")) return true;
-  if (message2.includes("fetch failed")) return true;
-  if (message2.includes("econnreset") || message2.includes("epipe") || message2.includes("socket hang up")) return true;
-  return false;
-}
-function userContentParts(content, imageUrls) {
-  const parts = [];
-  let hasImage = false;
-  for (const raw of content) {
-    if (typeof raw !== "object" || raw === null) continue;
-    const block = raw;
-    if (block.type === "text") {
-      const text = String(block.text ?? "");
-      if (text.length > 0) parts.push({ type: "text", text });
-      continue;
-    }
-    if (block.type === "image") {
-      hasImage = true;
-      const url = block.attachment?.attachmentId === void 0 ? void 0 : imageUrls.get(String(block.attachment.attachmentId));
-      parts.push(url === void 0 ? { type: "text", text: "[image unavailable]" } : { type: "image_url", image_url: { url } });
-      continue;
-    }
-    if (block.type === "tool-result" && Array.isArray(block.content)) {
-      const inner = userContentParts(block.content, imageUrls);
-      if (inner !== void 0) {
-        hasImage = true;
-        parts.push(...inner);
-      } else {
-        const text = contentToText2(block.content);
-        if (text.length > 0) parts.push({ type: "text", text });
-      }
-    }
-  }
-  return hasImage && parts.length > 0 ? parts : void 0;
-}
-function collectImages(content, refs) {
-  for (const raw of content) {
-    if (typeof raw !== "object" || raw === null) continue;
-    const block = raw;
-    if (block.type === "image" && typeof block.attachment?.attachmentId === "string") {
-      refs.set(block.attachment.attachmentId, block.attachment);
-      continue;
-    }
-    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages(block.content, refs);
-  }
-}
-var BuddyAdapter = class _BuddyAdapter extends LlmAdapter2 {
-  constructor(options) {
-    super();
-    this.options = options;
-    this.product = options.product ?? CODEBUDDY;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-    this.sessionId = options.sessionId ?? crypto.randomUUID().replace(/-/g, "");
-    const fallback = this.product.fallbackModels ?? [];
-    this.productFallbackIndex = new Map(fallback.map((model) => [model.id, model]));
-    this.productFallbackContextWindows = new Map(
-      fallback.filter((model) => model.contextWindow !== void 0).map((model) => [model.id, model.contextWindow])
-    );
-  }
-  /** 本适配器所属的产品配置（默认 CodeBuddy）。 */
-  product;
-  fetchImpl;
-  /**
-   * 前缀缓存会话标识（prompt_cache_key）。同一会话内所有请求复用同一 key，
-   * 服务端据此把相同前缀的 KV 缓存跨请求复用；缺失时缓存命中恒为 0。
-   */
-  sessionId;
-  /** 动态模型缓存（首次 listModels 成功后填充）。 */
-  remoteModels;
-  /**
-   * 目录加载闸门：并发去重 + 失败/空结果冷却。
-   * 依据见 `src/remote-catalog-gate.ts`（首屏「加载模型巨长」的实测归因）。
-   */
-  catalogGate = new RemoteCatalogGate();
-  /** 远端下发的模型元数据（id → 能力），listModels/resolveModel/stream 共用。 */
-  remoteMeta = /* @__PURE__ */ new Map();
-  /** 远端下发的模型上下文窗口（/v3/config data.models[].maxInputTokens）。 */
-  remoteContextWindows = /* @__PURE__ */ new Map();
-  /**
-   * 产品级兜底模型索引（`product.fallbackModels` 的 id → 条目）。
-   * 远端缺失时补位；构造时一次性建立，只读。
-   */
-  productFallbackIndex;
-  /** 产品级兜底上下文窗口（构造时从 fallbackModels 提取）。 */
-  productFallbackContextWindows;
-  /**
-   * 该模型此刻是否**免费**（消耗 0 积分）。
-   *
-   * ## 为什么需要它
-   *
-   * `pickBuddyCredential`（`src/index.ts`）只问「锁没锁 + 有没有临期积分」，
-   * 从不问「这个模型要不要钱」。于是免费模型也会被「锁定永久积分 + 无临期积分」
-   * 这道门拦下，报出「没有可用账号……已锁定永久积分，而所有账号的『N 天内到期』
-   * 积分都已用尽」，而它**一分积分都不需要** —— 用户看到的是
-   * 「账号明明有余额却失败」的矛盾错误（真实报障）。
-   *
-   * 免费模型既不消耗临时积分也不消耗永久积分，故它与「锁定」要保护的
-   * 目标（别把永久积分烧掉）无关，不该受该门约束。
-   *
-   * ## 判据（任一成立即免费，与展示层口径一致）
-   *
-   * 1. `creditsRate === 'x0'` —— 服务端 `credits: "0x"` / `"x0"`；
-   * 2. `discountedCreditsRate === 'x0'` —— 促销价打到 0；
-   * 3. 两者 === `'免费'` —— 促销 `factor: 0` 时 `parsePromotions` 直接写入的
-   *    **中文串**（不是 `x0`，这条最容易漏，见 `src/buddy.ts` 的 `rate = '免费'`）。
-   *
-   * ⚠️ **只在确定免费时返回 true**：字段缺失、解析失败、未知模型一律 false。
-   * 把付费模型误判成免费会绕开锁定，**真烧掉永久积分且不可撤回** ——
-   * 因此这里取「保守方向」：宁可让免费模型多走一次余额门，
-   * 也不放过任何无法确认的情形。
-   *
-   * ⚠️ 远端目录是懒加载的（`ensureRemoteModels()`），必须先 await：
-   * 调用点虽在 `prepareCall` 之后（目录通常已就绪），但「直接进会话」等路径
-   * 可能尚未拉取，漏掉这一步补丁会**静默失效**（退回被拦截的行为）。
-   *
-   * @param modelId - 模型 id。
-   * @returns true 仅当能确认该模型消耗 0 积分。
-   */
-  async isFreeModel(modelId) {
-    if (typeof modelId !== "string" || modelId.length === 0) return false;
-    await this.ensureRemoteModels();
-    const meta = this.remoteMeta.get(modelId);
-    if (meta === void 0) return false;
-    const isZeroRate = (rate) => rate === "x0" || rate === "\u514D\u8D39";
-    return isZeroRate(meta.creditsRate) || isZeroRate(meta.discountedCreditsRate);
-  }
-  /**
-   * 描述本适配器拥有的 provider 路由。
-   *
-   * DSH 会强制校验 `info.id === provider` 且 `info.name` 为非空字符串；
-   * 模型设置页还会用该 id 计算 `deriveKeyRef(provider)`（内部调用
-   * `provider.toUpperCase()`）。因此这里对入参做防御性归一化：
-   * 一旦 `provider` 不是字符串（例如上游传入了 undefined），
-   * 直接回退到本适配器所属产品的 id，避免
-   * `undefined.toUpperCase is not a function` 在客户端炸开。
-   *
-   * 展示名同样来自产品配置：CodeBuddy 为 'CodeBuddy (腾讯)'，
-   * WorkBuddy 为 'WorkBuddy'。
-   */
-  providerInfo(provider) {
-    const id = typeof provider === "string" && provider.length > 0 ? provider : this.product.id;
-    return { id, name: this.product.displayName };
-  }
-  /**
-   * 模型列表：优先使用 /v3/config 动态拉取的远端列表，否则回退静态默认。
-   * 动态拉取失败时静默回退（与 Rust fetch_models 的 Vec::new() 语义一致）。
-   */
-  /**
-   * 懒加载远端模型目录（仅拉取一次）。listModels 与 resolveModel 共用：
-   * resolveModel 可能先于 listModels 被调用（如直接进入会话），此时同样
-   * 触发一次远端拉取，保证 /v3/config 的 maxInputTokens 能生效。
-   */
-  /**
-   * 按产品的像素预算派生一张图片的**请求版本**。
-   *
-   * 判据与回退都在共享的 `projectRequestImage` 里（raccoon 用的是同一份 ——
-   * 两个适配器各写一遍正是本仓库反复出缺陷的形态）。返回 `undefined`
-   * 表示本次发原图，四种正常情形见该函数的注释。
-   *
-   * ⚠️ 预算取 `product.imagePixelBudget`，未配置时用
-   * `DEFAULT_IMAGE_PIXEL_BUDGET`（640,000 px ≈ 1,037 视觉 token）。
-   */
-  async projectRequestImage(ref) {
-    return projectRequestImage(ref, {
-      readImageRequest: this.options.readImageRequest,
-      pixelBudget: this.product.imagePixelBudget
-    });
-  }
-  async ensureRemoteModels() {
-    const fetchRemote = this.options.fetchRemoteModels;
-    if (this.remoteModels !== void 0 || fetchRemote === void 0) return;
-    await this.catalogGate.run(async () => {
-      const models = await fetchRemote();
-      if (models.length === 0) return false;
-      const reconciled = this.reconcileWithFallback(models);
-      this.remoteModels = reconciled;
-      this.remoteMeta = new Map(reconciled.map((model) => [model.id, model]));
-      this.remoteContextWindows = new Map(
-        reconciled.filter((model) => model.contextWindow !== void 0).map((model) => [model.id, model.contextWindow])
-      );
-      return true;
-    });
-  }
-  /**
-   * 用产品兜底表校正远端结果。
-   *
-   * 为什么需要校正：服务端按**认证上下文**决定返回哪些模型，插件的 CLI
-   * token 拿到的集合可能是残缺甚至错的 —— 实测 WorkBuddy 国际版的 CLI token
-   * 只拿到 13 个内部别名（含实际不可用的 `o4-mini`），而 IDE 用的是 20 个
-   * （含全部 GPT 系列）。此时若直接采信远端，模型选择器会缺掉用户真正要用的模型。
-   *
-   * 有产品兜底表时以它为准：
-   * - 只保留兜底表里声明的 id（远端多出来的别名/内部模型被丢弃）；
-   * - 兜底表声明但远端缺失的模型补进来（用兜底表的元数据）；
-   * - ⚠️ **例外：被 agent 引用的模型即使不在兜底表也保留**（见下）。
-   *
-   * ⚠️ **为什么需要那个例外**：两个端点下发的 id 集合**不同**，而兜底表是
-   * 编译期快照、只覆盖其中一套。实测（2026-09-21）`hy4-preview-f`
-   * —— 新用户限时免费变体 —— **只由 `/v3/config` 下发**，且被
-   * `craft`/`ask`/`plan` 三个 agent 引用（即服务端声明「对话里可选」），
-   * 但**不在兜底表**里。白名单重建会把它丢掉，于是用户看不到那个免费变体，
-   * 而 IDE 里能看到（用户报障「hy4 preview 现在 ide 是免费我们还是 0.29」）。
-   *
-   * 判据用 `agentReferenced`（服务端自己的「可选」信号）而非猜测 id 后缀 ——
-   * 后缀规则不统一（`-f` / `-x` / `-sg` / `-ioa` 含义各异），猜错会放进
-   * 不可用的模型。未标记的内部别名（如 `default`）不会被误留。
-   */
-  reconcileWithFallback(models) {
-    const fallback = this.product.fallbackModels;
-    if (fallback === void 0 || fallback.length === 0) return [...models];
-    const remoteById = new Map(models.map((model) => [model.id, model]));
-    const reconciled = fallback.map((entry) => {
-      const remote = remoteById.get(entry.id);
-      return {
-        id: entry.id,
-        name: remote?.name ?? entry.name,
-        ...entry.contextWindow !== void 0 || remote?.contextWindow !== void 0 ? { contextWindow: remote?.contextWindow ?? entry.contextWindow } : {},
-        // 输出上限同样「远端优先、兜底补位」：远端不下发时兜底表给保守值，
-        // 两边都没有则留 undefined（不编造，见 resolveModel 的说明）。
-        ...entry.maxOutputTokens !== void 0 || remote?.maxOutputTokens !== void 0 ? { maxOutputTokens: remote?.maxOutputTokens ?? entry.maxOutputTokens } : {},
-        ...entry.supportsImages !== void 0 || remote?.supportsImages !== void 0 ? { supportsImages: remote?.supportsImages ?? entry.supportsImages } : {},
-        ...entry.reasoningEfforts !== void 0 || remote?.reasoningEfforts !== void 0 ? { reasoningEfforts: [...remote?.reasoningEfforts ?? entry.reasoningEfforts ?? []] } : {},
-        ...entry.defaultReasoningEffort !== void 0 || remote?.defaultReasoningEffort !== void 0 ? { defaultReasoningEffort: remote?.defaultReasoningEffort ?? entry.defaultReasoningEffort } : {},
-        // 计费倍率只可能来自远端（兜底表是编译期快照，价格会变，不写死）。
-        // 注意本函数是**白名单式重建**：不在这里显式搬运的字段会被静默丢弃，
-        // 新增远端字段时必须同步加一行，否则 listModels 看不到它。
-        ...remote?.creditsRate !== void 0 ? { creditsRate: remote.creditsRate } : {},
-        ...remote?.discountedCreditsRate !== void 0 ? { discountedCreditsRate: remote.discountedCreditsRate } : {}
-      };
-    });
-    const known = new Set(reconciled.map((model) => model.id));
-    for (const model of models) {
-      if (model.agentReferenced !== true || known.has(model.id)) continue;
-      known.add(model.id);
-      reconciled.push({ ...model });
-    }
-    return reconciled;
-  }
-  /**
-   * 远端能力字段被实测证伪、需要强制覆盖为「支持图片」的模型。
-   *
-   * 为什么需要它：上游两个模型端点对同一模型的能力声明会互相矛盾。
-   * 实测 `glm-5.1`（2026-09）：
-   * - scoped 端点 `/console/enterprises/personal/models` → `supportsImages: false`
-   * - `/v3/config` → `supportsImages: true`
-   * - 真实请求（纯红图 + 问颜色）→ 答出「红色」，**确实能看到图片**
-   *
-   * 由于 `fetchModels` 优先采用 scoped 端点，若不覆盖，`glm-5.1` 会被判成
-   * 纯文本，用户贴图时直接吃 host 的 `MODEL_DOES_NOT_SUPPORT_IMAGES` 拒绝
-   * （前端文案「当前模型不支持图片」），而图片根本到不了上游。
-   *
-   * 为什么用显式白名单而不是「兜底表 true 优先」这类通用规则：通用规则会让
-   * 兜底表永久压过远端，一旦某模型真的下线或能力变更，用户会被放行后被上游
-   * 400 拒绝 —— 错误更晚、更难懂。白名单只覆盖已实测确认的个案，新增条目
-   * 必须先有真实请求证据。
-   */
-  static IMAGE_CAPABILITY_OVERRIDES = /* @__PURE__ */ new Set([
-    // scoped 端点误报 false，实测能看图。
-    "glm-5.1"
-  ]);
-  /**
-   * 模型接受的输入模态：远端 supportsImages 优先，静态表兜底；
-   * {@link IMAGE_CAPABILITY_OVERRIDES} 中的模型强制为支持图片。
-   */
-  inputModalitiesFor(model) {
-    const supportsImages = _BuddyAdapter.IMAGE_CAPABILITY_OVERRIDES.has(model) || (this.remoteMeta.get(model)?.supportsImages ?? this.productFallbackMeta.get(model)?.supportsImages ?? IMAGE_MODELS.has(model));
-    return supportsImages ? ["text", "image"] : ["text"];
-  }
-  /** 模型可选的思考等级：远端 supportedEfforts 优先，产品兜底表次之，通用静态表最后。 */
-  effortsFor(model) {
-    return this.remoteMeta.get(model)?.reasoningEfforts ?? this.productFallbackMeta.get(model)?.reasoningEfforts ?? REASONING_EFFORTS.get(model) ?? [];
-  }
-  /**
-   * 模型声明的默认思考等级（远端 `reasoning.defaultEffort` 优先，产品兜底表次之）。
-   *
-   * 用途：composer 未选档位时补 `reasoning_effort`（deepseek 系不带档位 = 不思考）。
-   * 若声明值不在该模型的支持档内（远端数据不一致）则视为未声明，由调用方回退。
-   */
-  defaultEffortFor(model) {
-    const declared = this.remoteMeta.get(model)?.defaultReasoningEffort ?? this.productFallbackMeta.get(model)?.defaultReasoningEffort;
-    return declared !== void 0 && this.effortsFor(model).includes(declared) ? declared : void 0;
-  }
-  /**
-   * 产品级兜底模型目录（`product.fallbackModels`）。
-   *
-   * 用于远端不可用或远端未覆盖到该模型时。与 `remoteMeta` 分开存放，
-   * 使远端一旦可用就自动优先，而产品兜底只在缺失时补位。
-   */
-  get productFallbackMeta() {
-    return this.productFallbackIndex;
-  }
-  /**
-   * 完整模型目录（**不应用用户黑名单**），含最终展示名（倍率 + 同名消歧）。
-   *
-   * 设置页（Channel Pack「显示列表」）必须把**被关闭的**模型也渲染出来，否则用户
-   * 无法重新打开；而 `listModels` 会按黑名单过滤掉它们，RPC 层只能凭黑名单的
-   * key（裸 id）补回 —— 那条路径拿不到展示名，只能退化成裸 id，**倍率随之丢失**
-   * （用户报障：「关闭的就没有显示倍率」）。
-   *
-   * ⚠️ 同名消歧必须基于**未过滤**的全量集合：`displayNameFor(model, source)`
-   * 而非 `listed`。用过滤后的集合会让「关掉其中一个同名模型」改变另一个的
-   * 变体标记，名字随开关跳变。
-   */
-  listAllModels() {
-    const source = this.remoteModels ?? this.staticFallbackModels();
-    return source.map((model) => ({ id: model.id, name: displayNameFor(model, source) }));
-  }
-  async listModels(_provider) {
-    if (!await providerCatalogVisible(this.options.accountPool, this.product.id)) return [];
-    await this.ensureRemoteModels();
-    const source = this.remoteModels ?? this.staticFallbackModels();
-    const disabled = this.options.accountPool?.disabledModelsFor(this.product.id);
-    const listed = disabled === void 0 || disabled.size === 0 ? source : source.filter((model) => !disabled.has(model.id));
-    return listed.map((model) => ({
-      provider: this.product.id,
-      id: model.id,
-      name: displayNameFor(model, listed),
-      inputModalities: this.inputModalitiesFor(model.id)
-    }));
-  }
-  /**
-   * 静态兜底模型目录：优先用产品自带的 `fallbackModels`，否则用通用默认表。
-   *
-   * 产品兜底表存在的原因：模型池由服务端按认证上下文下发，插件的 CLI
-   * token 未必能取到完整集合（实测 WorkBuddy 国际版经 CLI token 只能拿到
-   * 13 个别名，拿不到 GPT 系列）。产品兜底表提供该产品权威的完整清单。
-   */
-  staticFallbackModels() {
-    const productModels = this.product.fallbackModels;
-    if (productModels !== void 0 && productModels.length > 0) {
-      return productModels.map((model) => ({ id: model.id, name: model.name }));
-    }
-    return DEFAULT_MODELS2.map((id) => ({ id, name: id }));
-  }
-  async resolveModel(provider, model, _signal) {
-    await this.ensureRemoteModels();
-    const contextWindow = this.remoteContextWindows.get(model) ?? this.productFallbackContextWindows.get(model) ?? CONTEXT_WINDOWS2.get(model);
-    const resolved = {
-      provider,
-      id: model,
-      name: this.remoteMeta.get(model)?.name ?? this.productFallbackIndex.get(model)?.name ?? model,
-      inputModalities: this.inputModalitiesFor(model)
-    };
-    if (contextWindow !== void 0) resolved.context = { contextWindow };
-    const maxOutputTokens = positiveMaxTokens(
-      this.remoteMeta.get(model)?.maxOutputTokens ?? this.productFallbackMeta.get(model)?.maxOutputTokens
-    );
-    if (maxOutputTokens !== void 0) resolved.defaultMaxTokens = maxOutputTokens;
-    const efforts = this.effortsFor(model);
-    if (efforts.length > 0) {
-      const remoteDefault = this.remoteMeta.get(model)?.defaultReasoningEffort ?? this.productFallbackIndex.get(model)?.defaultReasoningEffort;
-      resolved.reasoning = {
-        efforts: efforts.map((id) => ({
-          id: ReasoningEffortId2(id),
-          name: EFFORT_NAMES[id] ?? id
-        })),
-        ...remoteDefault !== void 0 && efforts.includes(remoteDefault) ? { defaultEffort: ReasoningEffortId2(remoteDefault) } : {}
-      };
-    }
-    return resolved;
-  }
-  /**
-   * 兼容 0.1.1-rc.2：新版 LlmRuntime.prepareCall() 会调用
-   * `registration.adapter.prepareCall(...)`，而本仓库链接的 dsh-llm 副本
-   * （0.1.0-rc.6）的 LlmAdapter 基类尚未提供该方法，缺少时会在每轮请求
-   * 开始时抛 `registration.adapter.prepareCall is not a function`。这里把
-   * 模型解析与分发绑定到同一个适配器实例（与 CodeArtsAdapter 同款 shim）。
-   */
-  async prepareCall(provider, model, signal) {
-    return {
-      model: await this.resolveModel(provider, model, signal),
-      stream: (options) => this.stream(options)
-    };
-  }
-  async *stream(options) {
-    let credential = await this.options.resolveCredential(options.model);
-    if (credential === void 0 || isCredentialExpired(credential)) {
-      await this.options.refresh();
-      credential = await this.options.resolveCredential(options.model);
-    }
-    if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError3(
-        // ⚠️ 文案里**不能**再提 `/buddy-login` —— 该斜杠命令已随单凭据模式一并移除
-        // （AGENTS.md「不注册任何斜杠命令」），入口在 Channel Pack 设置页。
-        `${this.product.id}: no usable credential; log in from the Channel Pack panel first`,
-        "MISSING_CREDENTIAL"
-      );
-    }
-    let currentAccountId = "";
-    if (this.options.accountPool && credential) {
-      try {
-        currentAccountId = await this.options.accountPool.findAccountIdByCredential(
-          this.product.id,
-          credential.access_token
-        );
-        if (currentAccountId === "") {
-          console.warn(`[${this.product.id}] \u5F53\u524D\u51ED\u636E\u672A\u5339\u914D\u5230\u8D26\u53F7\u6C60\u6761\u76EE\uFF0C\u9650\u6D41\u8BB0\u5F55\u5C06\u88AB\u8DF3\u8FC7`);
-        }
-        if (currentAccountId !== "") reportLedgerAccount(this.product.id, currentAccountId);
-      } catch (error) {
-        console.warn(`[${this.product.id}] \u8D26\u53F7\u5339\u914D\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u672C\u6B21\u8BF7\u6C42\uFF09:`, error);
-      }
-    }
-    await this.ensureRemoteModels();
-    const imageRefs = /* @__PURE__ */ new Map();
-    for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages(message2.content, imageRefs);
-    }
-    let imageUrls;
-    if (imageRefs.size > 0) {
-      if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError3(`${this.product.id}: model "${options.model}" does not accept image input.`, "UNSUPPORTED_CONTENT");
-      }
-      if (this.options.readImage === void 0) {
-        throw new LlmError3(`${this.product.id}: image input requires the attachment service.`, "UNSUPPORTED_CONTENT");
-      }
-      imageUrls = /* @__PURE__ */ new Map();
-      for (const [id, ref] of imageRefs) {
-        const projected = await this.projectRequestImage(ref);
-        if (projected !== void 0) {
-          imageUrls.set(id, `data:${projected.mediaType};base64,${Buffer.from(projected.data).toString("base64")}`);
-          continue;
-        }
-        let image;
-        try {
-          image = await this.options.readImage(ref);
-        } catch (error) {
-          throw new LlmError3(
-            `${this.product.id}: \u8BFB\u53D6\u56FE\u7247\u9644\u4EF6\u5931\u8D25\uFF08${id}\uFF09\uFF1A${errorMessage2(error)}`,
-            "UNSUPPORTED_CONTENT",
-            { cause: error }
-          );
-        }
-        if (image === void 0) {
-          throw new LlmError3(
-            `${this.product.id}: \u56FE\u7247\u9644\u4EF6\u8BFB\u53D6\u4E0D\u5230\u5185\u5BB9\uFF08${id}\uFF09\uFF1B\u9644\u4EF6\u670D\u52A1\u53EF\u80FD\u672A\u5C31\u7EEA\uFF0C\u6216\u8BE5\u5BF9\u8C61\u5DF2\u4E0D\u5B58\u5728\u3002`,
-            "UNSUPPORTED_CONTENT"
-          );
-        }
-        imageUrls.set(id, `data:${image.mediaType};base64,${Buffer.from(image.data).toString("base64")}`);
-      }
-    }
-    const messages = serializeMessages2(options.messages, imageUrls);
-    if (options.system !== void 0 && options.system.length > 0) {
-      messages.unshift({ role: "system", content: options.system });
-    }
-    if (this.product.id === "workbuddy" && (messages.length === 0 || messages[0].role !== "system")) {
-      messages.unshift({ role: "system", content: "You are a helpful assistant." });
-    }
-    const tools = options.tools?.map((tool) => ({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters
-      }
-    }));
-    const bodyObj = {
-      model: options.model,
-      messages,
-      stream: true,
-      // prompt_cache_key 让服务端启用前缀缓存并在 usage 中返回缓存命中，
-      // 缺少该字段时命中恒为 0（与 codearts 同款修复，见 llm-adapter.ts）。
-      // 实证（2026 实测 deepseek-v4-flash，同一段 8k token 前缀）：
-      //   不带该字段 → prompt_tokens=8027, prompt_cache_hit_tokens=0,    credit=0.34
-      //   带该字段   → prompt_tokens=8027, prompt_cache_hit_tokens=7808, credit=0.02
-      // 仅此一个字段的差异，费用差约 17 倍。同 key 重复请求稳定命中同一前缀。
-      prompt_cache_key: this.sessionId
-    };
-    if (tools !== void 0 && tools.length > 0) bodyObj.tools = tools;
-    if (options.temperature !== void 0) bodyObj.temperature = options.temperature;
-    if (options.stop !== void 0 && options.stop.length > 0) bodyObj.stop = options.stop;
-    const maxTokens = positiveMaxTokens(
-      options.maxTokens ?? this.remoteMeta.get(options.model)?.maxOutputTokens ?? this.productFallbackMeta.get(options.model)?.maxOutputTokens
-    );
-    if (maxTokens !== void 0) bodyObj.max_tokens = maxTokens;
-    const deepseek = isDeepSeekModel(options.model);
-    if (deepseek) {
-      bodyObj.thinking = { type: "enabled" };
-    }
-    const efforts = this.effortsFor(options.model);
-    if (options.reasoningEffort !== void 0 && efforts.includes(options.reasoningEffort)) {
-      bodyObj.reasoning_effort = options.reasoningEffort;
-    } else if (deepseek && efforts.length > 0) {
-      bodyObj.reasoning_effort = this.defaultEffortFor(options.model) ?? (efforts.includes("high") ? "high" : efforts[0]);
-    }
-    const body = JSON.stringify(bodyObj);
-    let response = await this.send(credential, body, options);
-    if (!response.ok && (response.status === 401 || response.status === 403)) {
-      const rejectedBody = await response.clone().text().catch(() => "");
-      const contentRejected = isContentRejection(rejectedBody);
-      if (contentRejected) {
-        console.warn(
-          `[${this.product.id}] \u8D26\u53F7 ${currentAccountId || "(current)"} \u88AB\u5B89\u5168\u7B56\u7565\u62E6\u622A\uFF08HTTP ${response.status}\uFF0Ccode 11140\uFF09\uFF0C\u7EE7\u7EED\u6362\u53F7\uFF1A${errorDetail2(rejectedBody).slice(0, 200)}`
-        );
-        await markPolicyBlockedAccount(
-          this.options.accountPool,
-          this.product.id,
-          currentAccountId,
-          options.model
-        );
-      }
-      const authStatus = response.status;
-      const triedAuth = /* @__PURE__ */ new Set();
-      if (currentAccountId !== "") triedAuth.add(currentAccountId);
-      let refreshedCredential;
-      try {
-        await this.options.refresh();
-        refreshedCredential = await this.options.resolveCredential(options.model);
-      } catch (error) {
-        console.warn(`[${this.product.id}] \u5237\u65B0\u5F53\u524D\u8D26\u53F7\u51ED\u636E\u5931\u8D25\uFF0C\u6539\u7528\u6362\u53F7\u91CD\u8BD5\uFF1A${String(error)}`);
-      }
-      if (refreshedCredential !== void 0 && refreshedCredential.access_token.length > 0) {
-        credential = refreshedCredential;
-        response = await this.send(credential, body, options);
-        if (response.ok) {
-          yield* this.consumeSse(response, options, currentAccountId);
-          return;
-        }
-      }
-      let rotated = false;
-      let sawContentRejection = contentRejected;
-      let rejectionStatus = contentRejected ? authStatus : 0;
-      let rejectionBody = contentRejected ? rejectedBody : "";
-      if ((response.status === 401 || response.status === 403) && this.options.accountPool !== void 0) {
-        for (; ; ) {
-          const next = await this.options.accountPool.getAvailableAccount(
-            this.product.id,
-            options.model,
-            triedAuth
-          );
-          if (!next || triedAuth.has(next.entry.id)) break;
-          triedAuth.add(next.entry.id);
-          rotated = true;
-          credential = next.credential;
-          currentAccountId = next.entry.id;
-          response = await this.send(credential, body, options);
-          if (response.ok) {
-            yield* this.consumeSse(response, options, currentAccountId);
-            return;
-          }
-          const rotatedBody = await response.clone().text().catch(() => "");
-          if (isContentRejection(rotatedBody)) {
-            sawContentRejection = true;
-            rejectionStatus = response.status;
-            rejectionBody = rotatedBody;
-            await markPolicyBlockedAccount(
-              this.options.accountPool,
-              this.product.id,
-              currentAccountId,
-              options.model
-            );
-          }
-          if (response.status !== 401 && response.status !== 403) break;
-        }
-      }
-      if (refreshedCredential === void 0 && !rotated) {
-        if (sawContentRejection) {
-          throw contentRejectionError(
-            this.product.id,
-            rejectionStatus === 0 ? authStatus : rejectionStatus,
-            rejectionBody.length === 0 ? rejectedBody : rejectionBody,
-            true
-          );
-        }
-        throw new LlmError3(`${this.product.id}: credential expired and refresh failed`, "AUTH", { status: authStatus });
-      }
-      if (response.status === 401 || response.status === 403) {
-        const detail = await response.text().catch(() => "");
-        if (sawContentRejection || isContentRejection(detail)) {
-          throw contentRejectionError(
-            this.product.id,
-            rejectionStatus === 0 ? authStatus : rejectionStatus,
-            rejectionBody.length === 0 ? detail : rejectionBody,
-            true
-          );
-        }
-        throw new LlmError3(
-          `${this.product.id}: \u6240\u6709\u8D26\u53F7\u5747\u88AB\u62D2\u7EDD\uFF08HTTP ${authStatus}${authStatus === 401 ? "\uFF0C\u8BF7\u5728 Channel Pack \u91CD\u65B0\u767B\u5F55" : ""}\uFF09\uFF1A${errorDetail2(detail)}`,
-          httpErrorCode2(authStatus, detail),
-          { status: authStatus }
-        );
-      }
-    }
-    if (!response.ok) {
-      let errorText = await response.text().catch(() => "");
-      if (isModelSaturationError(response.status, errorText)) {
-        for (let attempt = 0; attempt < BUDDY_SATURATION_MAX_RETRIES; attempt += 1) {
-          const waitMs = buddySaturationDelayMs(attempt);
-          console.warn(
-            `[${this.product.id}] \u6A21\u578B ${options.model} \u8BF7\u6C42\u91CF\u9971\u548C\uFF08\u4E0A\u6E38 14003 model busy\uFF09\uFF0C${waitMs}ms \u540E**\u5728\u672C\u8D26\u53F7**\u91CD\u8BD5\uFF08\u7B2C ${attempt + 1}/${BUDDY_SATURATION_MAX_RETRIES} \u6B21\uFF09\u2014\u2014 \u4E0D\u6362\u53F7\u3001\u4E0D\u5199\u9650\u6D41\u6807\u8BB0\uFF1A\u9971\u548C\u662F\u6A21\u578B\u7EA7\uFF0C\u6C60\u91CC\u5176\u5B83\u8D26\u53F7\u4F1A\u649E\u540C\u4E00\u5835\u5899`
-          );
-          await sleepMs(waitMs);
-          response = await this.send(credential, body, options);
-          if (response.ok) {
-            yield* this.consumeSse(response, options, currentAccountId);
-            return;
-          }
-          errorText = await response.text().catch(() => "");
-          if (!isModelSaturationError(response.status, errorText)) break;
-        }
-        if (isModelSaturationError(response.status, errorText)) {
-          throw new LlmError3(
-            `${this.product.id}: \u6A21\u578B ${options.model} \u5F53\u524D\u8BF7\u6C42\u91CF\u9971\u548C\uFF08\u4E0A\u6E38 14003 model busy\uFF0C\u62A5\u6587\u539F\u6587\uFF1A\u300C\u6A21\u578B\u7E41\u5FD9\uFF0C\u8BF7\u6362\u6A21\u578B\u6216\u7A0D\u540E\u91CD\u8BD5\u300D\uFF09\uFF0C\u5DF2\u91CD\u8BD5 ${BUDDY_SATURATION_MAX_RETRIES} \u6B21\u4ECD\u672A\u901A\u8FC7\u3002\u6B64\u4E3A\u8BE5**\u6A21\u578B**\u6574\u4F53\u7E41\u5FD9\uFF0C\u5E76\u975E\u8D26\u53F7\u989D\u5EA6\u95EE\u9898 \u2014\u2014 \u6362\u8D26\u53F7\u65E0\u6548\uFF0C\u8BF7\u6539\u7528\u5176\u5B83\u6A21\u578B\uFF0C\u6216\u7A0D\u540E\u91CD\u8BD5\uFF08\u65E0\u9700\u91CD\u65B0\u767B\u5F55\uFF09\u3002`,
-            "RATE_LIMIT",
-            { status: response.status }
-          );
-        }
-      }
-      if (this.options.accountPool && isRateLimited(errorText, response.status)) {
-        const tried = /* @__PURE__ */ new Set();
-        if (currentAccountId) tried.add(currentAccountId);
-        let sawContentRejection = false;
-        let contentRejectionStatus = 0;
-        let contentRejectionBody = "";
-        const rateLimitMarked = /* @__PURE__ */ new Set();
-        for (; ; ) {
-          if (currentAccountId !== "" && isRateLimited(errorText, response.status) && !rateLimitMarked.has(currentAccountId)) {
-            rateLimitMarked.add(currentAccountId);
-            const parsed = parseRateLimitError(errorText, options.model, response.status);
-            await this.options.accountPool.updateModelRateLimit(
-              currentAccountId,
-              parsed?.modelId ?? options.model,
-              parsed?.resetTimeMs ?? Date.now() + RATE_LIMIT_FALLBACK_MS
-            );
-          }
-          const next = await this.options.accountPool.getAvailableAccount(
-            this.product.id,
-            options.model,
-            tried
-          );
-          if (!next || tried.has(next.entry.id)) break;
-          tried.add(next.entry.id);
-          credential = next.credential;
-          currentAccountId = next.entry.id;
-          response = await this.send(credential, body, options);
-          if (response.ok) {
-            yield* this.consumeSse(response, options, currentAccountId);
-            return;
-          }
-          errorText = await response.text().catch(() => "");
-          if (isContentRejection(errorText)) {
-            sawContentRejection = true;
-            contentRejectionStatus = response.status;
-            contentRejectionBody = errorText;
-            console.warn(
-              `[${this.product.id}] \u8D26\u53F7 ${currentAccountId || "(current)"} \u88AB\u5B89\u5168\u7B56\u7565\u62E6\u622A\uFF08HTTP ${response.status}\uFF0Ccode 11140\uFF09\uFF0C\u7EE7\u7EED\u6362\u53F7\uFF1A${errorDetail2(errorText).slice(0, 200)}`
-            );
-            await markPolicyBlockedAccount(
-              this.options.accountPool,
-              this.product.id,
-              currentAccountId,
-              options.model
-            );
-            continue;
-          }
-          if (response.status === 401 || response.status === 403) continue;
-          if (!isRateLimited(errorText, response.status)) {
-            throw new LlmError3(`${this.product.id}: ${errorDetail2(errorText)}`, httpErrorCode2(response.status, errorText), { status: response.status });
-          }
-        }
-        if (sawContentRejection) {
-          throw contentRejectionError(
-            this.product.id,
-            contentRejectionStatus || 403,
-            contentRejectionBody,
-            true
-          );
-        }
-        throw new LlmError3(`${this.product.id}: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u53D7\u9650\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5`, "QUOTA_EXCEEDED");
-      }
-      throw new LlmError3(`${this.product.id}: ${errorDetail2(errorText)}`, httpErrorCode2(response.status, errorText), { status: response.status });
-    }
-    yield* this.consumeSse(response, options, currentAccountId);
-  }
-  /** 发起一次 chat 请求；网络失败映射为可重试的 TRANSPORT 错误。 */
-  async send(credential, body, options) {
-    const headers = new Headers(attributionHeaders2());
-    headers.set("Authorization", `Bearer ${credential.access_token}`);
-    headers.set("Accept", "text/event-stream");
-    headers.set("Content-Type", "application/json");
-    headers.set(HTTP_HEADER_DOMAIN, this.product.apiDomain || credential.domain || "");
-    headers.set(HTTP_HEADER_PRODUCT_CODE, this.product.productCode);
-    headers.set("X-Agent-Purpose", "conversation");
-    headers.set("X-IDE-Name", this.product.attributionName);
-    headers.set("X-IDE-Type", this.product.attributionName);
-    headers.set("X-IDE-Version", this.product.clientVersion);
-    headers.set(HTTP_HEADER_PRODUCT, this.product.attributionName);
-    headers.set("User-Agent", resolveUserAgent(this.product, options.model));
-    if (this.product.id === "workbuddy") {
-      headers.set("X-Conversation-ID", this.sessionId);
-      headers.set("X-Conversation-Message-ID", crypto.randomUUID());
-      headers.set("X-Conversation-Request-ID", crypto.randomUUID());
-    }
-    try {
-      return await this.fetchImpl(`${this.product.endpoint}/v2/chat/completions`, {
-        method: "POST",
-        headers,
-        body,
-        signal: options.signal
-      });
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      if (isTransportError2(error)) {
-        throw new LlmError3(`${this.product.id}: transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
-      }
-      throw error;
-    }
-  }
-  /**
-   * 消费 SSE 响应并产出 StreamChunk。
-   *
-   * CodeBuddy 返回标准 OpenAI SSE：`delta.content` 为正文、
-   * `delta.reasoning_content` 为思考、`delta.tool_calls` 为工具调用。
-   * 流式工具调用仅首个分片携带真实 id（chatcmpl-tool-xxx），后续参数分片
-   * 只有 index——按 index 缓存 id 保证同一工具的所有分片 id 一致。
-   */
-  async *consumeSse(response, options, policyBlockedAccountId) {
-    if (!response.body) throw new LlmError3(`${this.product.id}: empty model response body`, "EMPTY_RESPONSE");
-    const blocks = [];
-    let nextIndex = 0;
-    const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
-    let loopDetected = false;
-    const proseLoopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
-    let proseLoopDetected = false;
-    const suppressor = createBlankReasoningSuppressor();
-    const proseSuppressor = createBlankReasoningSuppressor();
-    const toolCalls = /* @__PURE__ */ new Map();
-    const toolOrder = [];
-    const toolIds = /* @__PURE__ */ new Map();
-    let buffer = "";
-    let streamEnded = false;
-    let finishReason2;
-    const reader = response.body.getReader();
-    const decoder2 = new TextDecoder();
-    let firstTokenReceived = false;
-    try {
-      for (; ; ) {
-        if (streamEnded) break;
-        let result;
-        try {
-          const timeoutMs = firstTokenReceived ? resolveChunkTimeoutMs2() : resolveFirstTokenTimeoutMs2();
-          const phase = firstTokenReceived ? "chunk" : "first-token";
-          result = await readWithIdleTimeout(reader, timeoutMs, "buddy", options.signal, phase);
-          if (!result.done) firstTokenReceived = true;
-        } catch (error) {
-          if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError3) throw error;
-          if (isTransportError2(error)) {
-            throw new LlmError3(`${this.product.id}: sse transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
-          }
-          throw error;
-        }
-        if (result.done) break;
-        buffer += decoder2.decode(result.value, { stream: true });
-        let newline;
-        while ((newline = buffer.indexOf("\n")) !== -1) {
-          const line2 = buffer.slice(0, newline).trim();
-          buffer = buffer.slice(newline + 1);
-          if (!line2.startsWith("data:")) continue;
-          const payload = line2.slice(5).trim();
-          if (payload === "[DONE]") {
-            streamEnded = true;
-            break;
-          }
-          let data;
-          try {
-            data = JSON.parse(payload);
-          } catch {
-            continue;
-          }
-          if (data.choices === void 0 && (data.code === 11128 || data.code === "11128")) {
-            throw new LlmError3(
-              `${this.product.id}: code=11128 ${errorDetail2(payload)}`,
-              "INVALID_REQUEST",
-              { status: response.status }
-            );
-          }
-          if (data.choices === void 0 && isContentRejection(payload)) {
-            await markPolicyBlockedAccount(
-              this.options.accountPool,
-              this.product.id,
-              policyBlockedAccountId,
-              options.model
-            );
-            throw contentRejectionError(this.product.id, 200, payload, false);
-          }
-          if (data.error !== void 0) {
-            throw new LlmError3(`${this.product.id}: ${data.error.message ?? "unknown error"}`, "SERVER");
-          }
-          const choice = data.choices?.[0];
-          const delta = choice?.delta;
-          if (typeof choice?.finish_reason === "string") {
-            finishReason2 = choice.finish_reason;
-          }
-          const textDelta = delta?.content ? proseSuppressor.feed(delta.content) : void 0;
-          if (textDelta !== void 0) {
-            let block = blocks.find((candidate) => candidate.kind === "text");
-            if (block === void 0) {
-              block = { index: nextIndex++, kind: "text", text: "" };
-              blocks.push(block);
-              yield { type: "block-start", index: block.index, blockType: "text" };
-            }
-            if (proseLoopGuard !== void 0) {
-              if (proseLoopGuard.observe(textDelta)) proseLoopDetected = true;
-            }
-            if (!proseLoopDetected) {
-              block.text += textDelta;
-              yield { type: "text-delta", index: block.index, text: textDelta };
-            }
-          }
-          if (delta?.reasoning_content) {
-            if (loopGuard !== void 0) {
-              if (loopGuard.observe(delta.reasoning_content)) loopDetected = true;
-            }
-            if (!loopDetected) {
-              const emit = suppressor.feed(delta.reasoning_content);
-              if (emit !== void 0) {
-                let block = blocks.find((candidate) => candidate.kind === "reasoning");
-                if (block === void 0) {
-                  block = { index: nextIndex++, kind: "reasoning", text: "" };
-                  blocks.push(block);
-                  yield { type: "block-start", index: block.index, blockType: "reasoning" };
-                }
-                block.text = suppressor.text();
-                yield { type: "reasoning-delta", index: block.index, text: emit };
-              }
-            }
-          }
-          for (const call of delta?.tool_calls ?? []) {
-            const wireIndex = call.index ?? 0;
-            if (typeof call.id === "string" && call.id.length > 0) {
-              toolIds.set(wireIndex, call.id);
-            }
-            const callId = toolIds.get(wireIndex) ?? `call_${wireIndex}`;
-            let block = toolCalls.get(wireIndex);
-            if (block === void 0) {
-              block = { index: nextIndex++, text: "", callId, announced: false };
-              toolCalls.set(wireIndex, block);
-            }
-            block.callId = callId;
-            if (typeof call.function?.name === "string" && call.function.name.length > 0) {
-              block.name = call.function.name;
-            }
-            const fragment = call.function?.arguments ?? "";
-            block.text += fragment;
-            if (!block.announced) {
-              if (!hasUsableToolName(block.name)) continue;
-              block.announced = true;
-              toolOrder.push(block.index);
-              yield { type: "block-start", index: block.index, blockType: "tool-call" };
-              yield {
-                type: "tool-call-delta",
-                index: block.index,
-                id: ToolCallId2(callId),
-                name: block.name,
-                argumentsDelta: block.text
-              };
-              continue;
-            }
-            yield {
-              type: "tool-call-delta",
-              index: block.index,
-              id: ToolCallId2(callId),
-              ...block.name !== void 0 ? { name: block.name } : {},
-              argumentsDelta: fragment
-            };
-          }
-          if (data.usage) {
-            const promptTokens = data.usage.prompt_tokens ?? 0;
-            const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens ?? data.usage.prompt_cache_hit_tokens ?? 0;
-            const cacheWriteTokens = data.usage.prompt_tokens_details?.cache_write_tokens;
-            const reasoningTokens = data.usage.completion_tokens_details?.reasoning_tokens;
-            yield {
-              type: "usage",
-              usage: {
-                // 与 codearts 一致：inputTokens 只计**未命中缓存**的部分，
-                // 命中部分单列 cacheReadTokens，否则缓存命中率显示会偏大。
-                inputTokens: cachedTokens > 0 ? promptTokens - cachedTokens : promptTokens,
-                outputTokens: data.usage.completion_tokens ?? 0,
-                ...cachedTokens > 0 ? { cacheReadTokens: cachedTokens } : {},
-                ...cacheWriteTokens !== void 0 && cacheWriteTokens > 0 ? { cacheWriteTokens } : {},
-                ...reasoningTokens !== void 0 && reasoningTokens > 0 ? { reasoningTokens } : {}
-              }
-            };
-          }
-        }
-        if (loopDetected) {
-          await reader.cancel().catch(() => {
-          });
-          break;
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    let blockCount = 0;
-    let emittedProse = "";
-    const textBlock = blocks.find((block) => block.kind === "text");
-    for (const index of toolOrder) {
-      const block = [...toolCalls.values()].find((candidate) => candidate.index === index);
-      if (!hasUsableToolName(block.name)) continue;
-      blockCount += 1;
-      yield {
-        type: "block-end",
-        index,
-        block: {
-          type: "tool-call",
-          id: ToolCallId2(block.callId ?? ""),
-          name: block.name,
-          // 仅把"无参数工具下发的空分片"补成 {}；**残缺参数保持原样**，
-          // 由 max-tokens 判定触发重试。切勿把残缺 JSON 也补成 {}——那会
-          // 伪造出合法外观，让 harness 报 `missing required property` 而
-          // 非重试，掩盖真正的分片丢失。
-          arguments: isTruncatedArguments(block.text) ? block.text : normalizeToolArguments(block.text)
-        }
-      };
-    }
-    if (textBlock !== void 0) {
-      let textOut = textBlock.text;
-      {
-        const split = splitThinkTaggedContent(textBlock.text);
-        if (split !== void 0) {
-          if (split.reasoning !== "") {
-            const existing = blocks.find((candidate) => candidate.kind === "reasoning");
-            if (existing === void 0) {
-              blocks.push({ index: nextIndex++, kind: "reasoning", text: split.reasoning });
-            } else {
-              existing.text += split.reasoning;
-            }
-            suppressor.feed(split.reasoning);
-          }
-          textOut = split.text;
-        }
-      }
-      textOut = stripBareThinkCloseTagIfEnabled(textOut);
-      const truncated = proseLoopDetected && proseLoopGuard?.cutAt !== void 0 ? textOut.slice(0, proseLoopGuard.cutAt) : textOut;
-      const cleaned = stripCourseLeakIfEnabled(truncated);
-      if (cleaned.trim() !== "") {
-        blockCount += 1;
-        emittedProse = cleaned;
-        yield { type: "block-end", index: textBlock.index, block: { type: "text", text: cleaned } };
-      } else {
-        yield { type: "block-end", index: textBlock.index, block: { type: "text", text: "" } };
-      }
-    }
-    const reasoningBlock = blocks.find((block) => block.kind === "reasoning");
-    if (reasoningBlock !== void 0 && reasoningBlock.text.trim() !== "") {
-      const suppressedReasoning = suppressor.text();
-      const reasoningText = loopDetected && loopGuard?.cutAt !== void 0 ? suppressedReasoning.slice(0, loopGuard.cutAt) : suppressedReasoning;
-      const cleanedReasoning = stripCourseLeakIfEnabled(reasoningText);
-      if (cleanedReasoning !== "") {
-        blockCount += 1;
-        yield { type: "block-end", index: reasoningBlock.index, block: { type: "reasoning", text: cleanedReasoning } };
-      }
-    }
-    const argsTruncated = [...toolCalls.values()].some((block) => isTruncatedArguments(block.text));
-    const droppedUnnamedCalls = [...toolCalls.values()].some((block) => !block.announced);
-    const proseCutByStopString = finishReason2 === "stop" && toolOrder.length === 0 && isProseTruncatedByStopString(emittedProse);
-    const reasoningLoopIsSoleOutput = loopDetected && emittedProse === "" && toolOrder.length === 0;
-    const reason = reasoningLoopIsSoleOutput ? { kind: "error", failure: reasoningLoopFailure(
-      loopGuard?.diagnostics,
-      options.maxTokens,
-      "reasoning"
-    ) } : loopDetected ? { kind: "max-tokens" } : finishReason2 === "length" || finishReason2 === void 0 && toolOrder.length > 0 || argsTruncated || proseCutByStopString || droppedUnnamedCalls && toolOrder.length === 0 ? { kind: "max-tokens" } : finishReason2 === "tool_calls" || toolOrder.length > 0 ? { kind: "tool-calls" } : { kind: "stop" };
-    yield { type: "finish", reason: resolveEmptyResponseReason(reason, blockCount) };
-  }
-};
-function isCredentialExpired(credential) {
-  const expiresAt = credentialExpiresAtMs(credential);
-  return expiresAt === void 0 ? false : Date.now() >= expiresAt;
-}
-function displayNameFor(model, all) {
-  const suffix = displaySuffix(model, all);
-  return suffix.length > 0 ? `${model.name} \xB7 ${suffix}` : model.name;
-}
-function displaySuffix(model, all) {
-  const parts = [];
-  const rate = formatCreditsRate(model.creditsRate, model.discountedCreditsRate);
-  if (rate !== void 0) parts.push(rate);
-  const variant = variantLabelFor(model, all);
-  if (variant.length > 0) parts.push(variant);
-  return parts.join(" ");
-}
-function variantLabelFor(model, all) {
-  const group = all.filter((candidate) => candidate.name === model.name);
-  if (group.length <= 1) return "";
-  const prefix = commonPrefix(group.map((candidate) => candidate.id));
-  const variant = model.id.slice(prefix.length).replace(/^-+/, "");
-  return variant.toUpperCase();
-}
-function commonPrefix(values) {
-  if (values.length === 0) return "";
-  let prefix = values[0];
-  for (const value of values.slice(1)) {
-    let i = 0;
-    while (i < prefix.length && i < value.length && prefix[i] === value[i]) i++;
-    prefix = prefix.slice(0, i);
-    if (prefix.length === 0) break;
-  }
-  return prefix;
-}
-function positiveMaxTokens(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : void 0;
-}
-function registerBuddyLlm(ctx, options) {
-  const product = options.product ?? CODEBUDDY;
-  const adapter = new BuddyAdapter(options);
-  registerAdapterIdempotent(ctx.llm, [product.id], adapter);
-  return adapter;
-}
-
-// vendor/channel-pack/src/lobsterai-adapter.ts
-import {
-  LlmAdapter as LlmAdapter3,
-  LlmError as LlmError4,
-  ReasoningEffortId as ReasoningEffortId3
-} from "@deepseek-ai/dsh-llm";
-import { ToolCallId as ToolCallId3 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/lobsterai.ts
-import { createHash } from "node:crypto";
 var LOBSTERAI_EXCHANGE_PATH = "/api/auth/exchange";
 var LOBSTERAI_REFRESH_PATH = "/api/auth/refresh";
 var LOBSTERAI_MODELS_PATH = "/api/models/available";
@@ -36032,13 +34519,13 @@ function lobsteraiDisplayNickname(credential, fallbackId) {
   if (nickname.length === 0) return fallbackId;
   return maskLobsteraiPhoneTail(nickname);
 }
-function readStringField2(source, key) {
+function readStringField(source, key) {
   const value = source[key];
   if (typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return "";
 }
-function readNumberField2(source, key) {
+function readNumberField(source, key) {
   const value = source[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())) return Number(value);
@@ -36049,8 +34536,8 @@ function parseLobsteraiEnvelope(body) {
     return { ok: false, code: -1, message: "\u54CD\u5E94\u4E0D\u662F JSON \u5BF9\u8C61" };
   }
   const record = body;
-  const code = readNumberField2(record, "code") ?? -1;
-  const message2 = readStringField2(record, "msg") || readStringField2(record, "message");
+  const code = readNumberField(record, "code") ?? -1;
+  const message2 = readStringField(record, "msg") || readStringField(record, "message");
   if (code !== 0) {
     return { ok: false, code, message: message2.length > 0 ? message2 : `code=${code}` };
   }
@@ -36105,22 +34592,22 @@ function lobsteraiRefreshBody(credential, clientVersion) {
 }
 function parseLobsteraiTokenPayload(data) {
   const user = typeof data.user === "object" && data.user !== null ? data.user : {};
-  const expiresIn = readNumberField2(data, "expiresIn");
+  const expiresIn = readNumberField(data, "expiresIn");
   return {
-    accessToken: readStringField2(data, "accessToken"),
-    refreshToken: readStringField2(data, "refreshToken"),
+    accessToken: readStringField(data, "accessToken"),
+    refreshToken: readStringField(data, "refreshToken"),
     ...expiresIn === void 0 ? {} : { expiresIn },
-    userId: readStringField2(user, "id"),
-    yid: readStringField2(user, "yid"),
-    accountUserId: readStringField2(user, "userId"),
-    nickname: readStringField2(user, "nickname")
+    userId: readStringField(user, "id"),
+    yid: readStringField(user, "yid"),
+    accountUserId: readStringField(user, "userId"),
+    nickname: readStringField(user, "nickname")
   };
 }
 function resolveLobsteraiUid(payload) {
   for (const candidate of [payload.userId, payload.accountUserId, payload.yid]) {
     if (candidate !== void 0 && candidate.length > 0) return candidate;
   }
-  return createHash("sha256").update(payload.accessToken).digest("hex").slice(0, 16);
+  return createHash2("sha256").update(payload.accessToken).digest("hex").slice(0, 16);
 }
 function buildLobsteraiCredential(payload, session) {
   const expiresAt = payload.expiresIn !== void 0 && payload.expiresIn > 0 ? String(Date.now() + payload.expiresIn * 1e3) : (() => {
@@ -36288,6 +34775,42 @@ function lobsteraiProductById(id) {
   return ALL_LOBSTERAI_PRODUCTS.find((product) => product.id === id);
 }
 
+// vendor/channel-pack/src/image-budget.ts
+var REQUEST_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+var RACCOON_REQUEST_IMAGE_MAX_BYTES = 512 * 1024;
+var DEFAULT_BODY_LIMITED_IMAGE_MAX_BYTES = 1024 * 1024;
+var DEFAULT_IMAGE_PIXEL_BUDGET = 64e4;
+function fitImageToPixelBudget(width, height, maxPixels) {
+  if (!isPositiveFinite(width) || !isPositiveFinite(height)) return void 0;
+  if (!isPositiveFinite(maxPixels)) return void 0;
+  if (width * height <= maxPixels) return { width: Math.floor(width), height: Math.floor(height) };
+  const scale = Math.sqrt(maxPixels / (width * height));
+  const targetWidth = Math.max(1, Math.floor(width * scale));
+  const targetHeight = Math.max(1, Math.floor(height * scale));
+  return { width: targetWidth, height: targetHeight };
+}
+function requestImageTargetFor(width, height, maxPixels, maxBytes = REQUEST_IMAGE_MAX_BYTES) {
+  const fitted = fitImageToPixelBudget(width, height, maxPixels ?? DEFAULT_IMAGE_PIXEL_BUDGET);
+  if (fitted === void 0) return void 0;
+  return { width: fitted.width, height: fitted.height, maxBytes: maxBytes ?? REQUEST_IMAGE_MAX_BYTES };
+}
+async function projectRequestImage(attachment, options) {
+  const readImageRequest = options.readImageRequest;
+  if (readImageRequest === void 0) return void 0;
+  const { width, height } = attachment;
+  if (typeof width !== "number" || typeof height !== "number") return void 0;
+  const target = requestImageTargetFor(width, height, options.pixelBudget, options.maxBytes);
+  if (target === void 0) return void 0;
+  try {
+    return await readImageRequest(attachment, target);
+  } catch {
+    return void 0;
+  }
+}
+function isPositiveFinite(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
 // vendor/channel-pack/src/lobsterai-errors.ts
 var LOBSTERAI_HARD_CREDIT_MARKERS = [
   "insufficient credit",
@@ -36359,7 +34882,7 @@ function isLobsteraiTerminalError(kind) {
 }
 
 // vendor/channel-pack/src/lobsterai-adapter.ts
-var EFFORT_NAMES2 = {
+var EFFORT_NAMES = {
   off: "Off",
   minimal: "Minimal",
   low: "Low",
@@ -36400,7 +34923,7 @@ function parseLobsteraiThinkingConfig(value) {
 function readLobsteraiModelArray(body) {
   if (typeof body !== "object" || body === null) return [];
   const record = body;
-  if ((readNumberField2(record, "code") ?? -1) !== 0) return [];
+  if ((readNumberField(record, "code") ?? -1) !== 0) return [];
   const data = record.data;
   if (Array.isArray(data)) return data;
   if (typeof data === "object" && data !== null) {
@@ -36415,13 +34938,13 @@ function parseLobsteraiModels(body) {
   for (const item of raw) {
     if (typeof item !== "object" || item === null) continue;
     const record = item;
-    const id = readStringField2(record, "modelId");
+    const id = readStringField(record, "modelId");
     if (id.length === 0) continue;
-    const name2 = readStringField2(record, "modelName");
+    const name2 = readStringField(record, "modelName");
     const model = { id, name: name2.length > 0 ? name2 : id };
-    const contextWindow = readNumberField2(record, "contextWindow");
+    const contextWindow = readNumberField(record, "contextWindow");
     if (contextWindow !== void 0 && contextWindow > 0) model.contextWindow = contextWindow;
-    const maxTokens = readNumberField2(record, "maxTokens");
+    const maxTokens = readNumberField(record, "maxTokens");
     if (maxTokens !== void 0 && maxTokens > 0) model.maxTokens = maxTokens;
     if (typeof record.supportsImage === "boolean") model.supportsImage = record.supportsImage;
     if (typeof record.supportsThinking === "boolean") model.supportsThinking = record.supportsThinking;
@@ -36431,9 +34954,9 @@ function parseLobsteraiModels(body) {
       const capabilities = record.requestCapabilities.filter((c) => typeof c === "string");
       if (capabilities.length > 0) model.requestCapabilities = capabilities;
     }
-    const description = readStringField2(record, "description");
+    const description = readStringField(record, "description");
     if (description.length > 0) model.description = description;
-    const costMultiplier = readNumberField2(record, "costMultiplier");
+    const costMultiplier = readNumberField(record, "costMultiplier");
     if (costMultiplier !== void 0 && costMultiplier > 0) model.costMultiplier = costMultiplier;
     models.push(model);
   }
@@ -36447,13 +34970,13 @@ function buildLobsteraiModelsQuery(credential, clientVersion) {
   }
   return params.toString();
 }
-function contentToText3(content) {
+function contentToText2(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => String(block.text)).join("");
 }
-var TOOL_RESULT_IMAGE_TEXT2 = "Attached image(s) from tool result:";
-function userContentParts2(content, imageUrls) {
+var TOOL_RESULT_IMAGE_TEXT = "Attached image(s) from tool result:";
+function userContentParts(content, imageUrls) {
   const parts = [];
   let hasImage = false;
   for (const raw of content) {
@@ -36471,19 +34994,19 @@ function userContentParts2(content, imageUrls) {
       continue;
     }
     if (block.type === "tool-result" && Array.isArray(block.content)) {
-      const inner = userContentParts2(block.content, imageUrls);
+      const inner = userContentParts(block.content, imageUrls);
       if (inner !== void 0) {
         hasImage = true;
         parts.push(...inner);
       } else {
-        const text = contentToText3(block.content);
+        const text = contentToText2(block.content);
         if (text.length > 0) parts.push({ type: "text", text });
       }
     }
   }
   return hasImage && parts.length > 0 ? parts : void 0;
 }
-function collectImages2(content, refs) {
+function collectImages(content, refs) {
   for (const raw of content) {
     if (typeof raw !== "object" || raw === null) continue;
     const block = raw;
@@ -36491,10 +35014,10 @@ function collectImages2(content, refs) {
       refs.set(block.attachment.attachmentId, block.attachment);
       continue;
     }
-    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages2(block.content, refs);
+    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages(block.content, refs);
   }
 }
-function serializeMessages3(messages, imageUrls) {
+function serializeMessages2(messages, imageUrls) {
   const wire = [];
   const normalized = normalizeHarnessMessages(messages);
   const { keepCallIds, keepResultIds } = resolveToolPairing(normalized);
@@ -36503,7 +35026,7 @@ function serializeMessages3(messages, imageUrls) {
     if (pendingToolImages.length === 0) return;
     wire.push({
       role: "user",
-      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT2 }, ...pendingToolImages]
+      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT }, ...pendingToolImages]
     });
     pendingToolImages = [];
   };
@@ -36519,7 +35042,7 @@ function serializeMessages3(messages, imageUrls) {
         function: { name: String(block.name), arguments: normalizeToolArguments(String(block.arguments)) }
       }));
       const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
-      const text2 = contentToText3(content2);
+      const text2 = contentToText2(content2);
       if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       flushToolImages();
       wire.push({
@@ -36533,14 +35056,14 @@ function serializeMessages3(messages, imageUrls) {
     }
     if (message2.role === "system") {
       flushToolImages();
-      wire.push({ role: "system", content: contentToText3(message2.content) });
+      wire.push({ role: "system", content: contentToText2(message2.content) });
       continue;
     }
     const content = Array.isArray(message2.content) ? message2.content : [];
     const toolResults = content.filter((block) => typeof block === "object" && block !== null && block.type === "tool-result");
-    const text = contentToText3(message2.content);
+    const text = contentToText2(message2.content);
     const regular = content.filter((block) => !(typeof block === "object" && block !== null && block.type === "tool-result"));
-    const parts = imageUrls === void 0 ? void 0 : userContentParts2(regular, imageUrls);
+    const parts = imageUrls === void 0 ? void 0 : userContentParts(regular, imageUrls);
     if (parts !== void 0) {
       flushToolImages();
       wire.push({ role: "user", content: parts });
@@ -36552,16 +35075,16 @@ function serializeMessages3(messages, imageUrls) {
       if (!keepResultIds.has(String(result.toolCallId))) continue;
       let resultText = "(no output)";
       if (imageUrls !== void 0 && Array.isArray(result.content)) {
-        const resultParts = userContentParts2(result.content, imageUrls);
+        const resultParts = userContentParts(result.content, imageUrls);
         if (resultParts !== void 0) {
           pendingToolImages.push(...resultParts.filter((part) => part.type !== "text"));
           const joined = resultParts.filter((part) => part.type === "text").map((part) => String(part.text)).join("");
           if (joined.length > 0) resultText = joined;
         } else {
-          resultText = contentToText3(result.content) || "(no output)";
+          resultText = contentToText2(result.content) || "(no output)";
         }
       } else {
-        resultText = contentToText3(result.content) || "(no output)";
+        resultText = contentToText2(result.content) || "(no output)";
       }
       wire.push({
         role: "tool",
@@ -36573,7 +35096,7 @@ function serializeMessages3(messages, imageUrls) {
   flushToolImages();
   return wire;
 }
-function errorMessage3(error) {
+function errorMessage2(error) {
   if (error instanceof Error) return error.message;
   try {
     return String(error);
@@ -36581,7 +35104,7 @@ function errorMessage3(error) {
     return "unknown error";
   }
 }
-var LobsteraiStreamError = class extends LlmError4 {
+var LobsteraiStreamError = class extends LlmError3 {
   constructor(message2, kind, detail, options) {
     super(message2, kind === "hard-credit" ? "QUOTA_EXCEEDED" : "SERVER", options);
     this.kind = kind;
@@ -36590,21 +35113,21 @@ var LobsteraiStreamError = class extends LlmError4 {
 };
 function buildLobsteraiFailure(input) {
   const { kind, status, text, model, fromStream, exhausted } = input;
-  const detail = fromStream ? text : errorDetail3(text);
+  const detail = fromStream ? text : errorDetail2(text);
   if (kind === "hard-credit") {
     const prefix = exhausted ? `lobsterai: \u6A21\u578B ${model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528` : "lobsterai: \u79EF\u5206\u4E0D\u8DB3";
-    return new LlmError4(`${prefix}\uFF08${detail}\uFF09`, "QUOTA_EXCEEDED", { status });
+    return new LlmError3(`${prefix}\uFF08${detail}\uFF09`, "QUOTA_EXCEEDED", { status });
   }
   if (exhausted) {
-    return new LlmError4(
+    return new LlmError3(
       `lobsterai: \u6A21\u578B ${model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08${detail}\uFF09`,
-      fromStream ? "SERVER" : httpErrorCode3(status),
+      fromStream ? "SERVER" : httpErrorCode2(status),
       { status }
     );
   }
-  return new LlmError4(`lobsterai: ${detail}`, fromStream ? "SERVER" : httpErrorCode3(status), { status });
+  return new LlmError3(`lobsterai: ${detail}`, fromStream ? "SERVER" : httpErrorCode2(status), { status });
 }
-function errorDetail3(body) {
+function errorDetail2(body) {
   try {
     const data = JSON.parse(body);
     const parts = [
@@ -36617,14 +35140,14 @@ function errorDetail3(body) {
   }
   return body;
 }
-function httpErrorCode3(status) {
+function httpErrorCode2(status) {
   if (status === 401 || status === 403) return "AUTH";
   if (status === 429) return "RATE_LIMIT";
   if (status === 400) return "INVALID_REQUEST";
   if (status >= 500) return "SERVER";
   return `HTTP_${status}`;
 }
-function isTransportError3(error) {
+function isTransportError2(error) {
   if (!(error instanceof Error)) return false;
   const message2 = error.message.toLowerCase();
   if (message2.includes("terminated")) return true;
@@ -36633,13 +35156,13 @@ function isTransportError3(error) {
   if (message2.includes("econnreset") || message2.includes("epipe") || message2.includes("socket hang up")) return true;
   return false;
 }
-function resolveFirstTokenTimeoutMs3() {
+function resolveFirstTokenTimeoutMs2() {
   return Number.parseInt(process.env.DSH_LOBSTERAI_SSE_FIRST_TOKEN_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-function resolveChunkTimeoutMs3() {
+function resolveChunkTimeoutMs2() {
   return Number.parseInt(process.env.DSH_LOBSTERAI_SSE_CHUNK_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-var LobsteraiAdapter = class extends LlmAdapter3 {
+var LobsteraiAdapter = class extends LlmAdapter2 {
   constructor(options) {
     super();
     this.options = options;
@@ -36736,12 +35259,12 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
     const defaultWire = config.options.find((option) => option.level === config.defaultLevel)?.openclawLevel;
     return {
       efforts: config.options.map((option) => ({
-        id: ReasoningEffortId3(option.openclawLevel),
+        id: ReasoningEffortId2(option.openclawLevel),
         // 展示名优先用**产品侧 `level`**（含 `max`），再回退到按 wire 值查表。
         // 回退分支只为兼容「上游只给 wire 值」的异常形态，正常不会走到。
-        name: EFFORT_NAMES2[option.level] ?? EFFORT_NAMES2[option.openclawLevel] ?? option.level
+        name: EFFORT_NAMES[option.level] ?? EFFORT_NAMES[option.openclawLevel] ?? option.level
       })),
-      ...defaultWire !== void 0 ? { defaultEffort: ReasoningEffortId3(defaultWire) } : {}
+      ...defaultWire !== void 0 ? { defaultEffort: ReasoningEffortId2(defaultWire) } : {}
     };
   }
   /**
@@ -36770,7 +35293,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
    */
   listAllModels() {
     const source = this.remoteModels ?? this.staticFallbackModels();
-    return source.map((model) => ({ id: model.id, name: displayNameFor2(model) }));
+    return source.map((model) => ({ id: model.id, name: displayNameFor(model) }));
   }
   async listModels(_provider) {
     if (!await providerCatalogVisible(this.options.accountPool, this.product.id)) return [];
@@ -36783,7 +35306,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       id: model.id,
       // 倍率写进 name（**不是** description）：composer 的模型切换菜单只渲染
       // `name`，description 仅用于 /model 弹窗。见 displayNameFor 的说明。
-      name: displayNameFor2(model),
+      name: displayNameFor(model),
       ...model.description !== void 0 ? { description: model.description } : {},
       // 远端 supportsImage 权威；未声明时保守报 text（见 inputModalitiesFor）。
       inputModalities: this.inputModalitiesFor(model.id)
@@ -36832,18 +35355,18 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
     await this.ensureRemoteModels();
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages(message2.content, imageRefs);
     }
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError4(
+        throw new LlmError3(
           `lobsterai: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError4("lobsterai: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError3("lobsterai: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -36864,7 +35387,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError4("lobsterai: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError3("lobsterai: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     let currentAccountId = "";
     if (this.options.accountPool) {
@@ -36881,7 +35404,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
         console.warn("[lobsterai] \u8D26\u53F7\u5339\u914D\u5931\u8D25\uFF08\u4E0D\u5F71\u54CD\u672C\u6B21\u8BF7\u6C42\uFF09:", error);
       }
     }
-    const messages = serializeMessages3(options.messages, imageUrls);
+    const messages = serializeMessages2(options.messages, imageUrls);
     if (options.system !== void 0 && options.system.length > 0) {
       messages.unshift({ role: "system", content: options.system });
     }
@@ -36909,7 +35432,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError4("lobsterai: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError3("lobsterai: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await this.send(credential, body, options);
@@ -37009,8 +35532,8 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
       });
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      if (isTransportError3(error)) {
-        throw new LlmError4(`lobsterai: transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
+      if (isTransportError2(error)) {
+        throw new LlmError3(`lobsterai: transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
       }
       throw error;
     }
@@ -37031,7 +35554,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
    *   `max-tokens`，否则 harness 会执行残缺 JSON 参数并污染会话历史。
    */
   async *consumeSse(response, options) {
-    if (!response.body) throw new LlmError4("lobsterai: empty model response body", "EMPTY_RESPONSE");
+    if (!response.body) throw new LlmError3("lobsterai: empty model response body", "EMPTY_RESPONSE");
     const blocks = [];
     let nextIndex = 0;
     const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -37055,15 +35578,15 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
         if (streamEnded) break;
         let result;
         try {
-          const timeoutMs = firstTokenReceived ? resolveChunkTimeoutMs3() : resolveFirstTokenTimeoutMs3();
+          const timeoutMs = firstTokenReceived ? resolveChunkTimeoutMs2() : resolveFirstTokenTimeoutMs2();
           const phase = firstTokenReceived ? "chunk" : "first-token";
           result = await readWithIdleTimeout(reader, timeoutMs, "lobsterai", options.signal, phase);
           if (!result.done) firstTokenReceived = true;
         } catch (error) {
           if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError4) throw error;
-          if (isTransportError3(error)) {
-            throw new LlmError4(`lobsterai: sse transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
+          if (error instanceof LlmError3) throw error;
+          if (isTransportError2(error)) {
+            throw new LlmError3(`lobsterai: sse transport error: ${errorMessage2(error)}`, "TRANSPORT", { cause: error });
           }
           throw error;
         }
@@ -37158,7 +35681,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
               yield {
                 type: "tool-call-delta",
                 index: block.index,
-                id: ToolCallId3(callId),
+                id: ToolCallId2(callId),
                 name: block.name,
                 argumentsDelta: block.text
               };
@@ -37167,7 +35690,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
             yield {
               type: "tool-call-delta",
               index: block.index,
-              id: ToolCallId3(callId),
+              id: ToolCallId2(callId),
               ...block.name !== void 0 ? { name: block.name } : {},
               argumentsDelta: fragment
             };
@@ -37209,7 +35732,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
         index,
         block: {
           type: "tool-call",
-          id: ToolCallId3(block.callId ?? ""),
+          id: ToolCallId2(block.callId ?? ""),
           name: block.name,
           // 仅把「无参数工具下发的空分片」补成 {}；**残缺参数保持原样**，
           // 由 max-tokens 判定触发重试 —— 把残缺 JSON 补成 {} 会伪造出
@@ -37268,7 +35791,7 @@ var LobsteraiAdapter = class extends LlmAdapter3 {
     yield { type: "finish", reason: resolveEmptyResponseReason(reason, blockCount) };
   }
 };
-function displayNameFor2(model) {
+function displayNameFor(model) {
   if (model.costMultiplier === void 0) return model.name;
   return `${model.name} \xB7 x${model.costMultiplier}`;
 }
@@ -37285,10 +35808,10 @@ function buildLobsteraiModelsUrl(product, credential, clientVersion) {
 }
 
 // vendor/channel-pack/src/qoder-adapter.ts
-import { LlmAdapter as LlmAdapter4, LlmError as LlmError7, ReasoningEffortId as ReasoningEffortId4 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter3, LlmError as LlmError6, ReasoningEffortId as ReasoningEffortId3 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/qoder.ts
-import { createHash as createHash2, randomUUID, randomBytes } from "node:crypto";
+import { createHash as createHash3, randomUUID, randomBytes as randomBytes2 } from "node:crypto";
 var QODER_REQUEST_TIMEOUT_MS = 3e4;
 var QODER_LOGIN_TIMEOUT_MS = 3e5;
 var QODER_POLL_INTERVAL_MS = 1e3;
@@ -37300,12 +35823,12 @@ var QODER_USERINFO_PATH = "/api/v1/userinfo";
 var PKCE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
 function createQoderPkce() {
   const length = 43 + Math.floor(86 * Math.random());
-  const bytes = randomBytes(length);
+  const bytes = randomBytes2(length);
   let verifier = "";
   for (let i = 0; i < length; i++) {
     verifier += PKCE_ALPHABET[bytes[i] % PKCE_ALPHABET.length];
   }
-  const challenge = createHash2("sha256").update(verifier).digest().toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const challenge = createHash3("sha256").update(verifier).digest().toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return { verifier, challenge };
 }
 function createQoderDeviceSession(machineId) {
@@ -37356,7 +35879,7 @@ function parseQoderTokenPayload(value) {
   }
   const source = value;
   const accessToken = readString(source, ["token", "device_token", "access_token"]) ?? "";
-  const refreshToken2 = readString(source, ["refresh_token", "refreshToken"]);
+  const refreshToken = readString(source, ["refresh_token", "refreshToken"]);
   const expiresAt = readTimestamp(source.expires_at ?? source.expiresAt);
   const refreshTokenExpiresAt = readTimestamp(
     source.refresh_token_expires_at ?? source.refreshTokenExpiresAt
@@ -37365,7 +35888,7 @@ function parseQoderTokenPayload(value) {
   const userName = readString(source, ["user_name", "userName"]);
   return {
     accessToken,
-    ...refreshToken2 === void 0 ? {} : { refreshToken: refreshToken2 },
+    ...refreshToken === void 0 ? {} : { refreshToken },
     ...expiresAt === void 0 ? {} : { expiresAt },
     ...refreshTokenExpiresAt === void 0 ? {} : { refreshTokenExpiresAt },
     ...uid === void 0 ? {} : { uid },
@@ -37550,7 +36073,7 @@ async function createGlue() {
     }
     return cachedView;
   };
-  const readString8 = (ptr, len) => decoder2.decode(heap().subarray(ptr >>> 0, (ptr >>> 0) + len));
+  const readString7 = (ptr, len) => decoder2.decode(heap().subarray(ptr >>> 0, (ptr >>> 0) + len));
   const objects = new Array(1024).fill(void 0);
   objects.push(void 0, null, true, false);
   let firstFree = objects.length;
@@ -37589,7 +36112,7 @@ async function createGlue() {
       len = v.getInt32(stack + 4, true);
       const isError = v.getInt32(stack + 12, true);
       if (isError) throw takeObject(v.getInt32(stack + 8, true));
-      return readString8(ptr, len);
+      return readString7(ptr, len);
     } finally {
       exports.__wbindgen_add_to_stack_pointer(16);
       if (ptr) exports.__wbindgen_export4(ptr, len, 1);
@@ -37619,7 +36142,7 @@ async function createGlue() {
     __wbindgen_object_drop_ref: (a) => takeObject(a),
     __wbindgen_object_clone_ref: (a) => pushObject(heapObject(a)),
     __wbindgen_cast_0000000000000001: (a, e) => pushObject(heap().subarray(a >>> 0, (a >>> 0) + e)),
-    __wbindgen_cast_0000000000000002: (a, e) => pushObject(readString8(a, e)),
+    __wbindgen_cast_0000000000000002: (a, e) => pushObject(readString7(a, e)),
     __wbg_set_08463b1df38a7e29: (a, e, t) => pushObject(heapObject(a).set(heapObject(e), heapObject(t))),
     // ⚠️ 这两个签名**方向相反**：一个写 wasm 内存，一个调 JS 对象。
     // 写反会得到 Rust panic `unreachable`。
@@ -37657,9 +36180,9 @@ async function createGlue() {
     __wbg_static_accessor_SELF_24f78b6d23f286ea: () => globalThis.self === void 0 ? 0 : pushObject(globalThis.self),
     __wbg_static_accessor_WINDOW_59fd959c540fe405: () => globalThis.window === void 0 ? 0 : pushObject(globalThis.window),
     __wbg___wbindgen_throw_81fc77679af83bc6: (p, l) => {
-      throw new Error(readString8(p, l));
+      throw new Error(readString7(p, l));
     },
-    __wbg_Error_2e59b1b37a9a34c3: (p, l) => pushObject(new Error(readString8(p, l))),
+    __wbg_Error_2e59b1b37a9a34c3: (p, l) => pushObject(new Error(readString7(p, l))),
     __wbg___wbindgen_is_object_40c5a80572e8f9d3: (id) => {
       const v = heapObject(id);
       return typeof v === "object" && v !== null;
@@ -37674,7 +36197,7 @@ async function createGlue() {
     exports,
     heap,
     view,
-    readString: readString8,
+    readString: readString7,
     writeString,
     lastLength: () => lastLength,
     heapObject,
@@ -37793,7 +36316,7 @@ var QoderEncryptedInfer = class _QoderEncryptedInfer {
 };
 
 // vendor/channel-pack/src/qoder-envelope.ts
-import { LlmError as LlmError5 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError4 } from "@deepseek-ai/dsh-llm";
 function innerTextOf(payload) {
   let envelope;
   try {
@@ -37827,7 +36350,7 @@ function classifyInner(inner) {
 function unwrapQoderEnvelopeStream(response, label) {
   const upstream = response.body;
   if (upstream === null) {
-    throw new LlmError5(`${label}: \u54CD\u5E94\u6CA1\u6709 body`, "SERVER");
+    throw new LlmError4(`${label}: \u54CD\u5E94\u6CA1\u6709 body`, "SERVER");
   }
   const decoder2 = new TextDecoder("utf-8");
   const encoder2 = new TextEncoder();
@@ -38209,14 +36732,14 @@ function qoderProductById(id) {
 }
 
 // vendor/channel-pack/src/openai-compat.ts
-import { LlmError as LlmError6, ToolCallId as ToolCallId4 } from "@deepseek-ai/dsh-llm";
-function contentToText4(content) {
+import { LlmError as LlmError5, ToolCallId as ToolCallId3 } from "@deepseek-ai/dsh-llm";
+function contentToText3(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => String(block.text)).join("");
 }
-var TOOL_RESULT_IMAGE_TEXT3 = "Attached image(s) from tool result:";
-function userContentParts3(content, imageUrls) {
+var TOOL_RESULT_IMAGE_TEXT2 = "Attached image(s) from tool result:";
+function userContentParts2(content, imageUrls) {
   const parts = [];
   let hasImage = false;
   for (const raw of content) {
@@ -38234,19 +36757,19 @@ function userContentParts3(content, imageUrls) {
       continue;
     }
     if (block.type === "tool-result" && Array.isArray(block.content)) {
-      const inner = userContentParts3(block.content, imageUrls);
+      const inner = userContentParts2(block.content, imageUrls);
       if (inner !== void 0) {
         hasImage = true;
         parts.push(...inner);
       } else {
-        const text = contentToText4(block.content);
+        const text = contentToText3(block.content);
         if (text.length > 0) parts.push({ type: "text", text });
       }
     }
   }
   return hasImage && parts.length > 0 ? parts : void 0;
 }
-function collectImages3(content, refs) {
+function collectImages2(content, refs) {
   for (const raw of content) {
     if (typeof raw !== "object" || raw === null) continue;
     const block = raw;
@@ -38254,10 +36777,10 @@ function collectImages3(content, refs) {
       refs.set(block.attachment.attachmentId, block.attachment);
       continue;
     }
-    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages3(block.content, refs);
+    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages2(block.content, refs);
   }
 }
-function serializeMessages4(messages, imageUrls) {
+function serializeMessages3(messages, imageUrls) {
   const normalized = normalizeHarnessMessages(messages);
   const wire = [];
   const { keepCallIds, keepResultIds } = resolveToolPairing(normalized);
@@ -38266,7 +36789,7 @@ function serializeMessages4(messages, imageUrls) {
     if (pendingToolImages.length === 0) return;
     wire.push({
       role: "user",
-      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT3 }, ...pendingToolImages]
+      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT2 }, ...pendingToolImages]
     });
     pendingToolImages = [];
   };
@@ -38282,7 +36805,7 @@ function serializeMessages4(messages, imageUrls) {
         function: { name: String(block.name), arguments: normalizeToolArguments(String(block.arguments)) }
       }));
       const reasoning = content2.filter((block) => typeof block === "object" && block !== null && block.type === "reasoning").map((block) => String(block.text)).join("");
-      const text2 = contentToText4(content2);
+      const text2 = contentToText3(content2);
       if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       flushToolImages();
       wire.push({
@@ -38296,14 +36819,14 @@ function serializeMessages4(messages, imageUrls) {
     }
     if (message2.role === "system") {
       flushToolImages();
-      wire.push({ role: "system", content: contentToText4(message2.content) });
+      wire.push({ role: "system", content: contentToText3(message2.content) });
       continue;
     }
     const content = Array.isArray(message2.content) ? message2.content : [];
     const toolResults = content.filter((block) => typeof block === "object" && block !== null && block.type === "tool-result");
-    const text = contentToText4(message2.content);
+    const text = contentToText3(message2.content);
     const regular = content.filter((block) => !(typeof block === "object" && block !== null && block.type === "tool-result"));
-    const parts = imageUrls === void 0 ? void 0 : userContentParts3(regular, imageUrls);
+    const parts = imageUrls === void 0 ? void 0 : userContentParts2(regular, imageUrls);
     if (parts !== void 0) {
       flushToolImages();
       wire.push({ role: "user", content: parts });
@@ -38315,16 +36838,16 @@ function serializeMessages4(messages, imageUrls) {
       if (!keepResultIds.has(String(result.toolCallId))) continue;
       let resultText = "(no output)";
       if (imageUrls !== void 0 && Array.isArray(result.content)) {
-        const resultParts = userContentParts3(result.content, imageUrls);
+        const resultParts = userContentParts2(result.content, imageUrls);
         if (resultParts !== void 0) {
           pendingToolImages.push(...resultParts.filter((part) => part.type !== "text"));
           const joined = resultParts.filter((part) => part.type === "text").map((part) => String(part.text)).join("");
           if (joined.length > 0) resultText = joined;
         } else {
-          resultText = contentToText4(result.content) || "(no output)";
+          resultText = contentToText3(result.content) || "(no output)";
         }
       } else {
-        resultText = contentToText4(result.content) || "(no output)";
+        resultText = contentToText3(result.content) || "(no output)";
       }
       wire.push({
         role: "tool",
@@ -38336,7 +36859,7 @@ function serializeMessages4(messages, imageUrls) {
   flushToolImages();
   return wire;
 }
-function errorMessage4(error) {
+function errorMessage3(error) {
   if (error instanceof Error) return error.message;
   try {
     return String(error);
@@ -38344,7 +36867,7 @@ function errorMessage4(error) {
     return "unknown error";
   }
 }
-function errorDetail4(body) {
+function errorDetail3(body) {
   try {
     const data = JSON.parse(body);
     const nested = typeof data.error === "object" && data.error !== null ? data.error.message : data.error;
@@ -38359,14 +36882,14 @@ function errorDetail4(body) {
   }
   return body;
 }
-function httpErrorCode4(status) {
+function httpErrorCode3(status) {
   if (status === 401 || status === 403) return "AUTH";
   if (status === 429) return "RATE_LIMIT";
   if (status === 400) return "INVALID_REQUEST";
   if (status >= 500) return "SERVER";
   return `HTTP_${status}`;
 }
-var ModelQueuedError = class extends LlmError6 {
+var ModelQueuedError = class extends LlmError5 {
   /** 解析出的排队信息（`isQueued` / `serviceAvailable` / `waitTime` 等）。 */
   queueInfo;
   /** 服务端要求的等待时长（毫秒）；无法解析时为 undefined。 */
@@ -38378,7 +36901,7 @@ var ModelQueuedError = class extends LlmError6 {
     this.retryAfterMs = options.retryAfterMs;
   }
 };
-function isTransportError4(error) {
+function isTransportError3(error) {
   if (!(error instanceof Error)) return false;
   const message2 = error.message.toLowerCase();
   if (message2.includes("terminated")) return true;
@@ -38391,7 +36914,7 @@ var RAW_SNIPPET_LIMIT = 400;
 async function* consumeOpenAiSse(response, options, config) {
   const { label } = config;
   const restoreToolName2 = config.restoreToolName ?? ((name2) => name2);
-  if (!response.body) throw new LlmError6(`${label}: empty model response body`, "EMPTY_RESPONSE");
+  if (!response.body) throw new LlmError5(`${label}: empty model response body`, "EMPTY_RESPONSE");
   const blocks = [];
   let nextIndex = 0;
   const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -38424,9 +36947,9 @@ async function* consumeOpenAiSse(response, options, config) {
         if (!result.done) firstTokenReceived = true;
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        if (error instanceof LlmError6) throw error;
-        if (isTransportError4(error)) {
-          throw new LlmError6(`${label}: sse transport error: ${errorMessage4(error)}`, "TRANSPORT", { cause: error });
+        if (error instanceof LlmError5) throw error;
+        if (isTransportError3(error)) {
+          throw new LlmError5(`${label}: sse transport error: ${errorMessage3(error)}`, "TRANSPORT", { cause: error });
         }
         throw error;
       }
@@ -38463,10 +36986,10 @@ async function* consumeOpenAiSse(response, options, config) {
           }
         }
         if (data.choices === void 0 && config.isQuotaError?.(data)) {
-          throw new LlmError6(`${label}: ${errorDetail4(payload)}`, "QUOTA_EXCEEDED");
+          throw new LlmError5(`${label}: ${errorDetail3(payload)}`, "QUOTA_EXCEEDED");
         }
         if (data.error !== void 0) {
-          throw new LlmError6(`${label}: ${data.error.message ?? "unknown error"}`, "SERVER");
+          throw new LlmError5(`${label}: ${data.error.message ?? "unknown error"}`, "SERVER");
         }
         if (data.choices === void 0 && data.code !== void 0 && typeof data.message === "string") {
           const queueInfo = parseQueueError(data.message);
@@ -38481,14 +37004,14 @@ async function* consumeOpenAiSse(response, options, config) {
             );
           }
           if (isBillingBusinessCode(data.code) || looksLikeBillingError(data.message)) {
-            throw new LlmError6(
+            throw new LlmError5(
               `${label}: ${data.message}`,
               "QUOTA_EXCEEDED",
               { ...typeof data.code === "number" ? { status: data.code } : {} }
             );
           }
           const detail = [String(data.code), data.type].filter(Boolean).join("/");
-          throw new LlmError6(
+          throw new LlmError5(
             `${label}: ${data.message}${detail.length > 0 ? ` (${detail})` : ""}`,
             "SERVER"
           );
@@ -38509,12 +37032,12 @@ async function* consumeOpenAiSse(response, options, config) {
               );
             }
             if (looksLikeBillingError(data.message)) {
-              throw new LlmError6(`${label}: ${data.message}`, "QUOTA_EXCEEDED", {
+              throw new LlmError5(`${label}: ${data.message}`, "QUOTA_EXCEEDED", {
                 ...status === void 0 ? {} : { status }
               });
             }
             const suffix = status === void 0 ? "" : ` (status=${status})`;
-            throw new LlmError6(`${label}: ${data.message}${suffix}`, "SERVER", {
+            throw new LlmError5(`${label}: ${data.message}${suffix}`, "SERVER", {
               ...status === void 0 ? {} : { status }
             });
           }
@@ -38585,7 +37108,7 @@ async function* consumeOpenAiSse(response, options, config) {
             yield {
               type: "tool-call-delta",
               index: block.index,
-              id: ToolCallId4(callId),
+              id: ToolCallId3(callId),
               name: restoreToolName2(block.name),
               argumentsDelta: block.text
             };
@@ -38594,7 +37117,7 @@ async function* consumeOpenAiSse(response, options, config) {
           yield {
             type: "tool-call-delta",
             index: block.index,
-            id: ToolCallId4(callId),
+            id: ToolCallId3(callId),
             ...block.name !== void 0 ? { name: restoreToolName2(block.name) } : {},
             argumentsDelta: fragment
           };
@@ -38637,7 +37160,7 @@ async function* consumeOpenAiSse(response, options, config) {
       index,
       block: {
         type: "tool-call",
-        id: ToolCallId4(block.callId ?? ""),
+        id: ToolCallId3(block.callId ?? ""),
         name: restoreToolName2(block.name),
         // 仅把「无参数工具下发的空分片」补成 {}；**残缺参数保持原样**，
         // 由 max-tokens 判定触发重试 —— 把残缺 JSON 补成 {} 会伪造出
@@ -38694,11 +37217,11 @@ async function* consumeOpenAiSse(response, options, config) {
     } catch {
     }
     if (typeof data === "object" && data !== null && !Array.isArray(data) && config.isQuotaError?.(data)) {
-      throw new LlmError6(`${label}: ${errorDetail4(rawJson)}`, "QUOTA_EXCEEDED");
+      throw new LlmError5(`${label}: ${errorDetail3(rawJson)}`, "QUOTA_EXCEEDED");
     }
     const snippet = rawSnippet.trim();
     if (snippet.length > 0) {
-      throw new LlmError6(
+      throw new LlmError5(
         `${label}: \u54CD\u5E94\u4E0D\u662F SSE\uFF08\u6CA1\u6709\u4EFB\u4F55 data: \u5E27\uFF09\uFF0C\u539F\u6587\u7247\u6BB5\uFF1A${snippet}`,
         "SERVER"
       );
@@ -38719,11 +37242,11 @@ async function* consumeOpenAiSse(response, options, config) {
 var parseQoderQueueError = parseQueueError;
 var qoderQueueDelayMs = queueDelayMs;
 function isQuotaExceededError2(error) {
-  if (error instanceof LlmError7) {
+  if (error instanceof LlmError6) {
     if (error.code === "QUOTA_EXCEEDED" || error.code === "QUOTA") return true;
   }
   if (error instanceof Error) {
-    if (!(error instanceof LlmError7)) return looksLikeBillingError(error.message);
+    if (!(error instanceof LlmError6)) return looksLikeBillingError(error.message);
   }
   return false;
 }
@@ -38819,13 +37342,13 @@ function buildQoderHistory(messages) {
   }
   return history2;
 }
-function resolveFirstTokenTimeoutMs4() {
+function resolveFirstTokenTimeoutMs3() {
   return Number.parseInt(process.env.DSH_QODER_SSE_FIRST_TOKEN_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-function resolveChunkTimeoutMs4() {
+function resolveChunkTimeoutMs3() {
   return Number.parseInt(process.env.DSH_QODER_SSE_CHUNK_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-var QoderAdapter = class extends LlmAdapter4 {
+var QoderAdapter = class extends LlmAdapter3 {
   constructor(options) {
     super();
     this.options = options;
@@ -38939,16 +37462,16 @@ var QoderAdapter = class extends LlmAdapter4 {
     if (entry !== void 0) {
       const efforts = qoderEffortsFor(entry);
       if (efforts.length > 0) {
-        const fallback = entry.defaultEffort;
+        const fallback2 = entry.defaultEffort;
         resolved.reasoning = {
           efforts: efforts.map((id) => ({
-            id: ReasoningEffortId4(id),
+            id: ReasoningEffortId3(id),
             name: QODER_EFFORT_NAMES[id] ?? id
           })),
           // ⚠️ `defaultEffort` 必须落在 `efforts` 内 —— DSH 会直接拿它发请求，
           // 给一个不存在的档位会抛 `UNSUPPORTED_REASONING_EFFORT`
           // （同 `trae-adapter.ts` 的教训）。
-          ...fallback !== void 0 && efforts.includes(fallback) ? { defaultEffort: ReasoningEffortId4(fallback) } : {}
+          ...fallback2 !== void 0 && efforts.includes(fallback2) ? { defaultEffort: ReasoningEffortId3(fallback2) } : {}
         };
       }
     }
@@ -38970,18 +37493,18 @@ var QoderAdapter = class extends LlmAdapter4 {
   async *stream(options) {
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError7(
+        throw new LlmError6(
           `qoder: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError7("qoder: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError6("qoder: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -39002,17 +37525,17 @@ var QoderAdapter = class extends LlmAdapter4 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError7("qoder: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError6("qoder: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     credential = await this.ensureUid(credential);
-    const messages = serializeMessages4(options.messages, imageUrls);
+    const messages = serializeMessages3(options.messages, imageUrls);
     const systemText = options.system !== void 0 && options.system.length > 0 ? options.system : void 0;
     const userMessages = messages.filter((m) => m.role === "user");
     const lastUser = userMessages.at(-1);
     const userText = typeof lastUser?.content === "string" ? lastUser.content : Array.isArray(lastUser?.content) ? lastUser.content.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("") : "";
     const history2 = buildQoderHistory(messages);
     const tools = buildQoderTools(options.tools);
-    const fallback = this.fallbackIndex.get(options.model);
+    const fallback2 = this.fallbackIndex.get(options.model);
     const buildRequest = async (c) => {
       const client = await QoderEncryptedInfer.create({
         user: {
@@ -39027,17 +37550,17 @@ var QoderAdapter = class extends LlmAdapter4 {
         modelKey: options.model,
         userText,
         ...systemText !== void 0 ? { systemText } : {},
-        isReasoning: fallback?.supportsThinking ?? false,
+        isReasoning: fallback2?.supportsThinking ?? false,
         history: history2,
         // 工具定义：这是模型**唯一**能学到函数 schema 的通道，
         // 缺了它模型只能用正文 XML 臆造调用（真实缺陷）。
         tools,
         ...options.maxTokens !== void 0 ? { maxTokens: options.maxTokens } : {},
         ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {},
-        ...fallback?.supportsImage !== void 0 ? { isVl: fallback.supportsImage } : {},
+        ...fallback2?.supportsImage !== void 0 ? { isVl: fallback2.supportsImage } : {},
         // 官方 `model_config` 的 display_name / max_input_tokens 必须带上。
-        ...fallback?.name !== void 0 ? { displayName: fallback.name } : {},
-        ...fallback?.contextWindow !== void 0 ? { maxInputTokens: fallback.contextWindow } : {},
+        ...fallback2?.name !== void 0 ? { displayName: fallback2.name } : {},
+        ...fallback2?.contextWindow !== void 0 ? { maxInputTokens: fallback2.contextWindow } : {},
         // ⚠️ **`business` 必填**，否则服务端把请求路由到错误的后端节点。
         //
         // 实测（2026-09-20）：不带 `business` 时 `qfmodel`（Qwen3.8-Flash）
@@ -39078,19 +37601,19 @@ var QoderAdapter = class extends LlmAdapter4 {
             authRefreshed = false;
             continue;
           }
-          throw new LlmError7(`qoder: ${errorDetail4(errorText)}`, "QUOTA_EXCEEDED", { status: response.status });
+          throw new LlmError6(`qoder: ${errorDetail3(errorText)}`, "QUOTA_EXCEEDED", { status: response.status });
         }
         if (!authRefreshed) {
           authRefreshed = true;
           await this.options.refresh();
           const refreshed = await this.options.resolveCredential(options.model);
           if (refreshed === void 0 || refreshed.access_token.length === 0) {
-            throw new LlmError7("qoder: credential expired and refresh failed", "AUTH", { status: response.status });
+            throw new LlmError6("qoder: credential expired and refresh failed", "AUTH", { status: response.status });
           }
           credential = await this.ensureUid(refreshed);
           continue;
         }
-        throw new LlmError7(`qoder: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
+        throw new LlmError6(`qoder: ${errorDetail3(errorText)}`, httpErrorCode3(response.status), { status: response.status });
       }
       if (!response.ok && response.status === 409 && !duplicateRetried) {
         duplicateRetried = true;
@@ -39098,15 +37621,15 @@ var QoderAdapter = class extends LlmAdapter4 {
       }
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
-        throw new LlmError7(`qoder: ${errorDetail4(errorText)}`, httpErrorCode4(response.status), { status: response.status });
+        throw new LlmError6(`qoder: ${errorDetail3(errorText)}`, httpErrorCode3(response.status), { status: response.status });
       }
       const inner = consumeOpenAiSse(
         unwrapQoderEnvelopeStream(response, "qoder"),
         { signal: options.signal },
         {
           label: "qoder",
-          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs4(),
-          chunkTimeoutMs: resolveChunkTimeoutMs4(),
+          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs3(),
+          chunkTimeoutMs: resolveChunkTimeoutMs3(),
           ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
         }
       );
@@ -39186,21 +37709,21 @@ var QoderAdapter = class extends LlmAdapter4 {
    */
   async waitForQueue(queueInfo, attempts, deadline, options) {
     if (Date.now() >= deadline) {
-      throw new LlmError7("qoder: \u6392\u961F\u7B49\u5F85\u8D85\u65F6", "QUEUE");
+      throw new LlmError6("qoder: \u6392\u961F\u7B49\u5F85\u8D85\u65F6", "QUEUE");
     }
     if (attempts > QUEUE_MAX_ATTEMPTS) {
-      throw new LlmError7(
+      throw new LlmError6(
         `qoder: \u6392\u961F\u91CD\u8BD5\u8D85\u8FC7\u4E0A\u9650\uFF08${QUEUE_MAX_ATTEMPTS} \u6B21\uFF09`,
         "QUEUE"
       );
     }
     if (options.signal?.aborted === true) {
-      throw new LlmError7("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
+      throw new LlmError6("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
     }
     const waitMs = qoderQueueDelayMs(queueInfo);
     await this.sleep(waitMs ?? 1e3, options.signal);
     if (isAborted(options.signal)) {
-      throw new LlmError7("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
+      throw new LlmError6("qoder: \u6392\u961F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "QUEUE");
     }
   }
   /**
@@ -39214,26 +37737,26 @@ var QoderAdapter = class extends LlmAdapter4 {
     if (credential.uid !== void 0 && credential.uid.length > 0) return credential;
     const patched = await this.options.resolveUid?.(credential);
     if (patched?.uid !== void 0 && patched.uid.length > 0) return patched;
-    throw new LlmError7(
+    throw new LlmError6(
       "qoder: \u51ED\u636E\u7F3A\u5C11 uid\uFF0C\u52A0\u5BC6\u63A8\u7406\u65E0\u6CD5\u7B7E\u540D\uFF08\u8BF7\u91CD\u65B0\u767B\u5F55\u8BE5\u8D26\u53F7\uFF09",
       "MISSING_CREDENTIAL"
     );
   }
   /** 发送一次**加密**推理请求（`agent_chat_generation`）。 */
-  async sendEncrypted(request2, options) {
-    const headers = new Headers(request2.headers);
+  async sendEncrypted(request, options) {
+    const headers = new Headers(request.headers);
     headers.set("Accept", "text/event-stream");
     try {
-      return await this.fetchImpl(request2.url, {
+      return await this.fetchImpl(request.url, {
         method: "POST",
         headers,
-        body: request2.body,
+        body: request.body,
         signal: options.signal
       });
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      if (isTransportError4(error)) {
-        throw new LlmError7(
+      if (isTransportError3(error)) {
+        throw new LlmError6(
           `qoder: transport error: ${error instanceof Error ? error.message : String(error)}`,
           "TRANSPORT",
           { cause: error }
@@ -39243,7 +37766,7 @@ var QoderAdapter = class extends LlmAdapter4 {
     }
   }
 };
-function promotionActiveNow2(promotion, now) {
+function promotionActiveNow(promotion, now) {
   const { windowStart, windowEnd } = promotion;
   if (windowStart === void 0 || windowEnd === void 0) return promotion.active;
   const toMinutes = (hhmm) => {
@@ -39265,7 +37788,7 @@ function qoderDisplayName(model, now = /* @__PURE__ */ new Date()) {
   const before = promo?.beforePromotionPriceFactor;
   const discount = promo?.discountFactor;
   const hasPromo = promo !== void 0 && before !== void 0 && discount !== void 0;
-  const active = hasPromo && promotionActiveNow2(promo, now);
+  const active = hasPromo && promotionActiveNow(promo, now);
   if (model.priceFactor === 0) return `${model.name} \xB7 \u514D\u8D39`;
   if (hasPromo && active) {
     const effective = Number((before * discount).toFixed(4));
@@ -39282,8 +37805,8 @@ function registerQoderLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/trae-adapter.ts
-import { LlmAdapter as LlmAdapter5, LlmError as LlmError8, ReasoningEffortId as ReasoningEffortId5 } from "@deepseek-ai/dsh-llm";
-import { ToolCallId as ToolCallId5 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter4, LlmError as LlmError7, ReasoningEffortId as ReasoningEffortId4 } from "@deepseek-ai/dsh-llm";
+import { ToolCallId as ToolCallId4 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/reasoning-ladder.ts
 var REASONING_EFFORT_RANK = Object.freeze({
@@ -39354,7 +37877,7 @@ function canonicalReasoningEffortFor(effort) {
 }
 
 // vendor/channel-pack/src/trae.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 
 // vendor/channel-pack/src/trae-product.ts
 var TRAE_AGENT_HOST = "https://trae-api-cn.mchost.guru";
@@ -39399,7 +37922,7 @@ var TRAE_CHANNELS = resolveChannelList(
   process.env.DSH_TRAE_CHANNELS
 );
 function resolveChannelList(raw) {
-  const fallback = [
+  const fallback2 = [
     // ── 通用通道（顺序即优先级）──
     "solo_agent",
     "solo_work_lite",
@@ -39418,9 +37941,9 @@ function resolveChannelList(raw) {
     "multimodal",
     "system_diagnosis"
   ];
-  if (raw === void 0) return fallback;
+  if (raw === void 0) return fallback2;
   const parsed = raw.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
-  return parsed.length > 0 ? parsed : fallback;
+  return parsed.length > 0 ? parsed : fallback2;
 }
 function isTruthyFlag(raw) {
   if (raw === void 0) return false;
@@ -39521,7 +38044,7 @@ function traeSOLOHeaders(credential, product, stream, machineIdGeneration = 0) {
 function traeCheckinHeaders(credential, product, userId) {
   const deviceId = deriveDeviceId15(userId);
   const marketUserId = deriveMarketUserId(userId);
-  const sessionId = deriveSessionId(userId);
+  const sessionId = deriveSessionId2(userId);
   const traceId = `00-${randomHex(16)}-01`;
   const requestId = uuidV4();
   return {
@@ -39558,7 +38081,7 @@ function deriveMarketUserId(userId) {
   const hex = bs.map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
-function deriveSessionId(userId) {
+function deriveSessionId2(userId) {
   const bytes = seededStream(userId, "sess", 32);
   return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -39572,7 +38095,7 @@ function seededStream(seed, salt, nbytes) {
     counterBuf[1] = counter >> 16 & 255;
     counterBuf[2] = counter >> 8 & 255;
     counterBuf[3] = counter & 255;
-    const h = createHash3("sha256");
+    const h = createHash4("sha256");
     h.update(prefix, "utf8");
     h.update(counterBuf);
     for (const b of h.digest()) {
@@ -39609,31 +38132,31 @@ function parseTraeExchangeResponse(data) {
   const result = data.Result ?? data.result;
   if (typeof result !== "object" || result === null) return void 0;
   const r = result;
-  const accessToken = readStringField3(r, "Token") || readStringField3(r, "token") || readStringField3(r, "accessToken");
-  const refreshToken2 = readStringField3(r, "RefreshToken") || readStringField3(r, "refreshToken");
+  const accessToken = readStringField2(r, "Token") || readStringField2(r, "token") || readStringField2(r, "accessToken");
+  const refreshToken = readStringField2(r, "RefreshToken") || readStringField2(r, "refreshToken");
   if (accessToken.length === 0) return void 0;
   return {
     accessToken,
-    refreshToken: refreshToken2,
-    tokenExpireAt: readNumberField3(r, "TokenExpireAt") ?? readNumberField3(r, "tokenExpireAt") ?? 0,
-    tokenExpireDuration: readNumberField3(r, "TokenExpireDuration") ?? readNumberField3(r, "tokenExpireDuration") ?? 0,
-    refreshExpireAt: readNumberField3(r, "RefreshExpireAt") ?? readNumberField3(r, "refreshExpireAt") ?? 0
+    refreshToken,
+    tokenExpireAt: readNumberField2(r, "TokenExpireAt") ?? readNumberField2(r, "tokenExpireAt") ?? 0,
+    tokenExpireDuration: readNumberField2(r, "TokenExpireDuration") ?? readNumberField2(r, "tokenExpireDuration") ?? 0,
+    refreshExpireAt: readNumberField2(r, "RefreshExpireAt") ?? readNumberField2(r, "refreshExpireAt") ?? 0
   };
 }
 function parseTraeUserInfoResponse(data) {
   const result = data.Result ?? data.result;
   if (typeof result !== "object" || result === null) return void 0;
   const r = result;
-  const uid = readStringField3(r, "UserID") || readStringField3(r, "userId") || readStringField3(r, "uid");
+  const uid = readStringField2(r, "UserID") || readStringField2(r, "userId") || readStringField2(r, "uid");
   if (uid.length === 0) return void 0;
   return {
     uid,
-    screenName: readStringField3(r, "ScreenName") || readStringField3(r, "screenName") || uid,
-    enterpriseId: readStringField3(r, "EnterpriseID") || readStringField3(r, "enterpriseId") || "",
+    screenName: readStringField2(r, "ScreenName") || readStringField2(r, "screenName") || uid,
+    enterpriseId: readStringField2(r, "EnterpriseID") || readStringField2(r, "enterpriseId") || "",
     // ⚠️ 字段名是 **NonPlainTextMobile / NonPlainTextEmail**（不是 Mobile /
     // Phone / Email）—— 实测 `GetUserInfo` 只下发这两个脱敏形态。
-    phone: readStringField3(r, "NonPlainTextMobile") || readStringField3(r, "nonPlainTextMobile"),
-    email: readStringField3(r, "NonPlainTextEmail") || readStringField3(r, "nonPlainTextEmail")
+    phone: readStringField2(r, "NonPlainTextMobile") || readStringField2(r, "nonPlainTextMobile"),
+    email: readStringField2(r, "NonPlainTextEmail") || readStringField2(r, "nonPlainTextEmail")
   };
 }
 function buildTraeCredential(exchange, userInfo, session, nowMs = Date.now()) {
@@ -39708,14 +38231,14 @@ function readContextWindowField(entry) {
   const raw = entry.context_window_tokens ?? entry.ContextWindowTokens;
   if (typeof raw !== "object" || raw === null) return void 0;
   const record = raw;
-  const value = readNumberField3(record, "dev") ?? readNumberField3(record, "Dev") ?? readNumberField3(record, "max") ?? readNumberField3(record, "Max");
+  const value = readNumberField2(record, "dev") ?? readNumberField2(record, "Dev") ?? readNumberField2(record, "max") ?? readNumberField2(record, "Max");
   return value !== void 0 && value > 0 ? Math.trunc(value) : void 0;
 }
 function readMaxContextWindowField(entry) {
   const raw = entry.context_window_tokens ?? entry.ContextWindowTokens;
   if (typeof raw !== "object" || raw === null) return void 0;
   const record = raw;
-  const value = readNumberField3(record, "max") ?? readNumberField3(record, "Max");
+  const value = readNumberField2(record, "max") ?? readNumberField2(record, "Max");
   return value !== void 0 && value > 0 ? Math.trunc(value) : void 0;
 }
 function readDetailMaxTokens(entry, preferredSuffix = "__dev") {
@@ -39724,10 +38247,10 @@ function readDetailMaxTokens(entry, preferredSuffix = "__dev") {
   const details = raw.filter(
     (item) => typeof item === "object" && item !== null
   );
-  const preferred = details.find((item) => readStringField3(item, "model_name").endsWith(preferredSuffix));
+  const preferred = details.find((item) => readStringField2(item, "model_name").endsWith(preferredSuffix));
   const chosen = preferred ?? details[0];
   if (chosen === void 0) return void 0;
-  const value = readNumberField3(chosen, "max_tokens") ?? readNumberField3(chosen, "MaxTokens");
+  const value = readNumberField2(chosen, "max_tokens") ?? readNumberField2(chosen, "MaxTokens");
   return value !== void 0 && value > 0 ? Math.trunc(value) : void 0;
 }
 function readReasoningEffortConfig(entry) {
@@ -39742,12 +38265,12 @@ function readReasoningEffortConfig(entry) {
         options.push(item.trim());
       } else if (typeof item === "object" && item !== null) {
         const obj = item;
-        const wire = readStringField3(obj, "openclawLevel") || readStringField3(obj, "level") || readStringField3(obj, "Level");
+        const wire = readStringField2(obj, "openclawLevel") || readStringField2(obj, "level") || readStringField2(obj, "Level");
         if (wire.trim().length > 0) options.push(wire.trim());
       }
     }
   }
-  const defaultLevel = readStringField3(record, "default_level") || readStringField3(record, "DefaultLevel");
+  const defaultLevel = readStringField2(record, "default_level") || readStringField2(record, "DefaultLevel");
   const supportThinking = readBooleanField(record, "support_thinking") ?? readBooleanField(record, "SupportThinking");
   if (options.length === 0 && defaultLevel.length === 0 && supportThinking === void 0) {
     return void 0;
@@ -39769,7 +38292,7 @@ function readConsumptionRate(entry) {
   if (readBooleanField(rateRecord, "enable") === false) return void 0;
   const data = rateRecord.data ?? rateRecord.Data;
   if (typeof data !== "object" || data === null) return void 0;
-  const value = readNumberField3(data, "rate");
+  const value = readNumberField2(data, "rate");
   return value !== void 0 && value >= 0 ? value : void 0;
 }
 function readActivityDiscount(entry, nowSec = Math.floor(Date.now() / 1e3)) {
@@ -39787,16 +38310,16 @@ function readActivityDiscount(entry, nowSec = Math.floor(Date.now() / 1e3)) {
   const current = dataRecord.current ?? dataRecord.Current;
   if (typeof current !== "object" || current === null) return void 0;
   const currentRecord = current;
-  const type = (readStringField3(currentRecord, "discount_type") || readStringField3(currentRecord, "discountType")).trim().toLowerCase();
+  const type = (readStringField2(currentRecord, "discount_type") || readStringField2(currentRecord, "discountType")).trim().toLowerCase();
   if (type.length === 0 || type === "none") return void 0;
-  const before = readNumberField3(currentRecord, "before_consumption_rate") ?? readNumberField3(currentRecord, "beforeConsumptionRate");
-  const after = readNumberField3(currentRecord, "consumption_rate") ?? readNumberField3(currentRecord, "consumptionRate");
+  const before = readNumberField2(currentRecord, "before_consumption_rate") ?? readNumberField2(currentRecord, "beforeConsumptionRate");
+  const after = readNumberField2(currentRecord, "consumption_rate") ?? readNumberField2(currentRecord, "consumptionRate");
   if (before === void 0 || before <= 0) return void 0;
   if (after !== void 0 && before <= after) return void 0;
   let endsAtSec;
   for (const value of Object.values(dataRecord)) {
     if (typeof value !== "object" || value === null) continue;
-    const end = readNumberField3(value, "end_at") ?? readNumberField3(value, "endAt");
+    const end = readNumberField2(value, "end_at") ?? readNumberField2(value, "endAt");
     if (end !== void 0 && end > 0) {
       endsAtSec = end;
       break;
@@ -39815,15 +38338,15 @@ function parseJsonObject(raw) {
   }
 }
 function parseTraeConfigEntry(entry, channel) {
-  const id = readStringField3(entry, "config_name") || readStringField3(entry, "ConfigName");
+  const id = readStringField2(entry, "config_name") || readStringField2(entry, "ConfigName");
   if (id.length === 0) return void 0;
   const display = entry.display_config ?? entry.DisplayConfig;
   const displayRecord = typeof display === "object" && display !== null ? display : void 0;
-  const name2 = displayRecord !== void 0 ? readStringField3(displayRecord, "display_name") || id : id;
+  const name2 = displayRecord !== void 0 ? readStringField2(displayRecord, "display_name") || id : id;
   const isCustomModel = displayRecord === void 0 ? void 0 : readBooleanField(displayRecord, "is_custom_model") ?? readBooleanField(displayRecord, "IsCustomModel");
   const isHidden = readBooleanField(entry, "is_invisible_to_user") ?? readBooleanField(entry, "IsInvisibleToUser");
   const isEnabled = readBooleanField(entry, "config_switch") ?? readBooleanField(entry, "ConfigSwitch");
-  const usage = readStringField3(entry, "usage") || readStringField3(entry, "Usage");
+  const usage = readStringField2(entry, "usage") || readStringField2(entry, "Usage");
   const contextWindow = readContextWindowField(entry);
   const maxOutputTokens = readDetailMaxTokens(entry);
   const maxMode = displayRecord === void 0 ? void 0 : readBooleanField(displayRecord, "max_mode") ?? readBooleanField(displayRecord, "MaxMode");
@@ -39866,7 +38389,7 @@ function parseTraeBatchModelList(body, channelPriority = TRAE_CHANNELS) {
   for (const group of groups) {
     if (typeof group !== "object" || group === null) continue;
     const g = group;
-    const channel = readStringField3(g, "function") || readStringField3(g, "Function");
+    const channel = readStringField2(g, "function") || readStringField2(g, "Function");
     if (channel.length === 0 || rankOf(channel) < 0) continue;
     const list = g.config_info_list ?? g.ConfigInfoList;
     if (!Array.isArray(list)) continue;
@@ -39913,7 +38436,7 @@ function generateDeviceId() {
 }
 function deriveRotatingMachineId(baseMachineId, generation) {
   if (!Number.isFinite(generation) || generation <= 0) return baseMachineId;
-  return createHash3("sha256").update(`${baseMachineId}#machine${Math.floor(generation)}`, "utf8").digest("hex").slice(0, 32);
+  return createHash4("sha256").update(`${baseMachineId}#machine${Math.floor(generation)}`, "utf8").digest("hex").slice(0, 32);
 }
 var TRAE_DEFAULT_MAX_COMPLETION_TOKENS = 64e3;
 function resolveTraeMaxCompletionTokens() {
@@ -39926,13 +38449,13 @@ function clampTraeMaxTokens(value, limit = resolveTraeMaxCompletionTokens()) {
   if (limit <= 0) return value;
   return Math.min(value, limit);
 }
-function readStringField3(source, key) {
+function readStringField2(source, key) {
   const value = source[key];
   if (typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return "";
 }
-function readNumberField3(source, key) {
+function readNumberField2(source, key) {
   const value = source[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())) return Number(value);
@@ -40202,17 +38725,17 @@ function strongestTraeEffort(options) {
   }
   return best ?? options[options.length - 1];
 }
-function defaultTraeEffort(config, fallback) {
+function defaultTraeEffort(config, fallback2) {
   const declared = config.defaultLevel;
   if (declared !== void 0 && declared.length > 0 && config.options.includes(declared)) {
     return declared;
   }
-  return fallback;
+  return fallback2;
 }
-function resolveFirstTokenTimeoutMs5() {
+function resolveFirstTokenTimeoutMs4() {
   return Number.parseInt(process.env.DSH_TRAE_SSE_FIRST_TOKEN_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-function resolveChunkTimeoutMs5() {
+function resolveChunkTimeoutMs4() {
   return Number.parseInt(process.env.DSH_TRAE_SSE_CHUNK_TIMEOUT_MS ?? "", 10) || 12e4;
 }
 var TRAE_RATE_LIMIT_FALLBACK_MS = 36e5;
@@ -40222,7 +38745,7 @@ function isRotatableStreamError(code) {
   return code === 1005 || code === 4008 || code === 4011;
 }
 var TRAE_MACHINE_ID_ROTATE_EVERY = 4;
-function errorMessage5(error) {
+function errorMessage4(error) {
   if (error instanceof Error) return error.message;
   try {
     return String(error);
@@ -40230,13 +38753,13 @@ function errorMessage5(error) {
     return "unknown error";
   }
 }
-function contentToText6(content) {
+function contentToText5(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => String(block.text)).join("");
 }
-var TOOL_RESULT_IMAGE_TEXT4 = "Attached image(s) from tool result:";
-function userContentParts4(content, imageUrls) {
+var TOOL_RESULT_IMAGE_TEXT3 = "Attached image(s) from tool result:";
+function userContentParts3(content, imageUrls) {
   const parts = [];
   let hasImage = false;
   for (const raw of content) {
@@ -40254,19 +38777,19 @@ function userContentParts4(content, imageUrls) {
       continue;
     }
     if (block.type === "tool-result" && Array.isArray(block.content)) {
-      const inner = userContentParts4(block.content, imageUrls);
+      const inner = userContentParts3(block.content, imageUrls);
       if (inner !== void 0) {
         hasImage = true;
         parts.push(...inner);
       } else {
-        const text = contentToText6(block.content);
+        const text = contentToText5(block.content);
         if (text.length > 0) parts.push({ type: "text", text });
       }
     }
   }
   return hasImage && parts.length > 0 ? parts : void 0;
 }
-function collectImages4(content, refs) {
+function collectImages3(content, refs) {
   for (const raw of content) {
     if (typeof raw !== "object" || raw === null) continue;
     const block = raw;
@@ -40274,7 +38797,7 @@ function collectImages4(content, refs) {
       refs.set(block.attachment.attachmentId, block.attachment);
       continue;
     }
-    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages4(block.content, refs);
+    if (block.type === "tool-result" && Array.isArray(block.content)) collectImages3(block.content, refs);
   }
 }
 function serializeTraeMessages(messages, imageUrls) {
@@ -40286,7 +38809,7 @@ function serializeTraeMessages(messages, imageUrls) {
     if (pendingToolImages.length === 0) return;
     wire.push({
       role: "user",
-      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT4 }, ...pendingToolImages]
+      content: [{ type: "text", text: TOOL_RESULT_IMAGE_TEXT3 }, ...pendingToolImages]
     });
     pendingToolImages = [];
   };
@@ -40304,7 +38827,7 @@ function serializeTraeMessages(messages, imageUrls) {
           arguments: normalizeToolArguments(String(block.arguments))
         }
       }));
-      const text2 = contentToText6(content2);
+      const text2 = contentToText5(content2);
       if (text2.trim().length === 0 && toolCalls.length === 0) continue;
       flushToolImages();
       wire.push({
@@ -40316,18 +38839,18 @@ function serializeTraeMessages(messages, imageUrls) {
     }
     if (message2.role === "system") {
       flushToolImages();
-      wire.push({ role: "system", content: contentToText6(message2.content) });
+      wire.push({ role: "system", content: contentToText5(message2.content) });
       continue;
     }
     const content = Array.isArray(message2.content) ? message2.content : [];
     const toolResults = content.filter(
       (block) => typeof block === "object" && block !== null && block.type === "tool-result"
     );
-    const text = contentToText6(message2.content);
+    const text = contentToText5(message2.content);
     const outerContent = content.filter(
       (block) => !(typeof block === "object" && block !== null && block.type === "tool-result")
     );
-    const parts = imageUrls === void 0 ? void 0 : userContentParts4(outerContent, imageUrls);
+    const parts = imageUrls === void 0 ? void 0 : userContentParts3(outerContent, imageUrls);
     const deferred = toolResults.length > 0;
     if (!deferred) {
       if (parts !== void 0) {
@@ -40340,14 +38863,14 @@ function serializeTraeMessages(messages, imageUrls) {
     }
     for (const result of toolResults) {
       if (!keepResultIds.has(String(result.toolCallId))) continue;
-      const innerParts = imageUrls === void 0 ? void 0 : Array.isArray(result.content) ? userContentParts4(result.content, imageUrls) : void 0;
+      const innerParts = imageUrls === void 0 ? void 0 : Array.isArray(result.content) ? userContentParts3(result.content, imageUrls) : void 0;
       if (innerParts !== void 0) {
         pendingToolImages.push(...innerParts.filter((part) => part.type === "image_url"));
       }
       wire.push({
         role: "tool",
         tool_call_id: String(result.toolCallId),
-        content: contentToText6(result.content) || (innerParts !== void 0 ? TOOL_RESULT_IMAGE_TEXT4 : "(no output)")
+        content: contentToText5(result.content) || (innerParts !== void 0 ? TOOL_RESULT_IMAGE_TEXT3 : "(no output)")
       });
     }
     if (deferred && (parts !== void 0 || text.length > 0)) {
@@ -40358,7 +38881,7 @@ function serializeTraeMessages(messages, imageUrls) {
   flushToolImages();
   return wire;
 }
-function errorDetail5(body) {
+function errorDetail4(body) {
   try {
     const data = JSON.parse(body);
     const parts = [
@@ -40371,7 +38894,7 @@ function errorDetail5(body) {
   }
   return body;
 }
-function httpErrorCode5(status) {
+function httpErrorCode4(status) {
   if (status === 401 || status === 403) return "AUTH";
   if (status === 429) return "RATE_LIMIT";
   if (status === 400) return "INVALID_REQUEST";
@@ -40383,7 +38906,7 @@ function traeStreamErrorMessage(code, message2, model) {
   if (code !== 4001) return base;
   return `${base} \u2014\u2014 \u6A21\u578B\u300C${model}\u300D\u4E0D\u88AB\u4E0A\u6E38\u63A5\u53D7\uFF1A\u5B83\u901A\u5E38\u662F\u300C\u4EC5\u53EF\u89C1\u4F46\u4E0D\u53EF\u8C03\u7528\u300D\u7684\u81EA\u5B9A\u4E49\u6A21\u578B\uFF08\u9700\u5148\u5728 TRAE IDE \u5185\u81EA\u884C\u914D\u7F6E\u4F9B\u5E94\u5546\uFF09\uFF0C\u8BF7\u6539\u7528\u6A21\u578B\u5217\u8868\u4E2D\u7684\u5176\u5B83\u6A21\u578B`;
 }
-function isTransportError5(error) {
+function isTransportError4(error) {
   if (!(error instanceof Error)) return false;
   const message2 = error.message.toLowerCase();
   if (message2.includes("terminated")) return true;
@@ -40402,7 +38925,7 @@ function traeDisplayName(model) {
   }
   return `${model.name} \xB7 ${current}`;
 }
-var TraeAdapter = class extends LlmAdapter5 {
+var TraeAdapter = class extends LlmAdapter4 {
   constructor(options) {
     super();
     this.options = options;
@@ -40544,14 +39067,14 @@ var TraeAdapter = class extends LlmAdapter5 {
     if (config.supportThinking === false) return void 0;
     if (config.options.length === 0) return void 0;
     const efforts = config.options.map((option) => ({
-      id: ReasoningEffortId5(option),
+      id: ReasoningEffortId4(option),
       name: TRAE_EFFORT_NAMES[option] ?? option
     }));
-    const fallback = strongestTraeEffort(config.options);
-    const chosen = defaultTraeEffort(config, fallback);
+    const fallback2 = strongestTraeEffort(config.options);
+    const chosen = defaultTraeEffort(config, fallback2);
     return {
       efforts,
-      ...chosen !== void 0 ? { defaultEffort: ReasoningEffortId5(chosen) } : {}
+      ...chosen !== void 0 ? { defaultEffort: ReasoningEffortId4(chosen) } : {}
     };
   }
   /**
@@ -40643,7 +39166,7 @@ var TraeAdapter = class extends LlmAdapter5 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError8("trae: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError7("trae: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     let currentAccountId = "";
     if (this.options.accountPool) {
@@ -40658,18 +39181,18 @@ var TraeAdapter = class extends LlmAdapter5 {
     }
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages4(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
     }
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError8(
+        throw new LlmError7(
           `trae: model "${options.model}" does not accept image input.`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError8(
+        throw new LlmError7(
           "trae: image input requires the attachment service; confirm the profile loads @deepseek-ai/dsh-attachment-local.",
           "UNSUPPORTED_CONTENT"
         );
@@ -40727,7 +39250,7 @@ var TraeAdapter = class extends LlmAdapter5 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError8("trae: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError7("trae: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await this.send(credential, body, options);
@@ -40767,16 +39290,16 @@ var TraeAdapter = class extends LlmAdapter5 {
           lastKind = classifyTraeError(response.status, errorText);
           if (!shouldRotateTraeAccount(lastKind)) break;
         }
-        throw new LlmError8(
-          `trae: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08${errorDetail5(errorText)}\uFF09`,
-          lastKind === "quota-exceeded" ? "QUOTA_EXCEEDED" : httpErrorCode5(lastStatus),
+        throw new LlmError7(
+          `trae: \u6A21\u578B ${options.model} \u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08${errorDetail4(errorText)}\uFF09`,
+          lastKind === "quota-exceeded" ? "QUOTA_EXCEEDED" : httpErrorCode4(lastStatus),
           { status: lastStatus }
         );
       }
       if (lastKind === "quota-exceeded") {
-        throw new LlmError8(`trae: \u79EF\u5206\u4E0D\u8DB3\uFF08${errorDetail5(errorText)}\uFF09`, "QUOTA_EXCEEDED", { status: lastStatus });
+        throw new LlmError7(`trae: \u79EF\u5206\u4E0D\u8DB3\uFF08${errorDetail4(errorText)}\uFF09`, "QUOTA_EXCEEDED", { status: lastStatus });
       }
-      throw new LlmError8(`trae: ${errorDetail5(errorText)}`, httpErrorCode5(lastStatus), { status: lastStatus });
+      throw new LlmError7(`trae: ${errorDetail4(errorText)}`, httpErrorCode4(lastStatus), { status: lastStatus });
     }
     const triedStreamAccounts = /* @__PURE__ */ new Set();
     if (currentAccountId.length > 0) triedStreamAccounts.add(currentAccountId);
@@ -40786,9 +39309,9 @@ var TraeAdapter = class extends LlmAdapter5 {
         yield* this.consumeSse(response, options);
         return;
       } catch (error) {
-        if (error instanceof LlmError8 && error.code === TRAE_ROTATABLE_STREAM_ERROR) {
+        if (error instanceof LlmError7 && error.code === TRAE_ROTATABLE_STREAM_ERROR) {
           if (this.options.accountPool === void 0 || rotateBudget <= 0) {
-            throw new LlmError8(error.message, "QUOTA_EXCEEDED");
+            throw new LlmError7(error.message, "QUOTA_EXCEEDED");
           }
           if (options.signal?.aborted) throw error;
           rotateBudget -= 1;
@@ -40805,7 +39328,7 @@ var TraeAdapter = class extends LlmAdapter5 {
             triedStreamAccounts
           );
           if (next === null || next === void 0 || triedStreamAccounts.has(next.entry.id)) {
-            throw new LlmError8(error.message, "QUOTA_EXCEEDED");
+            throw new LlmError7(error.message, "QUOTA_EXCEEDED");
           }
           triedStreamAccounts.add(next.entry.id);
           credential = next.credential;
@@ -40815,19 +39338,19 @@ var TraeAdapter = class extends LlmAdapter5 {
             const text = await response.text().catch(() => "");
             const kind = classifyTraeError(response.status, text);
             if (!shouldRotateTraeAccount(kind)) {
-              throw new LlmError8(`trae: ${errorDetail5(text)}`, httpErrorCode5(response.status), { status: response.status });
+              throw new LlmError7(`trae: ${errorDetail4(text)}`, httpErrorCode4(response.status), { status: response.status });
             }
             continue;
           }
           continue;
         }
-        const empty = error instanceof LlmError8 && error.message.includes("upstream returned no events");
+        const empty = error instanceof LlmError7 && error.message.includes("upstream returned no events");
         if (!empty || attempt >= 1) throw error;
         if (options.signal?.aborted) throw error;
         response = await this.send(credential, body, options);
         if (!response.ok) {
           const text = await response.text().catch(() => "");
-          throw new LlmError8(`trae: ${errorDetail5(text)}`, httpErrorCode5(response.status), { status: response.status });
+          throw new LlmError7(`trae: ${errorDetail4(text)}`, httpErrorCode4(response.status), { status: response.status });
         }
       }
     }
@@ -40847,8 +39370,8 @@ var TraeAdapter = class extends LlmAdapter5 {
       });
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      if (isTransportError5(error)) {
-        throw new LlmError8(`trae: transport error: ${errorMessage5(error)}`, "TRANSPORT", { cause: error });
+      if (isTransportError4(error)) {
+        throw new LlmError7(`trae: transport error: ${errorMessage4(error)}`, "TRANSPORT", { cause: error });
       }
       throw error;
     }
@@ -40886,7 +39409,7 @@ var TraeAdapter = class extends LlmAdapter5 {
    * ```
    */
   async *consumeSse(response, options) {
-    if (!response.body) throw new LlmError8("trae: empty model response body", "EMPTY_RESPONSE");
+    if (!response.body) throw new LlmError7("trae: empty model response body", "EMPTY_RESPONSE");
     const blocks = [];
     let nextIndex = 0;
     const loopGuard = isReasoningLoopGuardEnabled() ? createReasoningLoopDetector() : void 0;
@@ -40913,15 +39436,15 @@ var TraeAdapter = class extends LlmAdapter5 {
         if (streamEnded) break;
         let result;
         try {
-          const timeoutMs = firstTokenReceived ? resolveChunkTimeoutMs5() : resolveFirstTokenTimeoutMs5();
+          const timeoutMs = firstTokenReceived ? resolveChunkTimeoutMs4() : resolveFirstTokenTimeoutMs4();
           const phase = firstTokenReceived ? "chunk" : "first-token";
           result = await readWithIdleTimeout(reader, timeoutMs, "trae", options.signal, phase);
           if (!result.done) firstTokenReceived = true;
         } catch (error) {
           if (options.signal?.aborted) throw error;
-          if (error instanceof LlmError8) throw error;
-          if (isTransportError5(error)) {
-            throw new LlmError8(`trae: sse transport error: ${errorMessage5(error)}`, "TRANSPORT", { cause: error });
+          if (error instanceof LlmError7) throw error;
+          if (isTransportError4(error)) {
+            throw new LlmError7(`trae: sse transport error: ${errorMessage4(error)}`, "TRANSPORT", { cause: error });
           }
           throw error;
         }
@@ -41013,7 +39536,7 @@ var TraeAdapter = class extends LlmAdapter5 {
                           yield {
                             type: "tool-call-delta",
                             index: block.index,
-                            id: ToolCallId5(callId),
+                            id: ToolCallId4(callId),
                             name: block.name,
                             argumentsDelta: block.text
                           };
@@ -41022,7 +39545,7 @@ var TraeAdapter = class extends LlmAdapter5 {
                         yield {
                           type: "tool-call-delta",
                           index: block.index,
-                          id: ToolCallId5(callId),
+                          id: ToolCallId4(callId),
                           ...block.name !== void 0 ? { name: block.name } : {},
                           argumentsDelta: fragment
                         };
@@ -41057,9 +39580,9 @@ var TraeAdapter = class extends LlmAdapter5 {
                   if (ev.errorCode !== void 0 && ev.errorMessage !== void 0) {
                     const message2 = traeStreamErrorMessage(ev.errorCode, ev.errorMessage, options.model);
                     if (isRotatableStreamError(ev.errorCode) && !gotAnyContent) {
-                      throw new LlmError8(message2, TRAE_ROTATABLE_STREAM_ERROR);
+                      throw new LlmError7(message2, TRAE_ROTATABLE_STREAM_ERROR);
                     }
-                    throw new LlmError8(
+                    throw new LlmError7(
                       message2,
                       ev.errorCode === 1005 || ev.errorCode === 4008 ? "QUOTA_EXCEEDED" : "SERVER"
                     );
@@ -41087,7 +39610,7 @@ var TraeAdapter = class extends LlmAdapter5 {
       reader.releaseLock();
     }
     if (!sawAnyUpstreamEvent) {
-      throw new LlmError8(
+      throw new LlmError7(
         "trae: upstream returned no events (empty response before first model event)",
         "TRANSPORT"
       );
@@ -41104,7 +39627,7 @@ var TraeAdapter = class extends LlmAdapter5 {
         index,
         block: {
           type: "tool-call",
-          id: ToolCallId5(block.callId ?? ""),
+          id: ToolCallId4(block.callId ?? ""),
           name: block.name,
           arguments: isTruncatedArguments(block.text) ? block.text : normalizeToolArguments(block.text)
         }
@@ -41168,24 +39691,7 @@ function registerTraeLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/cline-adapter.ts
-import { LlmAdapter as LlmAdapter6, LlmError as LlmError9, ReasoningEffortId as ReasoningEffortId6 } from "@deepseek-ai/dsh-llm";
-
-// vendor/channel-pack/src/retry-after.ts
-function parseRetryAfterMs(raw, nowMs = Date.now()) {
-  if (raw === void 0 || raw === null || raw === "") return void 0;
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return seconds >= 0 ? Math.ceil(seconds * 1e3) : void 0;
-  const at = Date.parse(raw);
-  return Number.isFinite(at) ? Math.max(0, at - nowMs) : void 0;
-}
-function retryAfterMsFromResponse(headers, nowMs = Date.now()) {
-  if (headers === null || headers === void 0) return void 0;
-  return parseRetryAfterMs(headers.get("retry-after"), nowMs);
-}
-function retryAfterMsFromRecord(headers, nowMs = Date.now()) {
-  if (headers === void 0) return void 0;
-  return parseRetryAfterMs(headers["retry-after"] ?? headers["Retry-After"], nowMs);
-}
+import { LlmAdapter as LlmAdapter5, LlmError as LlmError8, ReasoningEffortId as ReasoningEffortId5 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/cline-rate-limit.ts
 var CLINE_WAIT_PATTERN = /try again in\s+([^.;\n]*)/i;
@@ -41294,7 +39800,7 @@ function parseClineTokenPayload(value) {
   const envelope = value;
   const inner = typeof envelope.data === "object" && envelope.data !== null && !Array.isArray(envelope.data) ? envelope.data : envelope;
   const accessToken = readString2(inner, ["accessToken", "access_token"]) ?? "";
-  const refreshToken2 = readString2(inner, ["refreshToken", "refresh_token"]);
+  const refreshToken = readString2(inner, ["refreshToken", "refresh_token"]);
   const expiresAt = parseClineTimestamp(inner.expiresAt ?? inner.expires_at ?? inner.expire_time);
   const userInfo = typeof inner.userInfo === "object" && inner.userInfo !== null && !Array.isArray(inner.userInfo) ? inner.userInfo : void 0;
   const accountId = userInfo === void 0 ? readString2(inner, ["accountId", "account_id"]) : readString2(userInfo, ["clineUserId", "accountId"]) ?? readString2(inner, ["accountId", "account_id"]);
@@ -41304,7 +39810,7 @@ function parseClineTokenPayload(value) {
   const displayName = [firstName, lastName].filter((part) => part !== void 0).join(" ").trim();
   return {
     accessToken,
-    ...refreshToken2 === void 0 ? {} : { refreshToken: refreshToken2 },
+    ...refreshToken === void 0 ? {} : { refreshToken },
     ...expiresAt === void 0 ? {} : { expiresAt },
     ...accountId === void 0 ? {} : { accountId },
     ...email === void 0 ? {} : { email },
@@ -41316,9 +39822,9 @@ function clineBearerValue(accessToken, product) {
   if (token.length === 0) return "";
   return token.startsWith(product.tokenPrefix) ? token : `${product.tokenPrefix}${token}`;
 }
-function buildClineCredential(payload, product, fallback = {}) {
-  const accountId = payload.accountId ?? fallback.accountId;
-  const email = payload.email ?? fallback.email;
+function buildClineCredential(payload, product, fallback2 = {}) {
+  const accountId = payload.accountId ?? fallback2.accountId;
+  const email = payload.email ?? fallback2.email;
   const nickname = email ?? (payload.displayName !== void 0 && payload.displayName.length > 0 ? payload.displayName : accountId);
   return {
     access_token: clineBearerValue(payload.accessToken, product),
@@ -41446,11 +39952,11 @@ var CLINE_RECOMMENDED_MODELS_PATH = "/api/v1/ai/cline/recommended-models";
 var CLINE_MODELS_TIMEOUT_MS = 2e4;
 var FREE_ID_SUFFIX = ":free";
 var FREE_ID_PREFIX = "cline-free/";
-function isClineFreeModel(id, remoteFreeIds = /* @__PURE__ */ new Set(), fallback) {
+function isClineFreeModel(id, remoteFreeIds = /* @__PURE__ */ new Set(), fallback2) {
   if (remoteFreeIds.has(id)) return true;
   if (id.endsWith(FREE_ID_SUFFIX)) return true;
   if (id.startsWith(FREE_ID_PREFIX)) return true;
-  return fallback?.isFree === true;
+  return fallback2?.isFree === true;
 }
 function clineDisplayName(model) {
   return model.isFree ? `${model.name} \xB7 \u514D\u8D39` : model.name;
@@ -41504,17 +40010,17 @@ function mergeClineModels(product, remote) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   const build = (id) => {
-    const fallback = fallbackIndex.get(id);
+    const fallback2 = fallbackIndex.get(id);
     const entry = entryIndex.get(id);
-    const name2 = fallback?.name ?? entry?.name ?? nameFromId(id);
-    const description = entry?.description ?? fallback?.description;
+    const name2 = fallback2?.name ?? entry?.name ?? nameFromId(id);
+    const description = entry?.description ?? fallback2?.description;
     return {
       id,
       name: name2,
-      isFree: isClineFreeModel(id, remoteFreeIds, fallback),
-      ...fallback?.contextWindow === void 0 ? {} : { contextWindow: fallback.contextWindow },
-      ...fallback?.maxTokens === void 0 ? {} : { maxTokens: fallback.maxTokens },
-      ...fallback?.supportsImage === void 0 ? {} : { supportsImage: fallback.supportsImage },
+      isFree: isClineFreeModel(id, remoteFreeIds, fallback2),
+      ...fallback2?.contextWindow === void 0 ? {} : { contextWindow: fallback2.contextWindow },
+      ...fallback2?.maxTokens === void 0 ? {} : { maxTokens: fallback2.maxTokens },
+      ...fallback2?.supportsImage === void 0 ? {} : { supportsImage: fallback2.supportsImage },
       ...description === void 0 ? {} : { description }
     };
   };
@@ -41860,13 +40366,13 @@ function sanitizeClineToolParameters(value) {
   }
   return out;
 }
-function resolveFirstTokenTimeoutMs6() {
+function resolveFirstTokenTimeoutMs5() {
   return Number.parseInt(process.env.DSH_CLINE_SSE_FIRST_TOKEN_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-function resolveChunkTimeoutMs6() {
+function resolveChunkTimeoutMs5() {
   return Number.parseInt(process.env.DSH_CLINE_SSE_CHUNK_TIMEOUT_MS ?? "", 10) || 12e4;
 }
-var ClineAdapter = class extends LlmAdapter6 {
+var ClineAdapter = class extends LlmAdapter5 {
   constructor(options) {
     super();
     this.options = options;
@@ -42062,10 +40568,10 @@ var ClineAdapter = class extends LlmAdapter6 {
     if (maxTokens !== void 0) resolved.defaultMaxTokens = maxTokens;
     resolved.reasoning = {
       efforts: CLINE_REASONING_EFFORTS.map((effort) => ({
-        id: ReasoningEffortId6(effort.id),
+        id: ReasoningEffortId5(effort.id),
         name: effort.name
       })),
-      defaultEffort: ReasoningEffortId6(CLINE_DEFAULT_REASONING_EFFORT)
+      defaultEffort: ReasoningEffortId5(CLINE_DEFAULT_REASONING_EFFORT)
     };
     return resolved;
   }
@@ -42085,19 +40591,19 @@ var ClineAdapter = class extends LlmAdapter6 {
   async *stream(options) {
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     let imageUrls;
     if (imageRefs.size > 0) {
       await this.ensureRemoteModels();
       if (!this.inputModalitiesFor(options.model).includes("image")) {
-        throw new LlmError9(
+        throw new LlmError8(
           `cline: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError9("cline: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError8("cline: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -42118,9 +40624,9 @@ var ClineAdapter = class extends LlmAdapter6 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError9("cline: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError8("cline: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
-    const messages = serializeMessages4(options.messages, imageUrls);
+    const messages = serializeMessages3(options.messages, imageUrls);
     const bodyObj = {
       model: options.model,
       messages: options.system !== void 0 && options.system.length > 0 ? [{ role: "system", content: options.system }, ...messages] : messages,
@@ -42152,8 +40658,8 @@ var ClineAdapter = class extends LlmAdapter6 {
     if (!response.ok && (response.status === 401 || response.status === 403)) {
       const forbiddenText = await response.text().catch(() => "");
       if (isClineRegionForbidden(response.status, forbiddenText)) {
-        throw new LlmError9(
-          `cline: ${errorDetail4(forbiddenText)}`,
+        throw new LlmError8(
+          `cline: ${errorDetail3(forbiddenText)}`,
           "PERMISSION_DENIED",
           { status: response.status }
         );
@@ -42161,7 +40667,7 @@ var ClineAdapter = class extends LlmAdapter6 {
       await this.options.refresh();
       const refreshed = await this.options.resolveCredential(options.model);
       if (refreshed === void 0 || refreshed.access_token.length === 0) {
-        throw new LlmError9("cline: credential expired and refresh failed", "AUTH", { status: response.status });
+        throw new LlmError8("cline: credential expired and refresh failed", "AUTH", { status: response.status });
       }
       credential = refreshed;
       response = await this.send(credential, body, options);
@@ -42215,14 +40721,14 @@ var ClineAdapter = class extends LlmAdapter6 {
           hint,
           recordsClineRateLimit(response.status, errorText) ? clineRateLimitResetAt(response, errorText, options.model) : void 0
         );
-        throw new LlmError9(
+        throw new LlmError8(
           `cline: \u6A21\u578B ${options.model} \u7684\u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528 \u2014\u2014 ${advice}`,
           "QUOTA_EXCEEDED"
         );
       }
-      throw new LlmError9(
-        `cline: ${errorDetail4(errorText)}`,
-        httpErrorCode4(response.status),
+      throw new LlmError8(
+        `cline: ${errorDetail3(errorText)}`,
+        httpErrorCode3(response.status),
         { status: response.status }
       );
     }
@@ -42325,8 +40831,8 @@ var ClineAdapter = class extends LlmAdapter6 {
   consume(response, options, onFrame) {
     return consumeOpenAiSse(response, { ...options.signal === void 0 ? {} : { signal: options.signal } }, {
       label: "cline",
-      firstTokenTimeoutMs: resolveFirstTokenTimeoutMs6(),
-      chunkTimeoutMs: resolveChunkTimeoutMs6(),
+      firstTokenTimeoutMs: resolveFirstTokenTimeoutMs5(),
+      chunkTimeoutMs: resolveChunkTimeoutMs5(),
       ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens },
       // 旁路观测网关路由元数据（真正服务这笔请求的上游渠道）。
       ...onFrame === void 0 ? {} : { onFrame }
@@ -42349,8 +40855,8 @@ var ClineAdapter = class extends LlmAdapter6 {
       });
     } catch (error) {
       if (options.signal?.aborted === true) throw error;
-      if (isTransportError4(error)) {
-        throw new LlmError9(
+      if (isTransportError3(error)) {
+        throw new LlmError8(
           `cline: transport error: ${error instanceof Error ? error.message : String(error)}`,
           "TRANSPORT",
           { cause: error }
@@ -42399,7 +40905,7 @@ function registerClineLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/loomy-adapter.ts
-import { LlmAdapter as LlmAdapter7, LlmError as LlmError10, ReasoningEffortId as ReasoningEffortId7 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter6, LlmError as LlmError9, ReasoningEffortId as ReasoningEffortId6 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/loomy.ts
 var LOOMY_API_BASE = "https://loomyad.xunfei.cn/api/v1";
@@ -42567,7 +41073,7 @@ function fallbackToRemote(model) {
     ...model.defaultEffort !== void 0 ? { defaultEffort: model.defaultEffort } : {}
   };
 }
-var LoomyAdapter = class extends LlmAdapter7 {
+var LoomyAdapter = class extends LlmAdapter6 {
   constructor(options) {
     super();
     this.options = options;
@@ -42642,19 +41148,19 @@ var LoomyAdapter = class extends LlmAdapter7 {
   async resolveModel(provider, model, _signal) {
     const all = await this.loadModels();
     const entry = all.find((item) => item.id === model);
-    const fallback = this.fallbackIndex.get(model);
-    const bareName = fallback !== void 0 ? splitLoomyRate(fallback.name).name : model;
+    const fallback2 = this.fallbackIndex.get(model);
+    const bareName = fallback2 !== void 0 ? splitLoomyRate(fallback2.name).name : model;
     const resolved = {
       provider,
       id: model,
       name: entry !== void 0 ? splitLoomyRate(entry.name).name : bareName,
       inputModalities: this.inputModalitiesFor(entry)
     };
-    const contextWindow = entry?.contextWindow ?? fallback?.contextWindow;
+    const contextWindow = entry?.contextWindow ?? fallback2?.contextWindow;
     if (contextWindow !== void 0 && contextWindow > 0) {
       resolved.context = { contextWindow };
     }
-    const reasoning = this.reasoningFor(entry, fallback);
+    const reasoning = this.reasoningFor(entry, fallback2);
     if (reasoning !== void 0) resolved.reasoning = reasoning;
     return resolved;
   }
@@ -42672,18 +41178,18 @@ var LoomyAdapter = class extends LlmAdapter7 {
    *    给一个不存在的档位会抛 `UNSUPPORTED_REASONING_EFFORT`，比不给更糟；
    * 3. 远端未下发档位时不声明 `reasoning`（UI 显示「当前模型未提供推理等级」）。
    */
-  reasoningFor(entry, fallback) {
-    const efforts = entry?.efforts ?? fallback?.efforts;
+  reasoningFor(entry, fallback2) {
+    const efforts = entry?.efforts ?? fallback2?.efforts;
     if (efforts === void 0 || efforts.length === 0) return void 0;
     const defaultEffort = LOOMY_PREFERRED_DEFAULT_EFFORT;
     const hasDefault = efforts.includes(defaultEffort);
     return {
       efforts: efforts.map((id) => ({
-        id: ReasoningEffortId7(id),
+        id: ReasoningEffortId6(id),
         // 未登记的中文名回退到 id 本身（新档位上线时不至于空白）。
         name: LOOMY_EFFORT_NAMES[id] ?? id
       })),
-      ...hasDefault ? { defaultEffort: ReasoningEffortId7(defaultEffort) } : {}
+      ...hasDefault ? { defaultEffort: ReasoningEffortId6(defaultEffort) } : {}
     };
   }
   /**
@@ -42702,17 +41208,17 @@ var LoomyAdapter = class extends LlmAdapter7 {
   async *stream(options) {
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     const all = await this.loadModels();
     const entry = all.find((item) => item.id === options.model);
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(entry).includes("image")) {
-        throw new LlmError10(`loomy: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
+        throw new LlmError9(`loomy: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError10("loomy: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError9("loomy: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       for (const [id, ref] of imageRefs) {
@@ -42727,9 +41233,9 @@ var LoomyAdapter = class extends LlmAdapter7 {
       credential = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError10("loomy: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError9("loomy: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
-    const messages = serializeMessages4(options.messages, imageUrls);
+    const messages = serializeMessages3(options.messages, imageUrls);
     const wireMessages = options.system !== void 0 && options.system.length > 0 ? [{ role: "system", content: options.system }, ...messages] : messages;
     const effortsForModel = (await this.loadModels()).find((m) => m.id === options.model)?.efforts ?? this.fallbackIndex.get(options.model)?.efforts;
     const effort = options.reasoningEffort !== void 0 && effortsForModel !== void 0 && effortsForModel.includes(options.reasoningEffort) ? options.reasoningEffort : void 0;
@@ -42763,8 +41269,8 @@ var LoomyAdapter = class extends LlmAdapter7 {
         });
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        if (isTransportError4(error)) {
-          throw new LlmError10(
+        if (isTransportError3(error)) {
+          throw new LlmError9(
             `loomy: transport error: ${error instanceof Error ? error.message : String(error)}`,
             "TRANSPORT",
             { cause: error }
@@ -42783,7 +41289,7 @@ var LoomyAdapter = class extends LlmAdapter7 {
           await response.body?.cancel();
           credential = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
           if (credential === void 0 || credential.access_token.length === 0) {
-            throw new LlmError10("loomy: credential expired and refresh failed", "AUTH", { status: response.status });
+            throw new LlmError9("loomy: credential expired and refresh failed", "AUTH", { status: response.status });
           }
           response = await send(credential.access_token);
         }
@@ -42794,16 +41300,16 @@ var LoomyAdapter = class extends LlmAdapter7 {
             quota ||= isLoomyQuotaError(JSON.parse(errorText));
           } catch {
           }
-          throw new LlmError10(
-            `loomy: ${errorDetail4(errorText)}`,
-            quota ? "QUOTA_EXCEEDED" : httpErrorCode4(response.status),
+          throw new LlmError9(
+            `loomy: ${errorDetail3(errorText)}`,
+            quota ? "QUOTA_EXCEEDED" : httpErrorCode3(response.status),
             { status: response.status }
           );
         }
         for await (const chunk of consumeOpenAiSse(response, { signal: options.signal }, {
           label: "loomy",
-          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs7(),
-          chunkTimeoutMs: resolveChunkTimeoutMs7(),
+          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs6(),
+          chunkTimeoutMs: resolveChunkTimeoutMs6(),
           isQuotaError: isLoomyQuotaError,
           ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
         })) {
@@ -42812,7 +41318,7 @@ var LoomyAdapter = class extends LlmAdapter7 {
         }
         return;
       } catch (error) {
-        if (options.signal?.aborted || !(error instanceof LlmError10) || error.code !== "QUOTA_EXCEEDED") throw error;
+        if (options.signal?.aborted || !(error instanceof LlmError9) || error.code !== "QUOTA_EXCEEDED") throw error;
         if (accountId) {
           await this.options.accountPool?.updateModelRateLimit(accountId, options.model, nextUtc8DayStartMs());
         }
@@ -42830,11 +41336,11 @@ function isLoomyQuotaError(data) {
   const error = typeof data.error === "object" && data.error !== null ? data.error : data;
   return String(error.code ?? data.code) === "402" || /积分不足|余额不足|insufficient[_\s]+(?:points|balance|credits)/i.test(String(error.message ?? error.msg ?? ""));
 }
-function resolveFirstTokenTimeoutMs7() {
+function resolveFirstTokenTimeoutMs6() {
   const raw = Number(process.env.DSH_LOOMY_FIRST_TOKEN_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 12e4;
 }
-function resolveChunkTimeoutMs7() {
+function resolveChunkTimeoutMs6() {
   const raw = Number(process.env.DSH_LOOMY_CHUNK_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 12e4;
 }
@@ -42846,10 +41352,10 @@ function registerLoomyLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/raccoon-adapter.ts
-import { LlmAdapter as LlmAdapter8, LlmError as LlmError11, ReasoningEffortId as ReasoningEffortId8 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter7, LlmError as LlmError10, ReasoningEffortId as ReasoningEffortId7 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/raccoon.ts
-import { createCipheriv, randomBytes as randomBytes2 } from "node:crypto";
+import { createCipheriv, randomBytes as randomBytes3 } from "node:crypto";
 var RACCOON_API_BASE = "https://xiaohuanxiong.com";
 var RACCOON_POINTS_PREFIX = "/api/web/points/v1";
 var RACCOON_DESKTOP_PREFIX = "/api/web/desktop/v1";
@@ -42893,7 +41399,7 @@ function isRaccoonRefreshable(credential) {
 }
 function encryptRaccoonPhone(phone, iv) {
   const key = Buffer.from(RACCOON_PHONE_CIPHER_SECRET, "utf8");
-  const nonce = iv ?? randomBytes2(16);
+  const nonce = iv ?? randomBytes3(16);
   const cipher = createCipheriv("aes-128-cfb", key, nonce);
   cipher.setAutoPadding(false);
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(phone, "utf8")), cipher.final()]);
@@ -43042,13 +41548,13 @@ function raccoonThinkingExtraBody(effort) {
 }
 function raccoonReasoningInfo() {
   const efforts = RACCOON_REASONING_EFFORTS.map((id) => ({
-    id: ReasoningEffortId8(id),
+    id: ReasoningEffortId7(id),
     name: RACCOON_EFFORT_NAMES[id] ?? id
   }));
-  const defaultEffort = RACCOON_REASONING_EFFORTS.includes(RACCOON_DEFAULT_EFFORT) ? ReasoningEffortId8(RACCOON_DEFAULT_EFFORT) : ReasoningEffortId8(RACCOON_REASONING_EFFORTS[0] ?? RACCOON_EFFORT_ON);
+  const defaultEffort = RACCOON_REASONING_EFFORTS.includes(RACCOON_DEFAULT_EFFORT) ? ReasoningEffortId7(RACCOON_DEFAULT_EFFORT) : ReasoningEffortId7(RACCOON_REASONING_EFFORTS[0] ?? RACCOON_EFFORT_ON);
   return { efforts, defaultEffort };
 }
-function positiveMaxTokens2(value) {
+function positiveMaxTokens(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : void 0;
 }
 function fallbackToRemote2(model) {
@@ -43061,7 +41567,7 @@ function fallbackToRemote2(model) {
     supportsImage: model.supportsImage
   };
 }
-var RaccoonAdapter = class extends LlmAdapter8 {
+var RaccoonAdapter = class extends LlmAdapter7 {
   constructor(options) {
     super();
     this.options = options;
@@ -43140,19 +41646,19 @@ var RaccoonAdapter = class extends LlmAdapter8 {
   async resolveModel(provider, model, _signal) {
     const all = await this.loadModels();
     const entry = all.find((item) => item.id === model);
-    const fallback = this.fallbackIndex.get(model);
-    const bareName = fallback !== void 0 ? fallback.name.replace(/ · .*$/, "") : model;
+    const fallback2 = this.fallbackIndex.get(model);
+    const bareName = fallback2 !== void 0 ? fallback2.name.replace(/ · .*$/, "") : model;
     const resolved = {
       provider,
       id: model,
       name: entry !== void 0 ? entry.name.replace(/ · .*$/, "") : bareName,
       inputModalities: this.inputModalitiesFor(entry)
     };
-    const contextWindow = entry?.contextWindow ?? fallback?.contextWindow;
+    const contextWindow = entry?.contextWindow ?? fallback2?.contextWindow;
     if (contextWindow !== void 0 && contextWindow > 0) {
       resolved.context = { contextWindow };
     }
-    const maxTokens = positiveMaxTokens2(entry?.maxTokens ?? fallback?.maxTokens);
+    const maxTokens = positiveMaxTokens(entry?.maxTokens ?? fallback2?.maxTokens);
     if (maxTokens !== void 0) resolved.defaultMaxTokens = maxTokens;
     resolved.reasoning = raccoonReasoningInfo();
     return resolved;
@@ -43171,17 +41677,17 @@ var RaccoonAdapter = class extends LlmAdapter8 {
   async *stream(options) {
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     const all = await this.loadModels();
     const entry = all.find((item) => item.id === options.model);
     let imageUrls;
     if (imageRefs.size > 0) {
       if (!this.inputModalitiesFor(entry).includes("image")) {
-        throw new LlmError11(`raccoon: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
+        throw new LlmError10(`raccoon: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`, "UNSUPPORTED_CONTENT");
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError11("raccoon: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+        throw new LlmError10("raccoon: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
       }
       imageUrls = /* @__PURE__ */ new Map();
       const readImage = this.options.readImage;
@@ -43202,9 +41708,9 @@ var RaccoonAdapter = class extends LlmAdapter8 {
       credential = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token.length === 0) {
-      throw new LlmError11("raccoon: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError10("raccoon: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
-    const messages = serializeMessages4(options.messages, imageUrls);
+    const messages = serializeMessages3(options.messages, imageUrls);
     const wireMessages = options.system !== void 0 && options.system.length > 0 ? [{ role: "system", content: options.system }, ...messages] : messages;
     const thinking = raccoonThinkingExtraBody(options.reasoningEffort);
     const buildBody = () => JSON.stringify({
@@ -43251,8 +41757,8 @@ var RaccoonAdapter = class extends LlmAdapter8 {
         );
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        if (isTransportError4(error)) {
-          throw new LlmError11(
+        if (isTransportError3(error)) {
+          throw new LlmError10(
             `raccoon: transport error: ${error instanceof Error ? error.message : String(error)}`,
             "TRANSPORT",
             { cause: error }
@@ -43271,7 +41777,7 @@ var RaccoonAdapter = class extends LlmAdapter8 {
           await response.body?.cancel();
           const refreshed = await this.options.refresh(accountId || void 0) ?? await this.options.resolveCredential(options.model);
           if (refreshed === void 0 || refreshed.access_token.length === 0) {
-            throw new LlmError11("raccoon: credential expired and refresh failed", "AUTH", { status: response.status });
+            throw new LlmError10("raccoon: credential expired and refresh failed", "AUTH", { status: response.status });
           }
           credential = refreshed;
           response = await send();
@@ -43283,16 +41789,16 @@ var RaccoonAdapter = class extends LlmAdapter8 {
             quota ||= isQuotaError(JSON.parse(errorText));
           } catch {
           }
-          throw new LlmError11(
-            `raccoon: ${errorDetail4(errorText)}`,
-            quota ? "QUOTA_EXCEEDED" : httpErrorCode4(response.status),
+          throw new LlmError10(
+            `raccoon: ${errorDetail3(errorText)}`,
+            quota ? "QUOTA_EXCEEDED" : httpErrorCode3(response.status),
             { status: response.status }
           );
         }
         for await (const chunk of consumeOpenAiSse(response, { signal: options.signal }, {
           label: "raccoon",
-          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs8(),
-          chunkTimeoutMs: resolveChunkTimeoutMs8(),
+          firstTokenTimeoutMs: resolveFirstTokenTimeoutMs7(),
+          chunkTimeoutMs: resolveChunkTimeoutMs7(),
           isQuotaError,
           ...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens }
         })) {
@@ -43301,7 +41807,7 @@ var RaccoonAdapter = class extends LlmAdapter8 {
         }
         return;
       } catch (error) {
-        if (options.signal?.aborted || !(error instanceof LlmError11) || error.code !== "QUOTA_EXCEEDED") throw error;
+        if (options.signal?.aborted || !(error instanceof LlmError10) || error.code !== "QUOTA_EXCEEDED") throw error;
         if (accountId) {
           await this.options.accountPool?.updateModelRateLimit(accountId, options.model, nextUtc8DayStartMs());
         }
@@ -43317,11 +41823,11 @@ var RaccoonAdapter = class extends LlmAdapter8 {
     }
   }
 };
-function resolveFirstTokenTimeoutMs8() {
+function resolveFirstTokenTimeoutMs7() {
   const raw = Number(process.env.DSH_RACCOON_FIRST_TOKEN_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 12e4;
 }
-function resolveChunkTimeoutMs8() {
+function resolveChunkTimeoutMs7() {
   const raw = Number(process.env.DSH_RACCOON_CHUNK_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 12e4;
 }
@@ -43591,8 +42097,8 @@ function parseCredential(value) {
 var CodeArtsAuth = class extends Service {
   /** 登录会话是否仍处于活跃状态；stop() 置 false，防止在途刷新回写已登出凭据。 */
   active = true;
-  /** 用于测试的可注入 fetch；默认为全局 fetch。 */
-  fetchImpl = fetch;
+  /** 可注入 fetch；默认使用保留代理路由的独立签名传输。 */
+  fetchImpl = directFetch;
   /**
    * 按凭据 ref 分的**续期互斥队列**（进程内）。
    *
@@ -43798,14 +42304,14 @@ var CodeArtsAuth = class extends Service {
    * 一旦字段合并逻辑分叉就会出现「某条路径丢了 `model_rate_limits`」。
    */
   async refreshCredential(credential) {
-    const refreshToken2 = credential.refresh_token;
+    const refreshToken = credential.refresh_token;
     const codeVerifier = credential.code_verifier;
     const dpopJwk = credential.dpop_private_key_jwk;
-    if (!refreshToken2 || !codeVerifier || !dpopJwk) {
+    if (!refreshToken || !codeVerifier || !dpopJwk) {
       throw new Error("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     const keyPair = keyPairFromStoredJwk(dpopJwk);
-    const token = await exchangeRefreshToken(refreshToken2, codeVerifier, keyPair, this.fetchImpl);
+    const token = await exchangeRefreshToken(refreshToken, codeVerifier, keyPair, this.fetchImpl);
     const refreshed = credentialFromTokenResponse(token, { codeVerifier, codeChallenge: "" }, keyPair);
     refreshed.domain_id = credential.domain_id;
     refreshed.user_id = credential.user_id;
@@ -43966,670 +42472,9 @@ var CodeArtsAuth = class extends Service {
   }
 };
 
-// vendor/channel-pack/src/buddy-auth.ts
+// vendor/channel-pack/src/lobsterai-auth.ts
 import { Service as Service2 } from "@deepseek-ai/cordis";
 import { credentialRef as credentialRef3 } from "@deepseek-ai/dsh-credentials";
-
-// vendor/channel-pack/src/buddy-oauth.ts
-function responseCode(body) {
-  if (typeof body !== "object" || body === null) return 0;
-  const code = body.code;
-  return typeof code === "number" ? code : 0;
-}
-function responseMessage(body) {
-  if (typeof body !== "object" || body === null) return "";
-  const message2 = body.message;
-  return typeof message2 === "string" ? message2 : "";
-}
-function responseData(body) {
-  if (typeof body !== "object" || body === null) return void 0;
-  const data = body.data;
-  return data === null ? void 0 : data;
-}
-async function request(method, url, headers, options) {
-  const signal = options.signal === void 0 ? AbortSignal.timeout(options.timeoutMs) : AbortSignal.any([AbortSignal.timeout(options.timeoutMs), options.signal]);
-  let response;
-  try {
-    response = await options.fetcher(url, { method, headers, signal });
-  } catch (error) {
-    throw new Error(`CodeBuddy ${method} ${url} network error: ${String(error)}`);
-  }
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
-  return { status: response.status, body };
-}
-async function fetchAuthState(fetcher = fetch, signal, product = CODEBUDDY) {
-  const url = `${product.endpoint}${AUTH_STATE_PATH}?platform=${product.platform}`;
-  const headers = {
-    [HTTP_HEADER_DOMAIN]: product.apiDomain,
-    [HTTP_HEADER_NO_AUTHORIZATION]: "true",
-    [HTTP_HEADER_NO_USER_ID]: "true",
-    [HTTP_HEADER_NO_ENTERPRISE_ID]: "true",
-    [HTTP_HEADER_NO_DEPARTMENT_INFO]: "true",
-    "User-Agent": product.userAgent
-  };
-  const { status, body } = await request("POST", url, headers, {
-    fetcher,
-    timeoutMs: STATE_REQUEST_TIMEOUT_MS,
-    ...signal !== void 0 ? { signal } : {}
-  });
-  if (status !== 200) {
-    throw new Error(`auth/state HTTP ${status}: ${responseMessage(body)}`);
-  }
-  const data = responseData(body);
-  if (typeof data !== "object" || data === null) {
-    throw new Error(`auth/state \u54CD\u5E94\u7F3A\u5C11 data \u5B57\u6BB5: ${JSON.stringify(body)}`);
-  }
-  const record = data;
-  const state = typeof record.state === "string" ? record.state : "";
-  const authUrl = typeof record.authUrl === "string" ? record.authUrl : "";
-  if (state.length === 0) throw new Error("auth/state \u54CD\u5E94\u7F3A\u5C11 state \u5B57\u6BB5");
-  if (authUrl.length === 0) throw new Error("auth/state \u54CD\u5E94\u7F3A\u5C11 authUrl \u5B57\u6BB5");
-  return { state, authUrl };
-}
-async function loopGetToken(state, options = {}) {
-  const fetcher = options.fetcher ?? fetch;
-  const product = options.product ?? CODEBUDDY;
-  const url = `${product.endpoint}${AUTH_TOKEN_PATH}?state=${encodeURIComponent(state)}`;
-  const headers = {
-    [HTTP_HEADER_NO_AUTHORIZATION]: "true",
-    "User-Agent": product.userAgent
-  };
-  const deadline = Date.now() + (options.timeoutMs ?? LOGIN_TIMEOUT_MS);
-  const interval = options.pollIntervalMs ?? POLL_INTERVAL_MS;
-  for (; ; ) {
-    if (Date.now() >= deadline) throw new Error("\u83B7\u53D6 token \u8D85\u65F6\uFF085 \u5206\u949F\uFF09");
-    if (options.signal?.aborted) throw new Error("\u767B\u5F55\u5DF2\u53D6\u6D88");
-    await sleep(interval);
-    let result;
-    try {
-      result = await request("GET", url, headers, {
-        fetcher,
-        timeoutMs: REQUEST_TIMEOUT_MS,
-        ...options.signal !== void 0 ? { signal: options.signal } : {}
-      });
-    } catch {
-      continue;
-    }
-    const { status, body } = result;
-    if (status === 200) {
-      const data = responseData(body);
-      if (data !== void 0) return parseTokenData(data);
-      continue;
-    }
-    const code = responseCode(body);
-    if (code === CODE_TOKEN_NOT_READY) continue;
-    throw new Error(`auth/token HTTP ${status} code=${code}: ${responseMessage(body)}`);
-  }
-}
-async function getAccount(state, token, options = {}) {
-  const fetcher = options.fetcher ?? fetch;
-  const product = options.product ?? CODEBUDDY;
-  const url = `${product.endpoint}${LOGIN_ACCOUNT_PATH}?state=${encodeURIComponent(state)}`;
-  const headers = {
-    // ⚠️ `||` 而非裸 `token.domain`：token 由 `parseTokenData` → `readStringField`
-    // 产出，该函数在字段缺失/类型不符时返回**空串**（不是 `undefined`），裸用会
-    // 让 X-Domain 以空值发出。这与 `buddy-adapter.ts` 的 chat 头、`buddy.ts` 的
-    // `credentialRequestHeaders` 是同一形态（PR!19 修了那两处，这是第三处）。
-    //
-    // 兜底取 `product.apiDomain` 而非常量 `API_DOMAIN`：本请求的 URL 是
-    // `` `${product.endpoint}${LOGIN_ACCOUNT_PATH}` ``，X-Domain 必须与产品端点一致。
-    //
-    // ⚠️ **非空时仍以服务端下发的 `token.domain` 为准**（故不写成产品优先）：
-    // 这里是登录流程，该值是服务端**本次刚下发**的权威值，不是跨产品迁移后
-    // 会过期的历史快照 —— 与 adapter 那处的方向差异是有意的，差异只在「兜底值
-    // 取谁」，判据一致（空串必回退）。回归用例见 `tests/unit/buddy-oauth.spec.ts`
-    // 的「token.domain 为空串时…」与「token.domain 非空时…」两条。
-    [HTTP_HEADER_DOMAIN]: token.domain || product.apiDomain,
-    Authorization: `Bearer ${token.accessToken}`,
-    [HTTP_HEADER_NO_USER_ID]: "true",
-    [HTTP_HEADER_NO_ENTERPRISE_ID]: "true",
-    "User-Agent": (options.product ?? CODEBUDDY).userAgent
-  };
-  const deadline = Date.now() + (options.timeoutMs ?? LOGIN_TIMEOUT_MS);
-  const interval = options.pollIntervalMs ?? POLL_INTERVAL_MS;
-  for (; ; ) {
-    if (Date.now() >= deadline) throw new Error("\u83B7\u53D6\u8D26\u6237\u4FE1\u606F\u8D85\u65F6\uFF085 \u5206\u949F\uFF09");
-    if (options.signal?.aborted) throw new Error("\u767B\u5F55\u5DF2\u53D6\u6D88");
-    await sleep(interval);
-    let result;
-    try {
-      result = await request("GET", url, headers, {
-        fetcher,
-        timeoutMs: REQUEST_TIMEOUT_MS,
-        ...options.signal !== void 0 ? { signal: options.signal } : {}
-      });
-    } catch {
-      continue;
-    }
-    const { status, body } = result;
-    if (status === 200) {
-      const data = responseData(body);
-      if (data !== void 0) return parseAccountData(data);
-      continue;
-    }
-    const code = responseCode(body);
-    if (code === CODE_ACCOUNT_NOT_READY) continue;
-    throw new Error(`login/account HTTP ${status} code=${code}: ${responseMessage(body)}`);
-  }
-}
-async function refreshToken(credential, fetcher = fetch, signal, product = CODEBUDDY) {
-  if (!isRefreshable(credential)) {
-    throw new RefreshTokenExpiredError2("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
-  }
-  const url = `${product.endpoint}${AUTH_REFRESH_PATH}`;
-  const headers = {
-    ...credentialRequestHeaders(credential),
-    // credentialRequestHeaders 走的是 CodeBuddy 的 UA/域名常量，这里按产品覆盖，
-    // 否则 WorkBuddy 续期时会以 CodeBuddy 的身份标识发请求。
-    [HTTP_HEADER_DOMAIN]: product.apiDomain,
-    "User-Agent": product.userAgent,
-    Authorization: `Bearer ${credential.access_token}`,
-    [HTTP_HEADER_REFRESH_TOKEN]: credential.refresh_token,
-    [HTTP_HEADER_AUTH_REFRESH_SOURCE]: AUTH_REFRESH_SOURCE
-  };
-  const { status, body } = await request("POST", url, headers, {
-    fetcher,
-    timeoutMs: REQUEST_TIMEOUT_MS,
-    ...signal !== void 0 ? { signal } : {}
-  });
-  if (status !== 200) {
-    const code = responseCode(body);
-    const message2 = responseMessage(body);
-    const expired = status === 401 || status === 403 || code === 401 || code === 403 || message2.includes("expired") || message2.includes("invalid");
-    if (expired) {
-      throw new RefreshTokenExpiredError2(message2.length > 0 ? message2 : `HTTP ${status}`);
-    }
-    throw new Error(`\u5237\u65B0 token HTTP ${status} code=${code}: ${message2}`);
-  }
-  const data = responseData(body);
-  if (data === void 0) throw new Error("\u5237\u65B0 token \u54CD\u5E94\u7F3A\u5C11 data \u5B57\u6BB5");
-  return parseTokenData(data);
-}
-var RefreshTokenExpiredError2 = class extends Error {
-  constructor(message2) {
-    super(message2);
-    this.name = "RefreshTokenExpiredError";
-  }
-};
-async function fetchModels(credential, fetcher = fetch, signal, product = CODEBUDDY) {
-  if (credential.access_token.length === 0) return [];
-  const headers = {
-    ...credentialAuthHeaders(credential),
-    // credentialAuthHeaders 内置 CodeBuddy 的 UA/域名，这里按产品覆盖。
-    [HTTP_HEADER_DOMAIN]: product.apiDomain,
-    "User-Agent": product.userAgent,
-    // X-Product 是**部署类型**（SaaS），CodeBuddy 与 WorkBuddy 共用同一取值，
-    // 故保持常量；随产品变化的是 X-Product-Code。
-    [HTTP_HEADER_PRODUCT]: BUDDY_DEPLOYMENT_TYPE,
-    [HTTP_HEADER_PRODUCT_CODE]: product.productCode
-  };
-  const scoped = await requestScopedModels(credential, headers, fetcher, signal, product);
-  if (scoped !== void 0) {
-    const config = await requestConfig(headers, fetcher, signal, product);
-    const merged = mergeRemoteModels(scoped, config.models);
-    return config.promotions.size === 0 ? merged : applyPromotions(merged, config.promotions);
-  }
-  const url = `${product.endpoint}${CONFIG_PATH}`;
-  try {
-    const { status, body } = await request("GET", url, headers, {
-      fetcher,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-      ...signal !== void 0 ? { signal } : {}
-    });
-    if (status !== 200) return [];
-    return parseModelsFromConfig(body);
-  } catch {
-    return [];
-  }
-}
-function mergeRemoteModels(primary, extra) {
-  const known = new Set(primary.map((model) => model.id));
-  return [...primary, ...extra.filter((model) => !known.has(model.id))];
-}
-async function requestConfig(headers, fetcher, signal, product) {
-  const empty = { models: [], promotions: /* @__PURE__ */ new Map() };
-  try {
-    const { status, body } = await request("GET", `${product.endpoint}${CONFIG_PATH}`, headers, {
-      fetcher,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-      ...signal !== void 0 ? { signal } : {}
-    });
-    if (status !== 200 || typeof body !== "object" || body === null) return empty;
-    const data = body.data;
-    if (typeof data !== "object" || data === null) return empty;
-    return {
-      models: parseModelsFromConfig(body),
-      promotions: parsePromotions(data)
-    };
-  } catch {
-    return empty;
-  }
-}
-function applyPromotions(models, promotions) {
-  return models.map((model) => {
-    const discounted = promotions.get(model.id);
-    return discounted === void 0 ? model : { ...model, discountedCreditsRate: discounted };
-  });
-}
-var ENTERPRISE_MODELS_SCOPE = "personal";
-async function requestScopedModels(credential, headers, fetcher, signal, product) {
-  const url = `${product.endpoint}/console/enterprises/${ENTERPRISE_MODELS_SCOPE}/models`;
-  try {
-    const { status, body } = await request("GET", url, headers, {
-      fetcher,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-      ...signal !== void 0 ? { signal } : {}
-    });
-    if (status !== 200) return void 0;
-    const models = parseModelsFromConfig(body);
-    return models.length > 0 ? models : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function sleep(ms) {
-  return new Promise((resolve2) => {
-    setTimeout(resolve2, ms).unref?.();
-  });
-}
-async function defaultOpenBrowser(url) {
-  const { openBrowser: openBrowser2 } = await Promise.resolve().then(() => (init_login(), login_exports));
-  openBrowser2(url);
-}
-function decorateLoginUrl(authUrl, product) {
-  if (!product.appendSessionParams) return authUrl;
-  try {
-    const url = new URL(authUrl);
-    if (product.pluginVersion !== void 0 && product.pluginVersion.length > 0) {
-      url.searchParams.set("version", product.pluginVersion);
-    }
-    url.searchParams.set("loginSessionId", crypto.randomUUID());
-    return url.toString();
-  } catch {
-    return authUrl;
-  }
-}
-async function runBuddyLoginFlow(options = {}) {
-  const fetcher = options.fetcher ?? fetch;
-  const open = options.openBrowser ?? defaultOpenBrowser;
-  const product = options.product ?? CODEBUDDY;
-  let state;
-  let authUrl;
-  if (options.state) {
-    state = options.state;
-    authUrl = "";
-  } else {
-    const result = await fetchAuthState(fetcher, void 0, product);
-    state = result.state;
-    authUrl = result.authUrl;
-    const decorated = decorateLoginUrl(authUrl, product);
-    await open(decorated);
-    authUrl = decorated;
-  }
-  const pollOptions = {
-    fetcher,
-    ...options.timeoutMs !== void 0 ? { timeoutMs: options.timeoutMs } : {},
-    ...options.pollIntervalMs !== void 0 ? { pollIntervalMs: options.pollIntervalMs } : {},
-    // 轮询 token / 账户两步同样带产品身份标识，否则 WorkBuddy 登录会以
-    // CodeBuddy 的 UA 发请求。
-    product
-  };
-  const token = await loopGetToken(state, pollOptions);
-  const account = await getAccount(state, token, pollOptions);
-  const credential = buildCredential(token, account);
-  return {
-    access: JSON.stringify(credential),
-    // 对齐 Rust 的 expires_at_ms(...).unwrap_or(0)：无法解析时报告 0。
-    expires: credentialExpiresAtMs(credential) ?? 0,
-    loginUrl: authUrl,
-    refreshable: isRefreshable(credential)
-  };
-}
-
-// vendor/channel-pack/src/buddy-auth.ts
-var BUDDY_EXPIRY_ACCESSORS = {
-  expiresAtOf: credentialExpiresAtMs,
-  refreshableOf: isRefreshable,
-  identityOf: (credential) => credential.access_token ?? ""
-};
-var BUDDY_CREDENTIAL_REF = "BUDDY_ACCESS_TOKEN";
-function parseCredential2(value) {
-  try {
-    const parsed = JSON.parse(value);
-    return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
-  } catch {
-    return void 0;
-  }
-}
-var BuddyAuth = class extends Service2 {
-  constructor(ctx, options = {}) {
-    const product = options.product ?? CODEBUDDY;
-    super(ctx, options.serviceName ?? `${product.id}Auth`);
-    this.options = options;
-    this.product = product;
-    this.credentialRefName = this.product.defaultCredentialRef;
-  }
-  /** 本实例所属的产品配置（CodeBuddy 或 WorkBuddy）。 */
-  product;
-  /**
-   * 本实例默认读写的凭据 ref 名称。
-   * CodeBuddy 为 `BUDDY_ACCESS_TOKEN`，WorkBuddy 为 `WORKBUDDY_ACCESS_TOKEN`；
-   * 两个产品各自读写自己的 ref，凭据互不可见。
-   */
-  credentialRefName;
-  scheduler = new RefreshScheduler(
-    () => this.refresh(),
-    (error) => {
-      if (error instanceof RefreshTokenExpiredError2) {
-        this.markRefreshTokenInvalid();
-        return;
-      }
-      this.lastRefreshError = error instanceof Error ? error.message : String(error);
-    }
-  );
-  /** refresh_token 已被后端判定失效；登录/刷新成功时重置。 */
-  refreshTokenInvalid = false;
-  lastRefreshError;
-  /** 登录会话是否仍处于活跃状态；logout()/stop() 置 false，防止在途刷新回写已登出凭据。 */
-  active = true;
-  /** 标记 refresh_token 已失效：停止重试，并向 status() 暴露 refreshable: false 与重新登录提示。 */
-  markRefreshTokenInvalid() {
-    this.refreshTokenInvalid = true;
-    this.lastRefreshError = "refresh_token \u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55";
-  }
-  /** 运行登录流程并持久化凭据。 */
-  async login(flowOptions = {}) {
-    this.active = true;
-    const ref = flowOptions.refName ? credentialRef3(flowOptions.refName) : credentialRef3(this.credentialRefName);
-    const flow = await runBuddyLoginFlow({
-      ...this.options.fetcher !== void 0 ? { fetcher: this.options.fetcher } : {},
-      ...flowOptions,
-      // 产品配置决定 auth/state 的 platform 与登录 URL 附加参数：调用方显式传入优先，
-      // 否则用本实例的产品（WorkBuddy 实例不会退回 CodeBuddy）。
-      product: flowOptions.product ?? this.product
-    });
-    await this.ctx.credentials.set(ref, flow.access);
-    this.refreshTokenInvalid = false;
-    this.lastRefreshError = void 0;
-    this.scheduleRefresh();
-    const credential = parseCredential2(flow.access);
-    if (flowOptions.accountId && flowOptions.pool) {
-      await flowOptions.pool.addAccount({
-        id: flowOptions.accountId,
-        provider: this.product.id,
-        nickname: flowOptions.accountId,
-        enabled: true,
-        credentialRef: flowOptions.refName ?? this.credentialRefName,
-        createdAt: Date.now(),
-        expiresAt: credential ? credentialExpiresAtMs(credential) : void 0,
-        refreshable: Boolean(credential) && isRefreshable(credential)
-      });
-    }
-    return {
-      access: flow.access,
-      expires: flow.expires,
-      ref,
-      loginUrl: flow.loginUrl,
-      refreshable: Boolean(credential) && isRefreshable(credential)
-    };
-  }
-  /**
-   * 保存凭据并注册到账号池（供后台登录流程使用）。
-   * 账号池已预先创建占位条目时，只做凭据写入和更新。
-   */
-  async saveCredential(credentialJson, refName, accountId, pool) {
-    this.active = true;
-    const ref = credentialRef3(refName);
-    await this.ctx.credentials.set(ref, credentialJson);
-    this.refreshTokenInvalid = false;
-    this.lastRefreshError = void 0;
-    this.scheduleRefresh();
-    const credential = parseCredential2(credentialJson);
-    if (accountId && pool) {
-      await pool.updateAccount(accountId, {
-        nickname: credential?.nickname ?? accountId,
-        expiresAt: credential ? credentialExpiresAtMs(credential) : void 0,
-        refreshable: Boolean(credential) && isRefreshable(credential)
-      });
-    }
-  }
-  /** 报告凭据是否已配置、过期时间、是否可刷新以及最近刷新错误。 */
-  async status() {
-    const ref = credentialRef3(this.credentialRefName);
-    const info = await this.ctx.credentials.describe(ref);
-    if (!info.configured) return { configured: false, refreshable: false };
-    let expiresAt;
-    let refreshable = false;
-    const resolved = await this.ctx.credentials.resolve(ref);
-    if (resolved) {
-      const credential = parseCredential2(resolved.value);
-      if (credential) {
-        expiresAt = credentialExpiresAtMs(credential);
-        refreshable = isRefreshable(credential) && !this.refreshTokenInvalid;
-      }
-    }
-    return {
-      configured: true,
-      source: info.source,
-      expiresAt,
-      refreshable,
-      ...this.lastRefreshError === void 0 ? {} : { refreshError: this.lastRefreshError }
-    };
-  }
-  /** 静默续期：refresh_token 换取；无 refresh_token 时明确报错（由命令提示重新登录）。 */
-  async refresh() {
-    const ref = credentialRef3(this.credentialRefName);
-    const resolved = await this.ctx.credentials.resolve(ref);
-    if (!resolved) throw new Error("\u672A\u914D\u7F6E\u51ED\u636E\uFF0C\u8BF7\u5148\u767B\u5F55");
-    const credential = parseCredential2(resolved.value);
-    if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
-    if (!isRefreshable(credential)) {
-      throw new RefreshTokenExpiredError2("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
-    }
-    try {
-      const refreshed = await this.refreshCredential(credential);
-      if (!this.active) return;
-      await this.ctx.credentials.set(ref, JSON.stringify(refreshed));
-      this.refreshTokenInvalid = false;
-      this.lastRefreshError = void 0;
-      this.scheduleRefresh();
-    } catch (error) {
-      if (error instanceof RefreshTokenExpiredError2) this.markRefreshTokenInvalid();
-      throw error;
-    }
-  }
-  /**
-   * 用给定凭据换新令牌并合并字段（不触碰存储、调度器与错误状态）。
-   *
-   * 抽出来供 {@link refresh} 与 {@link refreshAccountCredential} 共用，
-   * 避免两处各写一遍「换 token → 合并字段」而逐渐分叉。
-   */
-  async refreshCredential(credential) {
-    const token = await refreshToken(credential, this.fetchImpl, void 0, this.product);
-    return {
-      ...credential,
-      access_token: token.accessToken,
-      refresh_token: token.refreshToken,
-      expires_at: token.expiresAt,
-      refresh_expires_at: token.refreshExpiresAt,
-      token_type: token.tokenType,
-      scope: token.scope,
-      // 后端未返回 domain 时保留原值。
-      ...token.domain.length > 0 ? { domain: token.domain } : {}
-    };
-  }
-  /**
-   * 按凭据 ref 续期**指定账号**的凭据。
-   *
-   * 与 {@link refresh} 的区别（这是修复既有缺陷的关键）：
-   * - `refresh()` 读写的是本实例的**默认单凭据 ref**（如 `BUDDY_ACCESS_TOKEN`），
-   *   而 Channel Pack 的账号卡片对应的是 `BUDDY_ACCOUNT_XXX` ——
-   *   用 `refresh()` 去刷账号池里的账号，实际刷的是另一个凭据；
-   * - 本方法也**不触碰** `refreshTokenInvalid` / `lastRefreshError` / 调度器：
-   *   那些状态属于「单凭据路径」，被多账号操作污染会让 UI 显示错误的失效提示。
-   *
-   * ⚠️ **必须回写账号池的 `expiresAt`**（issue !IKIRTT）：UI 卡片读的是池值，
-   * 只更新凭据会让「已过期」的红字在续期成功后依然挂着，用户无处自救。
-   */
-  async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef3(refName);
-    const resolved = await this.ctx.credentials.resolve(ref);
-    if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
-    const credential = parseCredential2(resolved.value);
-    if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
-    if (!isRefreshable(credential)) {
-      throw new RefreshTokenExpiredError2("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
-    }
-    const refreshed = await this.refreshCredential(credential);
-    await this.ctx.credentials.set(ref, JSON.stringify(refreshed));
-    await syncAccountExpiry({
-      pool,
-      provider: this.product.id,
-      credential: refreshed,
-      accessors: BUDDY_EXPIRY_ACCESSORS,
-      accountId,
-      tag: `[${this.product.id}]`,
-      warn: (message2) => this.ctx.logger?.warn?.(message2)
-    });
-  }
-  /**
-   * 批量续期本产品的所有账号。
-   *
-   * **包含已停用账号**（只按 `refreshable` 过滤）。
-   *
-   * 为什么不能跳过停用账号（真实缺陷）：停用只应影响「账号池的自动选号」，
-   * 不该让凭据烂掉。早期实现有 `if (!entry.enabled ...) continue`，于是停用
-   * 一段时间后 refresh_token 过期，用户重新启用时拿到的是一个死凭据 ——
-   * 表现为「账号显示凭证过期」且**无法自动恢复**，只能重新登录。
-   * 更糟的是停用账号仍会出现在 Channel Pack 里并参与积分领取，于是点「一键领取」
-   * 时用过期凭据打腾讯接口，服务端回 HTML 错误页 → 前端报
-   * `Unexpected token '<'`。续期不该依赖「是否参与自动选号」。
-   *
-   * 单账号失败不影响其他账号，但失败**必须留日志**：静默的实现会让账号
-   * 在 UI 上永远显示「可续期」却刷不动，用户与开发者都拿不到线索。
-   *
-   * ⚠️ **lead-time 过滤**（issue !IKIRTT）：距过期不足 1 小时才发续期请求，
-   * 跳过的账号只做有效期对账。详见 `refreshAccountWithReconcile`。
-   */
-  async refreshAll(pool) {
-    const accounts = await pool.listAccounts(this.product.id);
-    for (const entry of accounts) {
-      if (!entry.refreshable) continue;
-      try {
-        const ref = credentialRef3(entry.credentialRef);
-        const resolved = await this.ctx.credentials.resolve(ref);
-        if (!resolved) {
-          await pool.updateAccount(entry.id, { refreshable: false });
-          continue;
-        }
-        const credential = parseCredential2(resolved.value);
-        if (!credential || !isRefreshable(credential)) {
-          await pool.updateAccount(entry.id, { refreshable: false });
-          continue;
-        }
-        await refreshAccountWithReconcile({
-          pool,
-          provider: this.product.id,
-          tag: `[${this.product.id}]`,
-          accountId: entry.id,
-          credential,
-          accessors: BUDDY_EXPIRY_ACCESSORS,
-          current: entry,
-          refresh: (c) => this.refreshCredential(c),
-          save: (c) => this.ctx.credentials.set(ref, JSON.stringify(c)),
-          warn: (message2) => this.ctx.logger?.warn?.(message2)
-        });
-      } catch (error) {
-        if (error instanceof RefreshTokenExpiredError2) {
-          try {
-            await pool.updateAccount(entry.id, { refreshable: false });
-          } catch {
-          }
-          this.ctx.logger?.warn?.(
-            `[${this.product.id}] \u8D26\u53F7 ${entry.id} \u7684 refresh_token \u5DF2\u5931\u6548\uFF0C\u5DF2\u6807\u8BB0\u4E3A\u4E0D\u53EF\u7EED\u671F\uFF08\u9700\u91CD\u65B0\u767B\u5F55\uFF09`
-          );
-        } else {
-          this.ctx.logger?.warn?.(
-            `[${this.product.id}] \u8D26\u53F7 ${entry.id} \u7EED\u671F\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-    }
-  }
-  /** 移除已存储的凭据并停止任何待处理的刷新。 */
-  async logout() {
-    this.active = false;
-    this.scheduler.stop();
-    await this.ctx.credentials.unset(credentialRef3(this.credentialRefName));
-  }
-  /** 停止刷新调度（不清理凭据）。 */
-  stop() {
-    this.active = false;
-    this.scheduler.stop();
-  }
-  /** 启动时若已有可刷新凭据则安排续期（由 apply 调用）。 */
-  scheduleRefresh() {
-    void this.ctx.credentials.resolve(credentialRef3(this.credentialRefName)).then((resolved) => {
-      if (!resolved) return;
-      const credential = parseCredential2(resolved.value);
-      if (!credential || !isRefreshable(credential)) return;
-      const expiresAt = credentialExpiresAtMs(credential);
-      if (expiresAt !== void 0) this.scheduler.arm(expiresAt);
-    });
-  }
-  /** 从存储重载凭据，返回是否已过期（供 UI 判断是否需要提示重新登录）。 */
-  async checkExpired() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef3(this.credentialRefName));
-    if (!resolved) return true;
-    const credential = parseCredential2(resolved.value);
-    return credential === void 0 ? true : isExpired(credential);
-  }
-  /**
-   * GET /v3/config → 获取远端模型列表（craft agent 的 models）。
-   * 失败或未登录时返回空数组（调用方回退到内置列表）。
-   *
-   * 优先使用账号池中的可用账号；无账号池或池为空时回退到固定凭据 ref。
-   *
-   * **关键**：两处调用都必须把 `this.product` 传给 `fetchModels`，否则
-   * WorkBuddy 实例（Task 7 的 `fetchRemoteModels: () => workbuddy.fetchModels(pool)`）
-   * 会以 `X-Product-Code: codebuddy` + CodeBuddy 的 UA 请求 /v3/config，
-   * 即携带另一个产品的身份标识。
-   */
-  async fetchModels(pool) {
-    if (pool) {
-      const available2 = await pool.getAvailableAccount(this.product.id, "");
-      if (available2) return fetchModels(available2.credential, this.fetchImpl, void 0, this.product);
-    }
-    const resolved = await this.ctx.credentials.resolve(credentialRef3(this.credentialRefName));
-    if (!resolved) return [];
-    const credential = parseCredential2(resolved.value);
-    if (!credential) return [];
-    return fetchModels(credential, this.fetchImpl, void 0, this.product);
-  }
-  /** 注入的 fetch（测试用）；默认为全局 fetch。 */
-  get fetchImpl() {
-    return this.options.fetcher ?? fetch;
-  }
-};
-function createPoolRefresh(pool, productId, auth) {
-  return async () => {
-    const available2 = await pool.getAvailableAccount(productId, "");
-    if (available2) {
-      await auth.refreshAccountCredential(available2.entry.credentialRef, pool, available2.entry.id);
-    } else {
-      await auth.refresh();
-    }
-  };
-}
-
-// vendor/channel-pack/src/lobsterai-auth.ts
-import { Service as Service3 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef4 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/lobsterai-oauth.ts
 import { createServer as createServer2 } from "node:http";
@@ -44696,7 +42541,7 @@ function toLoginFlowResult(credential, loginUrl) {
     refreshable: isLobsteraiRefreshable(credential)
   };
 }
-async function defaultOpenBrowser2(url) {
+async function defaultOpenBrowser(url) {
   const { openBrowser: openBrowser2 } = await Promise.resolve().then(() => (init_login(), login_exports));
   openBrowser2(url);
 }
@@ -44713,8 +42558,8 @@ async function startLobsteraiLoginFlow(options) {
   });
   result.catch(() => {
   });
-  const server = createServer2((request2, response) => {
-    const url = new URL(request2.url ?? "/", `http://127.0.0.1:${request2.socket.localPort}`);
+  const server = createServer2((request, response) => {
+    const url = new URL(request.url ?? "/", `http://127.0.0.1:${request.socket.localPort}`);
     if (!url.pathname.startsWith(LOBSTERAI_CALLBACK_PATH)) {
       response.writeHead(404).end("Not found");
       return;
@@ -44727,7 +42572,7 @@ async function startLobsteraiLoginFlow(options) {
     }
     void exchangeLobsteraiAuthCode(code, session, clientVersion, product, fetcher, options.signal).then((credential) => {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end("<html><body><h2>\u767B\u5F55\u6210\u529F\uFF0C\u53EF\u4EE5\u5173\u95ED\u6B64\u7A97\u53E3\u4E86</h2></body></html>");
-      const port2 = request2.socket.localPort ?? 0;
+      const port2 = request.socket.localPort ?? 0;
       resolveResult(toLoginFlowResult(credential, buildLobsteraiLoginUrl(port2, state, product)));
     }).catch((error) => {
       response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" }).end("\u767B\u5F55\u6362\u53D6\u51ED\u636E\u5931\u8D25");
@@ -44759,7 +42604,7 @@ async function startLobsteraiLoginFlow(options) {
   return { loginUrl, result: resultWithTimeout, close };
 }
 async function runLobsteraiLoginFlow(options) {
-  const open = options.openBrowser ?? defaultOpenBrowser2;
+  const open = options.openBrowser ?? defaultOpenBrowser;
   const started = await startLobsteraiLoginFlow(options);
   try {
     await open(started.loginUrl);
@@ -44789,13 +42634,13 @@ var LOBSTERAI_EXPIRY_ACCESSORS = {
   refreshableOf: isLobsteraiRefreshable,
   identityOf: (credential) => credential.access_token ?? ""
 };
-var RefreshTokenExpiredError3 = class extends Error {
+var RefreshTokenExpiredError2 = class extends Error {
   constructor(message2) {
     super(message2);
     this.name = "RefreshTokenExpiredError";
   }
 };
-function parseCredential3(value) {
+function parseCredential2(value) {
   try {
     const parsed = JSON.parse(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
@@ -44803,7 +42648,7 @@ function parseCredential3(value) {
     return void 0;
   }
 }
-var LobsteraiAuth = class extends Service3 {
+var LobsteraiAuth = class extends Service2 {
   constructor(ctx, options = {}) {
     const product = options.product ?? LOBSTERAI;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -44825,7 +42670,7 @@ var LobsteraiAuth = class extends Service3 {
   scheduler = new RefreshScheduler(
     () => this.refresh(),
     (error) => {
-      if (error instanceof RefreshTokenExpiredError3) {
+      if (error instanceof RefreshTokenExpiredError2) {
         this.markRefreshTokenInvalid();
         return;
       }
@@ -44907,12 +42752,12 @@ var LobsteraiAuth = class extends Service3 {
    * 两条路径的差别只在「何时返回 loginUrl」，落库逻辑必须完全一致。
    */
   async persistLogin(flow, flowOptions = {}) {
-    const ref = flowOptions.refName ? credentialRef4(flowOptions.refName) : credentialRef4(this.credentialRefName);
+    const ref = flowOptions.refName ? credentialRef3(flowOptions.refName) : credentialRef3(this.credentialRefName);
     await this.ctx.credentials.set(ref, flow.access);
     this.refreshTokenInvalid = false;
     this.lastRefreshError = void 0;
     this.scheduleRefresh();
-    const credential = parseCredential3(flow.access);
+    const credential = parseCredential2(flow.access);
     if (flowOptions.accountId !== void 0 && flowOptions.pool !== void 0) {
       await flowOptions.pool.addAccount({
         id: flowOptions.accountId,
@@ -44943,7 +42788,7 @@ var LobsteraiAuth = class extends Service3 {
    */
   async loginWithCode(code, session, options = {}) {
     this.active = true;
-    const ref = options.refName ? credentialRef4(options.refName) : credentialRef4(this.credentialRefName);
+    const ref = options.refName ? credentialRef3(options.refName) : credentialRef3(this.credentialRefName);
     const clientVersion = await this.resolveClientVersion();
     const credential = await exchangeLobsteraiAuthCode(
       code,
@@ -44980,14 +42825,14 @@ var LobsteraiAuth = class extends Service3 {
   }
   /** 报告凭据是否已配置、过期时间、是否可刷新以及最近刷新错误。 */
   async status() {
-    const ref = credentialRef4(this.credentialRefName);
+    const ref = credentialRef3(this.credentialRefName);
     const info = await this.ctx.credentials.describe(ref);
     if (!info.configured) return { configured: false, refreshable: false };
     let expiresAt;
     let refreshable = false;
     const resolved = await this.ctx.credentials.resolve(ref);
     if (resolved) {
-      const credential = parseCredential3(resolved.value);
+      const credential = parseCredential2(resolved.value);
       if (credential) {
         expiresAt = lobsteraiCredentialExpiresAtMs(credential);
         refreshable = isLobsteraiRefreshable(credential) && !this.refreshTokenInvalid;
@@ -45010,13 +42855,13 @@ var LobsteraiAuth = class extends Service3 {
    * - 其余错误（网络抖动、5xx、429）→ 抛普通 Error，走调度器的可重试路径。
    */
   async refresh() {
-    const ref = credentialRef4(this.credentialRefName);
+    const ref = credentialRef3(this.credentialRefName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u672A\u914D\u7F6E\u51ED\u636E\uFF0C\u8BF7\u5148\u767B\u5F55");
-    const credential = parseCredential3(resolved.value);
+    const credential = parseCredential2(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isLobsteraiRefreshable(credential)) {
-      throw new RefreshTokenExpiredError3("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError2("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
       const refreshed = await this.refreshCredential(credential);
@@ -45026,7 +42871,7 @@ var LobsteraiAuth = class extends Service3 {
       this.lastRefreshError = void 0;
       this.scheduleRefresh();
     } catch (error) {
-      if (error instanceof RefreshTokenExpiredError3) this.markRefreshTokenInvalid();
+      if (error instanceof RefreshTokenExpiredError2) this.markRefreshTokenInvalid();
       throw error;
     }
   }
@@ -45052,13 +42897,13 @@ var LobsteraiAuth = class extends Service3 {
    *   否则只能按凭据内容反查（代价高，且反查会跳过已停用账号）。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef4(refName);
+    const ref = credentialRef3(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
-    const credential = parseCredential3(resolved.value);
+    const credential = parseCredential2(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isLobsteraiRefreshable(credential)) {
-      throw new RefreshTokenExpiredError3("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError2("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     const refreshed = await this.refreshCredential(credential);
     await this.ctx.credentials.set(ref, JSON.stringify(refreshed));
@@ -45106,9 +42951,9 @@ var LobsteraiAuth = class extends Service3 {
     }
     for (const entry of entries) {
       try {
-        const resolved = await this.ctx.credentials.resolve(credentialRef4(entry.credentialRef));
+        const resolved = await this.ctx.credentials.resolve(credentialRef3(entry.credentialRef));
         if (!resolved) continue;
-        const credential = parseCredential3(resolved.value);
+        const credential = parseCredential2(resolved.value);
         if (credential === void 0) continue;
         const target = lobsteraiDisplayNickname(credential, entry.id);
         if (target !== entry.nickname) {
@@ -45154,13 +42999,13 @@ var LobsteraiAuth = class extends Service3 {
     if (!envelope.ok) {
       const kind = classifyLobsteraiError(response.status, rawText);
       if (response.status === 401 || response.status === 403 || isLobsteraiTerminalError(kind)) {
-        throw new RefreshTokenExpiredError3(envelope.message);
+        throw new RefreshTokenExpiredError2(envelope.message);
       }
       throw new Error(`LobsterAI \u7EED\u671F\u5931\u8D25\uFF1A${envelope.message}`);
     }
     const payload = parseLobsteraiTokenPayload(envelope.data);
     if (payload.accessToken.length === 0) {
-      throw new RefreshTokenExpiredError3("\u7EED\u671F\u54CD\u5E94\u7F3A\u5C11 accessToken\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError2("\u7EED\u671F\u54CD\u5E94\u7F3A\u5C11 accessToken\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     return applyLobsteraiRefresh(credential, payload);
   }
@@ -45183,13 +43028,13 @@ var LobsteraiAuth = class extends Service3 {
     for (const entry of accounts) {
       if (!entry.refreshable) continue;
       try {
-        const ref = credentialRef4(entry.credentialRef);
+        const ref = credentialRef3(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
         }
-        const credential = parseCredential3(resolved.value);
+        const credential = parseCredential2(resolved.value);
         if (!credential || !isLobsteraiRefreshable(credential)) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
@@ -45207,7 +43052,7 @@ var LobsteraiAuth = class extends Service3 {
           warn: (message2) => this.ctx.logger?.warn?.(message2)
         });
       } catch (error) {
-        if (error instanceof RefreshTokenExpiredError3) {
+        if (error instanceof RefreshTokenExpiredError2) {
           try {
             await pool.updateAccount(entry.id, { refreshable: false });
           } catch {
@@ -45227,7 +43072,7 @@ var LobsteraiAuth = class extends Service3 {
   async logout() {
     this.active = false;
     this.scheduler.stop();
-    await this.ctx.credentials.unset(credentialRef4(this.credentialRefName));
+    await this.ctx.credentials.unset(credentialRef3(this.credentialRefName));
   }
   /** 停止刷新调度（不清理凭据）。 */
   stop() {
@@ -45236,9 +43081,9 @@ var LobsteraiAuth = class extends Service3 {
   }
   /** 启动时若已有可刷新凭据则安排续期（由 apply 调用）。 */
   scheduleRefresh() {
-    void this.ctx.credentials.resolve(credentialRef4(this.credentialRefName)).then((resolved) => {
+    void this.ctx.credentials.resolve(credentialRef3(this.credentialRefName)).then((resolved) => {
       if (!resolved) return;
-      const credential = parseCredential3(resolved.value);
+      const credential = parseCredential2(resolved.value);
       if (!credential || !isLobsteraiRefreshable(credential)) return;
       const expiresAt = lobsteraiCredentialExpiresAtMs(credential);
       if (expiresAt !== void 0) this.scheduler.arm(expiresAt);
@@ -45246,9 +43091,9 @@ var LobsteraiAuth = class extends Service3 {
   }
   /** 从存储重载凭据，返回是否已过期（供 UI 判断是否需要提示重新登录）。 */
   async checkExpired() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef4(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef3(this.credentialRefName));
     if (!resolved) return true;
-    const credential = parseCredential3(resolved.value);
+    const credential = parseCredential2(resolved.value);
     return credential === void 0 ? true : isLobsteraiExpired(credential);
   }
   /**
@@ -45258,9 +43103,9 @@ var LobsteraiAuth = class extends Service3 {
    * 按账号 id 解析，不受 `enabled` 限制）。
    */
   async resolveStoredCredential() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef4(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef3(this.credentialRefName));
     if (!resolved) return void 0;
-    return parseCredential3(resolved.value);
+    return parseCredential2(resolved.value);
   }
   /**
    * `GET /api/models/available` → 远端模型列表。
@@ -45299,11 +43144,11 @@ var LobsteraiAuth = class extends Service3 {
 };
 
 // vendor/channel-pack/src/qoder-auth.ts
-import { Service as Service4 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef5 } from "@deepseek-ai/dsh-credentials";
+import { Service as Service3 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef4 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/qoder-oauth.ts
-function sleep2(ms, signal) {
+function sleep(ms, signal) {
   return new Promise((resolve2, reject) => {
     if (signal?.aborted === true) {
       reject(new Error("\u767B\u5F55\u5DF2\u53D6\u6D88"));
@@ -45340,7 +43185,7 @@ async function pollQoderDeviceToken(session, options) {
       });
       failures = 0;
       if (response.status === 404) {
-        await sleep2(interval, options.signal);
+        await sleep(interval, options.signal);
         continue;
       }
       if (!response.ok) {
@@ -45348,7 +43193,7 @@ async function pollQoderDeviceToken(session, options) {
       }
       const payload = parseQoderTokenPayload(await response.json());
       if (payload.accessToken.length > 0) return payload;
-      await sleep2(interval, options.signal);
+      await sleep(interval, options.signal);
     } catch (error) {
       if (isAborted2(options.signal)) throw new Error("\u767B\u5F55\u5DF2\u53D6\u6D88");
       if (error instanceof Error && error.message.startsWith(SERVER_ERROR_PREFIX)) throw error;
@@ -45358,7 +43203,7 @@ async function pollQoderDeviceToken(session, options) {
           `\u65E0\u6CD5\u8FDE\u63A5 Qoder \u767B\u5F55\u670D\u52A1\uFF08\u8FDE\u7EED ${failures} \u6B21\u5931\u8D25\uFF09\uFF1A${error instanceof Error ? error.message : String(error)}`
         );
       }
-      await sleep2(interval, options.signal);
+      await sleep(interval, options.signal);
     }
   }
   throw new Error("\u767B\u5F55\u7B49\u5F85\u5DF2\u8D85\u65F6\uFF0C\u8BF7\u91CD\u65B0\u53D1\u8D77\u767B\u5F55");
@@ -45374,7 +43219,7 @@ function toLoginFlowResult2(credential, loginUrl, machineId) {
     machineId
   };
 }
-async function defaultOpenBrowser3(url) {
+async function defaultOpenBrowser2(url) {
   const { openBrowser: openBrowser2 } = await Promise.resolve().then(() => (init_login(), login_exports));
   openBrowser2(url);
 }
@@ -45402,7 +43247,7 @@ async function startQoderLoginFlow(options) {
   return { loginUrl, result, close };
 }
 async function runQoderLoginFlow(options) {
-  const open = options.openBrowser ?? defaultOpenBrowser3;
+  const open = options.openBrowser ?? defaultOpenBrowser2;
   const started = await startQoderLoginFlow(options);
   try {
     await open(started.loginUrl);
@@ -45418,13 +43263,13 @@ var QODER_EXPIRY_ACCESSORS = {
   refreshableOf: isQoderRefreshable,
   identityOf: (credential) => credential.access_token ?? ""
 };
-var RefreshTokenExpiredError4 = class extends Error {
+var RefreshTokenExpiredError3 = class extends Error {
   constructor(message2) {
     super(message2);
     this.name = "RefreshTokenExpiredError";
   }
 };
-function parseCredential4(value) {
+function parseCredential3(value) {
   try {
     const parsed = JSON.parse(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
@@ -45432,7 +43277,7 @@ function parseCredential4(value) {
     return void 0;
   }
 }
-var QoderAuth = class extends Service4 {
+var QoderAuth = class extends Service3 {
   constructor(ctx, options = {}) {
     const product = options.product ?? QODER;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -45447,7 +43292,7 @@ var QoderAuth = class extends Service4 {
   scheduler = new RefreshScheduler(
     () => this.refresh(),
     (error) => {
-      if (error instanceof RefreshTokenExpiredError4) {
+      if (error instanceof RefreshTokenExpiredError3) {
         this.markRefreshTokenInvalid();
         return;
       }
@@ -45514,12 +43359,12 @@ var QoderAuth = class extends Service4 {
    * 两条路径的差别只在「何时返回 loginUrl」，落库逻辑必须完全一致。
    */
   async persistLogin(flow, flowOptions = {}) {
-    const ref = flowOptions.refName ? credentialRef5(flowOptions.refName) : credentialRef5(this.credentialRefName);
+    const ref = flowOptions.refName ? credentialRef4(flowOptions.refName) : credentialRef4(this.credentialRefName);
     await this.ctx.credentials.set(ref, flow.access);
     this.refreshTokenInvalid = false;
     this.lastRefreshError = void 0;
     this.scheduleRefresh();
-    const credential = parseCredential4(flow.access);
+    const credential = parseCredential3(flow.access);
     if (flowOptions.accountId !== void 0 && flowOptions.pool !== void 0) {
       await flowOptions.pool.addAccount({
         id: flowOptions.accountId,
@@ -45542,14 +43387,14 @@ var QoderAuth = class extends Service4 {
   }
   /** 报告凭据是否已配置、过期时间、是否可刷新以及最近刷新错误。 */
   async status() {
-    const ref = credentialRef5(this.credentialRefName);
+    const ref = credentialRef4(this.credentialRefName);
     const info = await this.ctx.credentials.describe(ref);
     if (!info.configured) return { configured: false, refreshable: false };
     let expiresAt;
     let refreshable = false;
     const resolved = await this.ctx.credentials.resolve(ref);
     if (resolved) {
-      const credential = parseCredential4(resolved.value);
+      const credential = parseCredential3(resolved.value);
       if (credential) {
         expiresAt = qoderCredentialExpiresAtMs(credential);
         refreshable = isQoderRefreshable(credential) && !this.refreshTokenInvalid;
@@ -45572,13 +43417,13 @@ var QoderAuth = class extends Service4 {
    * - 其余错误（网络抖动、5xx、429）→ 抛普通 Error，走调度器的可重试路径。
    */
   async refresh() {
-    const ref = credentialRef5(this.credentialRefName);
+    const ref = credentialRef4(this.credentialRefName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u672A\u914D\u7F6E\u51ED\u636E\uFF0C\u8BF7\u5148\u767B\u5F55");
-    const credential = parseCredential4(resolved.value);
+    const credential = parseCredential3(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isQoderRefreshable(credential)) {
-      throw new RefreshTokenExpiredError4("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError3("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
       const refreshed = await this.refreshCredential(credential);
@@ -45588,7 +43433,7 @@ var QoderAuth = class extends Service4 {
       this.lastRefreshError = void 0;
       this.scheduleRefresh();
     } catch (error) {
-      if (error instanceof RefreshTokenExpiredError4) this.markRefreshTokenInvalid();
+      if (error instanceof RefreshTokenExpiredError3) this.markRefreshTokenInvalid();
       throw error;
     }
   }
@@ -45614,13 +43459,13 @@ var QoderAuth = class extends Service4 {
    *   否则只能按凭据内容反查（代价高，且反查会跳过已停用账号）。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef5(refName);
+    const ref = credentialRef4(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
-    const credential = parseCredential4(resolved.value);
+    const credential = parseCredential3(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isQoderRefreshable(credential)) {
-      throw new RefreshTokenExpiredError4("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError3("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     const refreshed = await this.refreshCredential(credential);
     await this.ctx.credentials.set(ref, JSON.stringify(refreshed));
@@ -45657,7 +43502,7 @@ var QoderAuth = class extends Service4 {
       throw new Error(`Qoder \u7EED\u671F\u7F51\u7EDC\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
     }
     if (response.status === 401 || response.status === 403) {
-      throw new RefreshTokenExpiredError4(`Qoder \u7EED\u671F\u88AB\u62D2\u7EDD\uFF08HTTP ${response.status}\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55`);
+      throw new RefreshTokenExpiredError3(`Qoder \u7EED\u671F\u88AB\u62D2\u7EDD\uFF08HTTP ${response.status}\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55`);
     }
     let parsed;
     try {
@@ -45671,7 +43516,7 @@ var QoderAuth = class extends Service4 {
     }
     const payload = parseQoderTokenPayload(parsed);
     if (payload.accessToken.length === 0) {
-      throw new RefreshTokenExpiredError4("\u7EED\u671F\u54CD\u5E94\u7F3A\u5C11\u8BBF\u95EE\u4EE4\u724C\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError3("\u7EED\u671F\u54CD\u5E94\u7F3A\u5C11\u8BBF\u95EE\u4EE4\u724C\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     return applyQoderRefresh(credential, payload);
   }
@@ -45694,13 +43539,13 @@ var QoderAuth = class extends Service4 {
     for (const entry of accounts) {
       if (!entry.refreshable) continue;
       try {
-        const ref = credentialRef5(entry.credentialRef);
+        const ref = credentialRef4(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
         }
-        const credential = parseCredential4(resolved.value);
+        const credential = parseCredential3(resolved.value);
         if (!credential || !isQoderRefreshable(credential)) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
@@ -45719,7 +43564,7 @@ var QoderAuth = class extends Service4 {
           warn: (message2) => this.ctx.logger?.warn?.(message2)
         });
       } catch (error) {
-        if (error instanceof RefreshTokenExpiredError4) {
+        if (error instanceof RefreshTokenExpiredError3) {
           try {
             await pool.updateAccount(entry.id, { refreshable: false });
           } catch {
@@ -45739,7 +43584,7 @@ var QoderAuth = class extends Service4 {
   async logout() {
     this.active = false;
     this.scheduler.stop();
-    await this.ctx.credentials.unset(credentialRef5(this.credentialRefName));
+    await this.ctx.credentials.unset(credentialRef4(this.credentialRefName));
   }
   /** 停止刷新调度（不清理凭据）。 */
   stop() {
@@ -45748,9 +43593,9 @@ var QoderAuth = class extends Service4 {
   }
   /** 启动时若已有可刷新凭据则安排续期（由 apply 调用）。 */
   scheduleRefresh() {
-    void this.ctx.credentials.resolve(credentialRef5(this.credentialRefName)).then((resolved) => {
+    void this.ctx.credentials.resolve(credentialRef4(this.credentialRefName)).then((resolved) => {
       if (!resolved) return;
-      const credential = parseCredential4(resolved.value);
+      const credential = parseCredential3(resolved.value);
       if (!credential || !isQoderRefreshable(credential)) return;
       const expiresAt = qoderCredentialExpiresAtMs(credential);
       if (expiresAt !== void 0) this.scheduler.arm(expiresAt);
@@ -45758,9 +43603,9 @@ var QoderAuth = class extends Service4 {
   }
   /** 从存储重载凭据，返回是否已过期（供 UI 判断是否需要提示重新登录）。 */
   async checkExpired() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef5(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef4(this.credentialRefName));
     if (!resolved) return true;
-    const credential = parseCredential4(resolved.value);
+    const credential = parseCredential3(resolved.value);
     return credential === void 0 ? true : isQoderExpired(credential);
   }
   /**
@@ -45769,15 +43614,15 @@ var QoderAuth = class extends Service4 {
    * 供 e2e 探针与 `account-probe` 使用。
    */
   async resolveStoredCredential() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef5(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef4(this.credentialRefName));
     if (!resolved) return void 0;
-    return parseCredential4(resolved.value);
+    return parseCredential3(resolved.value);
   }
 };
 
 // vendor/channel-pack/src/trae-auth.ts
-import { Service as Service5 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef6 } from "@deepseek-ai/dsh-credentials";
+import { Service as Service4 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef5 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/trae-oauth.ts
 import { createServer as createServer3 } from "node:http";
@@ -45859,13 +43704,13 @@ function parseTraeCallbackDetailed(rawUrl) {
   }
   const userInfo = parseJsonParam(query.get("userInfo"));
   const userJwt = parseJsonParam(query.get("userJwt"));
-  let refreshToken2 = query.get("refreshToken") ?? "";
+  let refreshToken = query.get("refreshToken") ?? "";
   const uid = jsonString(userInfo, "UserID");
   const nicknameRaw = jsonString(userInfo, "ScreenName");
   const enterpriseId = jsonString(userInfo, "TenantID");
   const jwtToken = jsonString(userJwt, "Token");
   const jwtRefresh = jsonString(userJwt, "RefreshToken");
-  if (refreshToken2.length === 0) refreshToken2 = jwtRefresh;
+  if (refreshToken.length === 0) refreshToken = jwtRefresh;
   const authCodeInfo = parseJsonParam(query.get("authCodeInfo"));
   const authCodeCandidates = [
     query.get("code") ?? "",
@@ -45878,9 +43723,9 @@ function parseTraeCallbackDetailed(rawUrl) {
   ];
   const authCode = authCodeCandidates.find((candidate) => candidate.trim().length > 0)?.trim() ?? "";
   const info = {
-    refreshToken: refreshToken2,
+    refreshToken,
     // 仅在「无 refreshToken」时才用 userJwt.Token 兜底（login.sh:186-195）。
-    accessToken: refreshToken2.length === 0 ? jwtToken : "",
+    accessToken: refreshToken.length === 0 ? jwtToken : "",
     uid,
     nickname: fixNicknameMojibake(nicknameRaw, uid),
     enterpriseId
@@ -46162,13 +44007,13 @@ var TRAE_EXPIRY_ACCESSORS = {
   refreshableOf: isTraeRefreshable,
   identityOf: (credential) => credential.access_token ?? ""
 };
-var RefreshTokenExpiredError5 = class extends Error {
+var RefreshTokenExpiredError4 = class extends Error {
   constructor(message2) {
     super(message2);
     this.name = "RefreshTokenExpiredError";
   }
 };
-function parseCredential5(value) {
+function parseCredential4(value) {
   try {
     const parsed = JSON.parse(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
@@ -46176,7 +44021,7 @@ function parseCredential5(value) {
     return void 0;
   }
 }
-var TraeAuth = class _TraeAuth extends Service5 {
+var TraeAuth = class _TraeAuth extends Service4 {
   constructor(ctx, options = {}) {
     const product = options.product ?? TRAE;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -46191,7 +44036,7 @@ var TraeAuth = class _TraeAuth extends Service5 {
   scheduler = new RefreshScheduler(
     () => this.refresh(),
     (error) => {
-      if (error instanceof RefreshTokenExpiredError5) {
+      if (error instanceof RefreshTokenExpiredError4) {
         this.markRefreshTokenInvalid();
         return;
       }
@@ -46261,13 +44106,13 @@ var TraeAuth = class _TraeAuth extends Service5 {
    * 持久化一次登录结果。
    */
   async persistLogin(flow, flowOptions = {}) {
-    const ref = flowOptions.refName ? credentialRef6(flowOptions.refName) : credentialRef6(this.credentialRefName);
+    const ref = flowOptions.refName ? credentialRef5(flowOptions.refName) : credentialRef5(this.credentialRefName);
     await this.ctx.credentials.set(ref, flow.access);
     this.refreshTokenInvalid = false;
     this.lastRefreshError = void 0;
     this.modelsCache = void 0;
     this.scheduleRefresh();
-    const credential = parseCredential5(flow.access);
+    const credential = parseCredential4(flow.access);
     if (flowOptions.accountId !== void 0 && flowOptions.pool !== void 0) {
       await flowOptions.pool.addAccount({
         id: flowOptions.accountId,
@@ -46293,14 +44138,14 @@ var TraeAuth = class _TraeAuth extends Service5 {
   }
   /** 报告凭据状态。 */
   async status() {
-    const ref = credentialRef6(this.credentialRefName);
+    const ref = credentialRef5(this.credentialRefName);
     const info = await this.ctx.credentials.describe(ref);
     if (!info.configured) return { configured: false, refreshable: false };
     let expiresAt;
     let refreshable = false;
     const resolved = await this.ctx.credentials.resolve(ref);
     if (resolved) {
-      const credential = parseCredential5(resolved.value);
+      const credential = parseCredential4(resolved.value);
       if (credential) {
         expiresAt = traeCredentialExpiresAtMs(credential);
         refreshable = isTraeRefreshable(credential) && !this.refreshTokenInvalid;
@@ -46322,13 +44167,13 @@ var TraeAuth = class _TraeAuth extends Service5 {
    * - 其余错误（网络抖动、5xx、429）→ 抛普通 Error，走可重试路径
    */
   async refresh() {
-    const ref = credentialRef6(this.credentialRefName);
+    const ref = credentialRef5(this.credentialRefName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u672A\u914D\u7F6E\u51ED\u636E\uFF0C\u8BF7\u5148\u767B\u5F55");
-    const credential = parseCredential5(resolved.value);
+    const credential = parseCredential4(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isTraeRefreshable(credential)) {
-      throw new RefreshTokenExpiredError5("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError4("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
       const refreshed = await this.refreshCredential(credential);
@@ -46338,7 +44183,7 @@ var TraeAuth = class _TraeAuth extends Service5 {
       this.lastRefreshError = void 0;
       this.scheduleRefresh();
     } catch (error) {
-      if (error instanceof RefreshTokenExpiredError5) this.markRefreshTokenInvalid();
+      if (error instanceof RefreshTokenExpiredError4) this.markRefreshTokenInvalid();
       throw error;
     }
   }
@@ -46365,13 +44210,13 @@ var TraeAuth = class _TraeAuth extends Service5 {
    *   否则只能按凭据内容反查（代价高，且反查会跳过已停用账号）。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef6(refName);
+    const ref = credentialRef5(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
-    const credential = parseCredential5(resolved.value);
+    const credential = parseCredential4(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isTraeRefreshable(credential)) {
-      throw new RefreshTokenExpiredError5("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError4("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     const refreshed = await this.refreshCredential(credential);
     await this.ctx.credentials.set(ref, JSON.stringify(refreshed));
@@ -46422,7 +44267,7 @@ var TraeAuth = class _TraeAuth extends Service5 {
       const kind = classifyTraeError(response.status, text);
       const noTokenInSuccessResponse = response.ok && parsed !== void 0;
       if (response.status === 401 || response.status === 403 || isTraeTerminalError(kind) || noTokenInSuccessResponse) {
-        throw new RefreshTokenExpiredError5("TRAE refresh_token \u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+        throw new RefreshTokenExpiredError4("TRAE refresh_token \u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
       }
       throw new Error(`TRAE \u7EED\u671F\u5931\u8D25\uFF08HTTP ${response.status}\uFF09\uFF1A${text.slice(0, 200)}`);
     }
@@ -46444,13 +44289,13 @@ var TraeAuth = class _TraeAuth extends Service5 {
     for (const entry of accounts) {
       if (!entry.refreshable) continue;
       try {
-        const ref = credentialRef6(entry.credentialRef);
+        const ref = credentialRef5(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
         }
-        const credential = parseCredential5(resolved.value);
+        const credential = parseCredential4(resolved.value);
         if (!credential || !isTraeRefreshable(credential)) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
@@ -46468,7 +44313,7 @@ var TraeAuth = class _TraeAuth extends Service5 {
           warn: (message2) => this.ctx.logger?.warn?.(message2)
         });
       } catch (error) {
-        if (error instanceof RefreshTokenExpiredError5) {
+        if (error instanceof RefreshTokenExpiredError4) {
           try {
             await pool.updateAccount(entry.id, { refreshable: false });
           } catch {
@@ -46517,10 +44362,10 @@ var TraeAuth = class _TraeAuth extends Service5 {
     }
     for (const entry of entries) {
       try {
-        const ref = credentialRef6(entry.credentialRef);
+        const ref = credentialRef5(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) continue;
-        let credential = parseCredential5(resolved.value);
+        let credential = parseCredential4(resolved.value);
         if (credential === void 0) continue;
         if ((credential.phone === void 0 || credential.phone.length === 0) && (credential.email === void 0 || credential.email.length === 0)) {
           const info = await this.fetchUserContact(credential);
@@ -46574,7 +44419,7 @@ var TraeAuth = class _TraeAuth extends Service5 {
   async logout() {
     this.active = false;
     this.scheduler.stop();
-    await this.ctx.credentials.unset(credentialRef6(this.credentialRefName));
+    await this.ctx.credentials.unset(credentialRef5(this.credentialRefName));
     this.modelsCache = void 0;
   }
   /** 停止刷新调度（不清理凭据）。 */
@@ -46584,9 +44429,9 @@ var TraeAuth = class _TraeAuth extends Service5 {
   }
   /** 启动时若已有可刷新凭据则安排续期。 */
   scheduleRefresh() {
-    void this.ctx.credentials.resolve(credentialRef6(this.credentialRefName)).then((resolved) => {
+    void this.ctx.credentials.resolve(credentialRef5(this.credentialRefName)).then((resolved) => {
       if (!resolved) return;
-      const credential = parseCredential5(resolved.value);
+      const credential = parseCredential4(resolved.value);
       if (!credential || !isTraeRefreshable(credential)) return;
       const expiresAt = traeCredentialExpiresAtMs(credential);
       if (expiresAt !== void 0) this.scheduler.arm(expiresAt);
@@ -46594,9 +44439,9 @@ var TraeAuth = class _TraeAuth extends Service5 {
   }
   /** 从存储重载凭据，返回是否已过期。 */
   async checkExpired() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef6(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef5(this.credentialRefName));
     if (!resolved) return true;
-    const credential = parseCredential5(resolved.value);
+    const credential = parseCredential4(resolved.value);
     return credential === void 0 ? true : isTraeExpired(credential);
   }
   /**
@@ -46631,9 +44476,9 @@ var TraeAuth = class _TraeAuth extends Service5 {
       if (available2) credential = available2.credential;
     }
     if (credential === void 0) {
-      const resolved = await this.ctx.credentials.resolve(credentialRef6(this.credentialRefName));
+      const resolved = await this.ctx.credentials.resolve(credentialRef5(this.credentialRefName));
       if (!resolved) return [];
-      credential = parseCredential5(resolved.value);
+      credential = parseCredential4(resolved.value);
       if (credential === void 0) return [];
     }
     if (credential.access_token.length === 0) return [];
@@ -46695,15 +44540,15 @@ var TraeAuth = class _TraeAuth extends Service5 {
 };
 
 // vendor/channel-pack/src/cline-auth.ts
-import { Service as Service6 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef7 } from "@deepseek-ai/dsh-credentials";
+import { Service as Service5 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef6 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/cline-oauth.ts
 var CLINE_HTTP_TIMEOUT_MS = 3e4;
 var CLINE_DEVICE_AUTH_EXPIRES_MS = 3e5;
 var CLINE_DEVICE_AUTH_INTERVAL_MS = 5e3;
 var CLINE_POLL_MAX_FAILURES = 5;
-function sleep3(ms, signal) {
+function sleep2(ms, signal) {
   return new Promise((resolve2, reject) => {
     if (signal?.aborted === true) {
       reject(new Error("\u767B\u5F55\u5DF2\u53D6\u6D88"));
@@ -46779,21 +44624,21 @@ async function pollClineWorkOsTokens(authorization, options) {
       failures = 0;
       if (response.ok) {
         const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
-        const refreshToken2 = typeof payload.refresh_token === "string" ? payload.refresh_token : "";
-        if (accessToken.length === 0 || refreshToken2.length === 0) {
+        const refreshToken = typeof payload.refresh_token === "string" ? payload.refresh_token : "";
+        if (accessToken.length === 0 || refreshToken.length === 0) {
           throw new Error(`${SERVER_ERROR_PREFIX2}\uFF1AWorkOS token \u54CD\u5E94\u7F3A\u5C11\u5FC5\u8981\u5B57\u6BB5`);
         }
-        return { accessToken, refreshToken: refreshToken2 };
+        return { accessToken, refreshToken };
       }
       const errorCode = typeof payload.error === "string" ? payload.error : "";
       switch (errorCode) {
         case "authorization_pending": {
-          await sleep3(intervalMs, options.signal);
+          await sleep2(intervalMs, options.signal);
           continue;
         }
         case "slow_down": {
           intervalMs += 1e3;
-          await sleep3(intervalMs, options.signal);
+          await sleep2(intervalMs, options.signal);
           continue;
         }
         case "access_denied":
@@ -46816,7 +44661,7 @@ async function pollClineWorkOsTokens(authorization, options) {
           `\u65E0\u6CD5\u8FDE\u63A5 Cline \u767B\u5F55\u670D\u52A1\uFF08\u8FDE\u7EED ${failures} \u6B21\u5931\u8D25\uFF09\uFF1A${error instanceof Error ? error.message : String(error)}`
         );
       }
-      await sleep3(intervalMs, options.signal);
+      await sleep2(intervalMs, options.signal);
     }
   }
   throw new Error("\u767B\u5F55\u7B49\u5F85\u5DF2\u8D85\u65F6\uFF0C\u8BF7\u91CD\u65B0\u53D1\u8D77\u767B\u5F55");
@@ -46853,7 +44698,7 @@ function toLoginFlowResult3(credential, loginUrl, userCode) {
     ...userCode === void 0 ? {} : { userCode }
   };
 }
-async function defaultOpenBrowser4(url) {
+async function defaultOpenBrowser3(url) {
   const { openBrowser: openBrowser2 } = await Promise.resolve().then(() => (init_login(), login_exports));
   openBrowser2(url);
 }
@@ -46891,7 +44736,7 @@ async function startClineLoginFlow(options) {
   };
 }
 async function runClineLoginFlow(options) {
-  const open = options.openBrowser ?? defaultOpenBrowser4;
+  const open = options.openBrowser ?? defaultOpenBrowser3;
   const started = await startClineLoginFlow(options);
   try {
     await open(started.loginUrl);
@@ -46907,13 +44752,13 @@ var CLINE_EXPIRY_ACCESSORS = {
   refreshableOf: isClineRefreshable,
   identityOf: (credential) => credential.access_token ?? ""
 };
-var RefreshTokenExpiredError6 = class extends Error {
+var RefreshTokenExpiredError5 = class extends Error {
   constructor(message2) {
     super(message2);
     this.name = "RefreshTokenExpiredError";
   }
 };
-function parseCredential6(value) {
+function parseCredential5(value) {
   try {
     const parsed = JSON.parse(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
@@ -46921,7 +44766,7 @@ function parseCredential6(value) {
     return void 0;
   }
 }
-var ClineAuth = class extends Service6 {
+var ClineAuth = class extends Service5 {
   constructor(ctx, options = {}) {
     const product = options.product ?? CLINE;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -46936,7 +44781,7 @@ var ClineAuth = class extends Service6 {
   scheduler = new RefreshScheduler(
     () => this.refresh(),
     (error) => {
-      if (error instanceof RefreshTokenExpiredError6) {
+      if (error instanceof RefreshTokenExpiredError5) {
         this.markRefreshTokenInvalid();
         return;
       }
@@ -47008,12 +44853,12 @@ var ClineAuth = class extends Service6 {
    * 两条路径的差别只在「何时返回 loginUrl」，落库逻辑必须完全一致。
    */
   async persistLogin(flow, flowOptions = {}) {
-    const ref = flowOptions.refName ? credentialRef7(flowOptions.refName) : credentialRef7(this.credentialRefName);
+    const ref = flowOptions.refName ? credentialRef6(flowOptions.refName) : credentialRef6(this.credentialRefName);
     await this.ctx.credentials.set(ref, flow.access);
     this.refreshTokenInvalid = false;
     this.lastRefreshError = void 0;
     this.scheduleRefresh();
-    const credential = parseCredential6(flow.access);
+    const credential = parseCredential5(flow.access);
     if (flowOptions.accountId !== void 0 && flowOptions.pool !== void 0) {
       await flowOptions.pool.addAccount({
         id: flowOptions.accountId,
@@ -47037,14 +44882,14 @@ var ClineAuth = class extends Service6 {
   }
   /** 报告凭据是否已配置、过期时间、是否可刷新以及最近刷新错误。 */
   async status() {
-    const ref = credentialRef7(this.credentialRefName);
+    const ref = credentialRef6(this.credentialRefName);
     const info = await this.ctx.credentials.describe(ref);
     if (!info.configured) return { configured: false, refreshable: false };
     let expiresAt;
     let refreshable = false;
     const resolved = await this.ctx.credentials.resolve(ref);
     if (resolved) {
-      const credential = parseCredential6(resolved.value);
+      const credential = parseCredential5(resolved.value);
       if (credential) {
         expiresAt = clineCredentialExpiresAtMs(credential);
         refreshable = isClineRefreshable(credential) && !this.refreshTokenInvalid;
@@ -47067,13 +44912,13 @@ var ClineAuth = class extends Service6 {
    * - 其余错误（网络抖动、5xx、429）→ 抛普通 Error，走调度器的可重试路径。
    */
   async refresh() {
-    const ref = credentialRef7(this.credentialRefName);
+    const ref = credentialRef6(this.credentialRefName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u672A\u914D\u7F6E\u51ED\u636E\uFF0C\u8BF7\u5148\u767B\u5F55");
-    const credential = parseCredential6(resolved.value);
+    const credential = parseCredential5(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isClineRefreshable(credential)) {
-      throw new RefreshTokenExpiredError6("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError5("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
       const refreshed = await this.refreshCredential(credential);
@@ -47083,7 +44928,7 @@ var ClineAuth = class extends Service6 {
       this.lastRefreshError = void 0;
       this.scheduleRefresh();
     } catch (error) {
-      if (error instanceof RefreshTokenExpiredError6) this.markRefreshTokenInvalid();
+      if (error instanceof RefreshTokenExpiredError5) this.markRefreshTokenInvalid();
       throw error;
     }
   }
@@ -47109,13 +44954,13 @@ var ClineAuth = class extends Service6 {
    *   否则只能按凭据内容反查（代价高，且反查会跳过已停用账号）。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef7(refName);
+    const ref = credentialRef6(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
-    const credential = parseCredential6(resolved.value);
+    const credential = parseCredential5(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isClineRefreshable(credential)) {
-      throw new RefreshTokenExpiredError6("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError5("\u65E0 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     const refreshed = await this.refreshCredential(credential);
     await this.ctx.credentials.set(ref, JSON.stringify(refreshed));
@@ -47153,7 +44998,7 @@ var ClineAuth = class extends Service6 {
       throw new Error(`Cline \u7EED\u671F\u7F51\u7EDC\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
     }
     if (response.status === 401 || response.status === 403) {
-      throw new RefreshTokenExpiredError6(`Cline \u7EED\u671F\u88AB\u62D2\u7EDD\uFF08HTTP ${response.status}\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55`);
+      throw new RefreshTokenExpiredError5(`Cline \u7EED\u671F\u88AB\u62D2\u7EDD\uFF08HTTP ${response.status}\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55`);
     }
     let parsed;
     try {
@@ -47167,7 +45012,7 @@ var ClineAuth = class extends Service6 {
     }
     const payload = parseClineTokenPayload(parsed);
     if (payload.accessToken.length === 0) {
-      throw new RefreshTokenExpiredError6("\u7EED\u671F\u54CD\u5E94\u7F3A\u5C11\u8BBF\u95EE\u4EE4\u724C\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError5("\u7EED\u671F\u54CD\u5E94\u7F3A\u5C11\u8BBF\u95EE\u4EE4\u724C\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     return applyClineRefresh(credential, payload, this.product);
   }
@@ -47190,13 +45035,13 @@ var ClineAuth = class extends Service6 {
     for (const entry of accounts) {
       if (!entry.refreshable) continue;
       try {
-        const ref = credentialRef7(entry.credentialRef);
+        const ref = credentialRef6(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
         }
-        const credential = parseCredential6(resolved.value);
+        const credential = parseCredential5(resolved.value);
         if (!credential || !isClineRefreshable(credential)) {
           await pool.updateAccount(entry.id, { refreshable: false });
           continue;
@@ -47214,7 +45059,7 @@ var ClineAuth = class extends Service6 {
           warn: (message2) => this.ctx.logger?.warn?.(message2)
         });
       } catch (error) {
-        if (error instanceof RefreshTokenExpiredError6) {
+        if (error instanceof RefreshTokenExpiredError5) {
           try {
             await pool.updateAccount(entry.id, { refreshable: false });
           } catch {
@@ -47234,7 +45079,7 @@ var ClineAuth = class extends Service6 {
   async logout() {
     this.active = false;
     this.scheduler.stop();
-    await this.ctx.credentials.unset(credentialRef7(this.credentialRefName));
+    await this.ctx.credentials.unset(credentialRef6(this.credentialRefName));
   }
   /** 停止刷新调度（不清理凭据）。 */
   stop() {
@@ -47243,9 +45088,9 @@ var ClineAuth = class extends Service6 {
   }
   /** 启动时若已有可刷新凭据则安排续期（由 apply 调用）。 */
   scheduleRefresh() {
-    void this.ctx.credentials.resolve(credentialRef7(this.credentialRefName)).then((resolved) => {
+    void this.ctx.credentials.resolve(credentialRef6(this.credentialRefName)).then((resolved) => {
       if (!resolved) return;
-      const credential = parseCredential6(resolved.value);
+      const credential = parseCredential5(resolved.value);
       if (!credential || !isClineRefreshable(credential)) return;
       const expiresAt = clineCredentialExpiresAtMs(credential);
       if (expiresAt !== void 0) this.scheduler.arm(expiresAt);
@@ -47253,9 +45098,9 @@ var ClineAuth = class extends Service6 {
   }
   /** 从存储重载凭据，返回是否已过期（供 UI 判断是否需要提示重新登录）。 */
   async checkExpired() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef7(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef6(this.credentialRefName));
     if (!resolved) return true;
-    const credential = parseCredential6(resolved.value);
+    const credential = parseCredential5(resolved.value);
     return credential === void 0 ? true : isClineExpired(credential);
   }
   /**
@@ -47264,24 +45109,24 @@ var ClineAuth = class extends Service6 {
    * 供 e2e 探针与 `account-probe` 使用。
    */
   async resolveStoredCredential() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef7(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef6(this.credentialRefName));
     if (!resolved) return void 0;
-    return parseCredential6(resolved.value);
+    return parseCredential5(resolved.value);
   }
 };
 
 // vendor/channel-pack/src/loomy-auth.ts
-import { Service as Service7 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef8 } from "@deepseek-ai/dsh-credentials";
+import { Service as Service6 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef7 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/loomy-oauth.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
 
 // vendor/channel-pack/src/loomy-sign.ts
-import { createHash as createHash5, createHmac, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash6, createHmac, randomUUID as randomUUID4 } from "node:crypto";
 function loomyContentMd5(body) {
   if (body.length === 0) return "";
-  return createHash5("md5").update(body, "utf8").digest("base64");
+  return createHash6("md5").update(body, "utf8").digest("base64");
 }
 function escapeRfc3986(value) {
   return encodeURIComponent(value).replace(/!/g, "%21").replace(/'/g, "%27").replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/\*/g, "%2A");
@@ -47636,8 +45481,8 @@ async function startLoomyWechatLoginFlow(options) {
     rejectResult(error);
   };
   state.uuid = await fetchLoomyWechatUuid(randomUUID6(), fetcher);
-  const server = createServer4((request2, response) => {
-    void handleRequest(request2, response, {
+  const server = createServer4((request, response) => {
+    void handleRequest(request, response, {
       state,
       product,
       fetcher,
@@ -47670,8 +45515,8 @@ async function startLoomyWechatLoginFlow(options) {
   });
   return { loginUrl, result, close };
 }
-async function handleRequest(request2, response, deps) {
-  const url = new URL(request2.url ?? "/", `http://127.0.0.1:${request2.socket.localPort ?? 0}`);
+async function handleRequest(request, response, deps) {
+  const url = new URL(request.url ?? "/", `http://127.0.0.1:${request.socket.localPort ?? 0}`);
   const { state } = deps;
   if (url.pathname === LOOMY_WECHAT_QR_PATH) {
     const qrDataUrl = await fetchLoomyWechatQrImage(state.uuid, deps.fetcher);
@@ -47710,8 +45555,8 @@ async function handleRequest(request2, response, deps) {
     writeJson(response, { status: polled.status });
     return;
   }
-  if (url.pathname === LOOMY_WECHAT_COMPLETE_PATH && request2.method === "POST") {
-    const body = await readJsonBody(request2);
+  if (url.pathname === LOOMY_WECHAT_COMPLETE_PATH && request.method === "POST") {
+    const body = await readJsonBody(request);
     const action = typeof body.action === "string" ? body.action : "";
     try {
       if (action === "send_sms") {
@@ -47751,10 +45596,10 @@ function writeJson(response, payload) {
   response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(payload));
 }
-async function readJsonBody(request2) {
+async function readJsonBody(request) {
   const chunks = [];
   let total = 0;
-  for await (const chunk of request2) {
+  for await (const chunk of request) {
     const buf = chunk;
     total += buf.length;
     if (total > 64 * 1024) throw new Error("\u8BF7\u6C42\u4F53\u8FC7\u5927");
@@ -48174,13 +46019,13 @@ var LOOMY_EXPIRY_ACCESSORS = {
   expiresAtOf: credentialExpiresAtMs2,
   identityOf: (credential) => credential.access_token ?? ""
 };
-var RefreshTokenExpiredError7 = class extends Error {
+var RefreshTokenExpiredError6 = class extends Error {
   constructor(message2) {
     super(message2);
     this.name = "RefreshTokenExpiredError";
   }
 };
-function parseCredential7(value) {
+function parseCredential6(value) {
   try {
     const parsed = JSON.parse(value);
     return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
@@ -48188,7 +46033,7 @@ function parseCredential7(value) {
     return void 0;
   }
 }
-var LoomyAuth = class extends Service7 {
+var LoomyAuth = class extends Service6 {
   constructor(ctx, options = {}) {
     const product = options.product ?? LOOMY;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -48260,7 +46105,7 @@ var LoomyAuth = class extends Service7 {
       login.nickname
     );
     const refName = flowOptions.refName ?? this.credentialRefName;
-    const ref = credentialRef8(refName);
+    const ref = credentialRef7(refName);
     await this.ctx.credentials.set(ref, JSON.stringify(credential));
     this.lastRefreshError = void 0;
     try {
@@ -48287,7 +46132,7 @@ var LoomyAuth = class extends Service7 {
     const result = await loginLoomyBySmsCode(phone, code, msgid, this.product, this.fetchImpl);
     const credential = this.buildCredential(result.session, result.userid, phone);
     const refName = flowOptions.refName ?? this.credentialRefName;
-    const ref = credentialRef8(refName);
+    const ref = credentialRef7(refName);
     await this.ctx.credentials.set(ref, JSON.stringify(credential));
     this.lastRefreshError = void 0;
     try {
@@ -48322,8 +46167,8 @@ var LoomyAuth = class extends Service7 {
   }
   /** 解析当前单凭据（默认 ref）。 */
   async resolveDefaultCredential() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef8(this.credentialRefName));
-    return resolved === void 0 ? void 0 : parseCredential7(resolved.value);
+    const resolved = await this.ctx.credentials.resolve(credentialRef7(this.credentialRefName));
+    return resolved === void 0 ? void 0 : parseCredential6(resolved.value);
   }
   /** 只读登录状态。 */
   async status() {
@@ -48349,7 +46194,7 @@ var LoomyAuth = class extends Service7 {
    */
   async refresh() {
     const credential = await this.resolveDefaultCredential();
-    if (credential === void 0) throw new RefreshTokenExpiredError7("\u51ED\u636E\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u767B\u5F55");
+    if (credential === void 0) throw new RefreshTokenExpiredError6("\u51ED\u636E\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u767B\u5F55");
     await this.probeCredential(credential);
     this.lastRefreshError = void 0;
   }
@@ -48369,10 +46214,10 @@ var LoomyAuth = class extends Service7 {
    * 只回写 `expiresAt`，见 `LOOMY_EXPIRY_ACCESSORS` 的说明。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef8(refName);
+    const ref = credentialRef7(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
-    const credential = parseCredential7(resolved.value);
+    const credential = parseCredential6(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     await this.probeCredential(credential);
     await syncAccountExpiry({
@@ -48416,7 +46261,7 @@ var LoomyAuth = class extends Service7 {
     const envelope = parseLoomyEnvelope(parsed);
     if (envelope.ok) return;
     if (envelope.code === LOOMY_AUTH_ERROR_CODE) {
-      throw new RefreshTokenExpiredError7(`Loomy \u51ED\u8BC1\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\uFF08${envelope.message}\uFF09`);
+      throw new RefreshTokenExpiredError6(`Loomy \u51ED\u8BC1\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\uFF08${envelope.message}\uFF09`);
     }
     throw new Error(`Loomy \u51ED\u636E\u63A2\u6D4B\u5931\u8D25\uFF1A${envelope.message}`);
   }
@@ -48434,12 +46279,12 @@ var LoomyAuth = class extends Service7 {
   async refreshAll(pool) {
     const accounts = await pool.listAccounts(this.product.id);
     for (const entry of accounts) {
-      const ref = credentialRef8(entry.credentialRef);
+      const ref = credentialRef7(entry.credentialRef);
       let credential;
       try {
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) continue;
-        credential = parseCredential7(resolved.value);
+        credential = parseCredential6(resolved.value);
       } catch {
         continue;
       }
@@ -48460,7 +46305,7 @@ var LoomyAuth = class extends Service7 {
       try {
         await this.probeCredential(credential);
       } catch (error) {
-        if (error instanceof RefreshTokenExpiredError7) {
+        if (error instanceof RefreshTokenExpiredError6) {
           this.ctx.logger?.warn?.(
             `[loomy] \u8D26\u53F7 ${entry.id} \u7684\u51ED\u8BC1\u5DF2\u5931\u6548\uFF08Loomy \u65E0\u7EED\u671F\u7AEF\u70B9\uFF0C\u9700\u91CD\u65B0\u767B\u5F55\uFF09`
           );
@@ -48475,7 +46320,7 @@ var LoomyAuth = class extends Service7 {
   /** 登出：清除默认单凭据。 */
   async logout() {
     this.active = false;
-    await this.ctx.credentials.unset(credentialRef8(this.credentialRefName));
+    await this.ctx.credentials.unset(credentialRef7(this.credentialRefName));
     this.lastRefreshError = void 0;
   }
   /**
@@ -48523,8 +46368,8 @@ var LoomyAuth = class extends Service7 {
 };
 
 // vendor/channel-pack/src/raccoon-auth.ts
-import { Service as Service8 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef9 } from "@deepseek-ai/dsh-credentials";
+import { Service as Service7 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef8 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/credit-usage-ledger.ts
 function mergeAccountIds(...lists) {
@@ -49157,7 +47002,7 @@ async function claimRaccoonDailyGrant(product, credential, fetcher = fetch) {
 }
 
 // vendor/channel-pack/src/raccoon-oauth.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
+import { randomBytes as randomBytes6 } from "node:crypto";
 function parseEnvelope2(payload, status) {
   const record = typeof payload === "object" && payload !== null && !Array.isArray(payload) ? payload : {};
   const code = typeof record.code === "number" ? record.code : status >= 400 ? status : 0;
@@ -49166,9 +47011,9 @@ function parseEnvelope2(payload, status) {
   const data = typeof record.data === "object" && record.data !== null && !Array.isArray(record.data) ? record.data : void 0;
   return { code, message: message2, details, data };
 }
-function envelopeError(envelope, fallback) {
+function envelopeError(envelope, fallback2) {
   const parts = [envelope.message, envelope.details].filter((s) => s.length > 0);
-  const text = parts.length > 0 ? parts.join(": ") : fallback;
+  const text = parts.length > 0 ? parts.join(": ") : fallback2;
   return new Error(`raccoon: ${text}`);
 }
 async function postJson(url, body, fetcher, headers = {}) {
@@ -49194,7 +47039,7 @@ async function postJson(url, body, fetcher, headers = {}) {
   return { envelope: parseEnvelope2(parsed, response.status), status: response.status };
 }
 function generateQrCode() {
-  return randomBytes5(16).toString("hex");
+  return randomBytes6(16).toString("hex");
 }
 function buildQrImageUrl(product, code) {
   const params = new URLSearchParams({ code, appname: "\u5546\u6C64\u5C0F\u6D63\u718A\u5B98\u7F51" });
@@ -49222,13 +47067,13 @@ async function pollRaccoonQrLogin(product, code, fetcher = fetch) {
   }
   if (status === RACCOON_QR_STATUS.success) {
     const accessToken = typeof envelope.data.access_token === "string" ? envelope.data.access_token : "";
-    const refreshToken2 = typeof envelope.data.refresh_token === "string" ? envelope.data.refresh_token : "";
+    const refreshToken = typeof envelope.data.refresh_token === "string" ? envelope.data.refresh_token : "";
     if (accessToken.length === 0) return { status: "pending" };
     const expMs = decodeJwtExpMs(accessToken);
     return {
       status: "success",
       accessToken,
-      refreshToken: refreshToken2,
+      refreshToken,
       ...expMs !== void 0 ? { expiresAt: String(expMs) } : {}
     };
   }
@@ -49267,7 +47112,7 @@ async function loginRaccoonWithSmsCode(product, phone, smsCode, fetcher = fetch)
 function credentialFromEnvelope(envelope) {
   const data = envelope.data ?? {};
   const accessToken = typeof data.access_token === "string" ? data.access_token : "";
-  const refreshToken2 = typeof data.refresh_token === "string" ? data.refresh_token : "";
+  const refreshToken = typeof data.refresh_token === "string" ? data.refresh_token : "";
   if (accessToken.length === 0) {
     throw new Error("raccoon: \u767B\u5F55\u54CD\u5E94\u7F3A\u5C11 access_token");
   }
@@ -49275,7 +47120,7 @@ function credentialFromEnvelope(envelope) {
   const officeIdentity = typeof data.office_identity === "string" ? data.office_identity : "";
   return {
     access_token: accessToken,
-    refresh_token: refreshToken2,
+    refresh_token: refreshToken,
     ...expMs !== void 0 ? { expires_at: String(expMs) } : {},
     ...officeIdentity.length > 0 ? { office_identity: officeIdentity } : {}
   };
@@ -49745,8 +47590,8 @@ async function startRaccoonLoginFlow(options = {}) {
     settled = true;
     rejectResult(error);
   };
-  const server = createServer5((request2, response) => {
-    void handleRequest2(request2, response, { state, product, fetcher, settleOk }).catch(
+  const server = createServer5((request, response) => {
+    void handleRequest2(request, response, { state, product, fetcher, settleOk }).catch(
       (error) => {
         try {
           response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" }).end(`\u5185\u90E8\u9519\u8BEF\uFF1A${error instanceof Error ? error.message : String(error)}`);
@@ -49783,8 +47628,8 @@ async function startRaccoonLoginFlow(options = {}) {
   });
   return { loginUrl, result, close };
 }
-async function handleRequest2(request2, response, deps) {
-  const url = new URL(request2.url ?? "/", `http://127.0.0.1:${request2.socket.localPort ?? 0}`);
+async function handleRequest2(request, response, deps) {
+  const url = new URL(request.url ?? "/", `http://127.0.0.1:${request.socket.localPort ?? 0}`);
   const { state, product } = deps;
   if (url.pathname === RACCOON_LOGIN_PAGE_PATHS.login) {
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -49815,8 +47660,8 @@ async function handleRequest2(request2, response, deps) {
     });
     return;
   }
-  if (url.pathname === RACCOON_LOGIN_PAGE_PATHS.smsSend && request2.method === "POST") {
-    const body = await readJsonBody2(request2);
+  if (url.pathname === RACCOON_LOGIN_PAGE_PATHS.smsSend && request.method === "POST") {
+    const body = await readJsonBody2(request);
     const phone = typeof body.phone === "string" ? body.phone.trim() : "";
     const captchaParam = typeof body.captchaParam === "string" ? body.captchaParam : "";
     if (!/^1[3-9]\d{9}$/.test(phone)) {
@@ -49836,8 +47681,8 @@ async function handleRequest2(request2, response, deps) {
     }
     return;
   }
-  if (url.pathname === RACCOON_LOGIN_PAGE_PATHS.smsVerify && request2.method === "POST") {
-    const body = await readJsonBody2(request2);
+  if (url.pathname === RACCOON_LOGIN_PAGE_PATHS.smsVerify && request.method === "POST") {
+    const body = await readJsonBody2(request);
     const smsCode = typeof body.smsCode === "string" ? body.smsCode.trim() : "";
     if (state.phone.length === 0) {
       response.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
@@ -49867,10 +47712,10 @@ function writeJson2(response, payload) {
   response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(payload));
 }
-async function readJsonBody2(request2) {
+async function readJsonBody2(request) {
   const chunks = [];
   let total = 0;
-  for await (const chunk of request2) {
+  for await (const chunk of request) {
     const buf = chunk;
     total += buf.length;
     if (total > 64 * 1024) throw new Error("\u8BF7\u6C42\u4F53\u8FC7\u5927");
@@ -50124,7 +47969,7 @@ var RACCOON_EXPIRY_ACCESSORS = {
   refreshableOf: isRaccoonRefreshable,
   identityOf: (credential) => credential.access_token ?? ""
 };
-var RefreshTokenExpiredError8 = class extends Error {
+var RefreshTokenExpiredError7 = class extends Error {
   constructor(message2) {
     super(message2);
     this.name = "RefreshTokenExpiredError";
@@ -50174,7 +48019,7 @@ function normalizeRemoteModel(entry) {
     supportsImage: raccoonSupportsImage(id, tags)
   };
 }
-var RaccoonAuth = class extends Service8 {
+var RaccoonAuth = class extends Service7 {
   constructor(ctx, options = {}) {
     const product = options.product ?? RACCOON;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -50227,7 +48072,7 @@ var RaccoonAuth = class extends Service8 {
         ...info.phone !== void 0 && credential.phone === void 0 ? { phone: info.phone } : {}
       };
     }
-    const ref = credentialRef9(refName);
+    const ref = credentialRef8(refName);
     await this.ctx.credentials.set(ref, JSON.stringify(enriched));
     this.lastRefreshError = void 0;
     try {
@@ -50260,7 +48105,7 @@ var RaccoonAuth = class extends Service8 {
   /** 解析默认 ref 的凭据。 */
   async resolveDefaultCredential() {
     try {
-      const resolved = await this.ctx.credentials.resolve(credentialRef9(this.credentialRefName));
+      const resolved = await this.ctx.credentials.resolve(credentialRef8(this.credentialRefName));
       return resolved === void 0 ? void 0 : parseRaccoonCredential(resolved.value);
     } catch {
       return void 0;
@@ -50273,18 +48118,18 @@ var RaccoonAuth = class extends Service8 {
    */
   async refresh() {
     const credential = await this.resolveDefaultCredential();
-    if (credential === void 0) throw new RefreshTokenExpiredError8("\u51ED\u636E\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u767B\u5F55");
+    if (credential === void 0) throw new RefreshTokenExpiredError7("\u51ED\u636E\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u767B\u5F55");
     if (!isRaccoonRefreshable(credential)) {
-      throw new RefreshTokenExpiredError8("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError7("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
       const next = await refreshRaccoonCredential(this.product, credential, this.fetchImpl);
-      await this.ctx.credentials.set(credentialRef9(this.credentialRefName), JSON.stringify(next));
+      await this.ctx.credentials.set(credentialRef8(this.credentialRefName), JSON.stringify(next));
       this.lastRefreshError = void 0;
     } catch (error) {
       const message2 = error instanceof Error ? error.message : String(error);
       this.lastRefreshError = message2;
-      if (message2.includes("\u91CD\u65B0\u767B\u5F55")) throw new RefreshTokenExpiredError8(message2);
+      if (message2.includes("\u91CD\u65B0\u767B\u5F55")) throw new RefreshTokenExpiredError7(message2);
       throw error;
     }
   }
@@ -50308,13 +48153,13 @@ var RaccoonAuth = class extends Service8 {
    *   逐个解析凭据比对，代价高且需要账号池具备凭据访问能力）。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef9(refName);
+    const ref = credentialRef8(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
     const credential = parseRaccoonCredential(resolved.value);
     if (!credential) throw new Error("\u51ED\u636E\u89E3\u6790\u5931\u8D25");
     if (!isRaccoonRefreshable(credential)) {
-      throw new RefreshTokenExpiredError8("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
+      throw new RefreshTokenExpiredError7("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
       const next = await refreshRaccoonCredential(this.product, credential, this.fetchImpl);
@@ -50330,7 +48175,7 @@ var RaccoonAuth = class extends Service8 {
       });
     } catch (error) {
       const message2 = error instanceof Error ? error.message : String(error);
-      if (message2.includes("\u91CD\u65B0\u767B\u5F55")) throw new RefreshTokenExpiredError8(message2);
+      if (message2.includes("\u91CD\u65B0\u767B\u5F55")) throw new RefreshTokenExpiredError7(message2);
       throw error;
     }
   }
@@ -50354,7 +48199,7 @@ var RaccoonAuth = class extends Service8 {
     const accounts = await pool.listAccounts(this.product.id);
     for (const entry of accounts) {
       if (!entry.refreshable) continue;
-      const resolved = await this.ctx.credentials.resolve(credentialRef9(entry.credentialRef));
+      const resolved = await this.ctx.credentials.resolve(credentialRef8(entry.credentialRef));
       if (!resolved) continue;
       const credential = parseRaccoonCredential(resolved.value);
       if (credential === void 0) continue;
@@ -50377,7 +48222,7 @@ var RaccoonAuth = class extends Service8 {
       try {
         await this.refreshAccountCredential(entry.credentialRef, pool, entry.id);
       } catch (error) {
-        if (error instanceof RefreshTokenExpiredError8) {
+        if (error instanceof RefreshTokenExpiredError7) {
           this.ctx.logger?.warn?.(`[raccoon] \u8D26\u53F7 ${entry.id} \u7684 refresh_token \u5DF2\u5931\u6548\uFF0C\u9700\u91CD\u65B0\u767B\u5F55`);
         } else {
           this.ctx.logger?.warn?.(
@@ -50389,7 +48234,7 @@ var RaccoonAuth = class extends Service8 {
   }
   /** 登出：清除默认单凭据。 */
   async logout() {
-    await this.ctx.credentials.unset(credentialRef9(this.credentialRefName));
+    await this.ctx.credentials.unset(credentialRef8(this.credentialRefName));
     this.lastRefreshError = void 0;
   }
   /**
@@ -50496,7 +48341,7 @@ var RaccoonAuth = class extends Service8 {
     }
     for (const entry of entries) {
       try {
-        const ref = credentialRef9(entry.credentialRef);
+        const ref = credentialRef8(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) continue;
         const credential = parseRaccoonCredential(resolved.value);
@@ -50707,10 +48552,10 @@ function positiveNumber(value) {
 // vendor/channel-pack/src/credit-usage-sampler.ts
 var CREDIT_SAMPLE_TTL_MS = 6e4;
 var DSH_CHANNEL_PACK_CREDIT_SAMPLE_MS = "DSH_CHANNEL_PACK_CREDIT_SAMPLE_MS";
-function nonNegativeMs(raw, fallback) {
-  if (typeof raw !== "string" || raw.trim().length === 0) return fallback;
+function nonNegativeMs(raw, fallback2) {
+  if (typeof raw !== "string" || raw.trim().length === 0) return fallback2;
   const parsed = Number(raw.trim());
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback2;
 }
 function creditSampleTtlMs(env = process.env) {
   return nonNegativeMs(env[DSH_CHANNEL_PACK_CREDIT_SAMPLE_MS], CREDIT_SAMPLE_TTL_MS);
@@ -50936,7 +48781,7 @@ var CODEARTS_OPS_CONFIRM_PATH = "/v1/ops/confirm";
 var CODEARTS_OPS_CHANNEL = "IDE";
 var CODEARTS_DAILY_LOGIN_TYPE = "USER_LOGIN";
 var CLAIMED_STATUSES = ["CLAIMED", "CONFIRMED", "CONSUMED"];
-var REQUEST_TIMEOUT_MS2 = 3e4;
+var REQUEST_TIMEOUT_MS = 3e4;
 var SNAP_EXTRA_HEADERS = {
   "Agent-Type": "PromptCenter",
   "X-Language": "zh-cn"
@@ -51023,7 +48868,7 @@ async function signedSnapRequest(method, url, credential, body, fetcher) {
       method,
       headers,
       ...body === void 0 ? {} : { body },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS2)
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
     const text = await response.text();
     if (!response.ok) {
@@ -51084,11 +48929,11 @@ function parseCreditBalance(metrics) {
   );
   return { total, packages, expiredTotal: 0 };
 }
-async function fetchCodeArtsAccountInfo(credential, fetcher = fetch) {
+async function fetchCodeArtsAccountInfo(credential, fetcher = directFetch) {
   const result = await fetchCodeArtsAccountInfoDetailed(credential, fetcher);
   return result.ok ? result.info : null;
 }
-async function fetchCodeArtsAccountInfoDetailed(credential, fetcher = fetch) {
+async function fetchCodeArtsAccountInfoDetailed(credential, fetcher = directFetch) {
   const url = `${CODEARTS_SNAP_ENGINE_URL}${CODEARTS_PACKAGE_INFO_PATH}`;
   const result = await signedSnapRequest("GET", url, credential, void 0, fetcher);
   if (!result.ok) return { ok: false, message: result.message };
@@ -51121,7 +48966,7 @@ function parseActivity(item) {
     amount: readNumber3(item, "benefitAmount") || readNumber3(item, "amount") || readNumber3(item, "creditAmount")
   };
 }
-async function fetchCodeArtsOpsActivitiesDetailed(credential, fetcher = fetch) {
+async function fetchCodeArtsOpsActivitiesDetailed(credential, fetcher = directFetch) {
   const url = `${CODEARTS_SNAP_ENGINE_URL}${CODEARTS_OPS_DELIVERY_PATH}?channel=${CODEARTS_OPS_CHANNEL}`;
   const result = await signedSnapRequest("GET", url, credential, void 0, fetcher);
   if (!result.ok) return { ok: false, message: result.message };
@@ -51135,7 +48980,7 @@ async function fetchCodeArtsOpsActivitiesDetailed(credential, fetcher = fetch) {
 function findDailyCheckinActivity(activities) {
   return activities.find((activity) => activity.type === CODEARTS_DAILY_LOGIN_TYPE);
 }
-async function claimCodeArtsDailyCheckin(credential, fetcher = fetch) {
+async function claimCodeArtsDailyCheckin(credential, fetcher = directFetch) {
   const infoResult = await fetchCodeArtsAccountInfoDetailed(credential, fetcher);
   if (!infoResult.ok) {
     return { kind: "failed", code: -1, message: `\u8D26\u6237\u4FE1\u606F\u67E5\u8BE2\u5931\u8D25\uFF1A${infoResult.message}` };
@@ -51399,188 +49244,6 @@ function roundCredits2(value) {
 }
 
 // vendor/channel-pack/src/credits.ts
-var CHECKIN_ACTIVITY_STATUS_PATH = "/v2/billing/meter/checkin-activity-status";
-var DAILY_CHECKIN_PATH = "/v2/billing/meter/daily-checkin";
-var USER_RESOURCE_PATH = "/v2/billing/meter/get-user-resource";
-var REQUEST_TIMEOUT_MS3 = 3e4;
-var CODE_ALREADY_CLAIMED = 10001;
-var CODE_ALREADY_CLAIMED_ALT = 1001;
-var CODE_NO_QUALIFICATION = 1002;
-var CODE_ACTIVITY_ENDED = 1003;
-function checkinHeaders(credential, product) {
-  const headers = new Headers();
-  headers.set("Authorization", `Bearer ${credential.access_token}`);
-  headers.set("Accept", "application/json");
-  headers.set("Content-Type", "application/json");
-  headers.set(HTTP_HEADER_DOMAIN, product.apiDomain || credential.domain || "");
-  headers.set(HTTP_HEADER_PRODUCT, BUDDY_DEPLOYMENT_TYPE);
-  headers.set(HTTP_HEADER_PRODUCT_CODE, product.productCode);
-  if (credential.user_id !== void 0 && credential.user_id.length > 0) {
-    headers.set("X-User-Id", credential.user_id);
-  }
-  if (credential.enterprise_id !== void 0 && credential.enterprise_id.length > 0) {
-    headers.set("X-Enterprise-Id", credential.enterprise_id);
-    headers.set("X-Tenant-Id", credential.enterprise_id);
-  }
-  headers.set("User-Agent", product.userAgent);
-  return headers;
-}
-function readBool3(source, key) {
-  return source[key] === true;
-}
-function readNumber5(source, key) {
-  const value = source[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-function readString4(source, key) {
-  const value = source[key];
-  return typeof value === "string" ? value : "";
-}
-function readStringArray(source, key) {
-  const value = source[key];
-  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
-}
-var UNPARSABLE_RESPONSE_MESSAGE3 = "\u8BF7\u6C42\u5931\u8D25\u6216\u54CD\u5E94\u65E0\u6CD5\u89E3\u6790";
-async function postJson2(path2, credential, product, fetcher) {
-  try {
-    const response = await fetcher(`${product.endpoint}${path2}`, {
-      method: "POST",
-      headers: checkinHeaders(credential, product),
-      body: "{}",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS3)
-    });
-    const text = await response.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return { ok: false, message: describeNonJsonResponse2(response.status, text) };
-    }
-    if (typeof parsed !== "object" || parsed === null) {
-      return { ok: false, message: UNPARSABLE_RESPONSE_MESSAGE3 };
-    }
-    return { ok: true, body: parsed };
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
-  }
-}
-function describeNonJsonResponse2(status, text) {
-  if (status === 401 || status === 403) {
-    return `\u51ED\u636E\u5DF2\u5931\u6548\uFF08HTTP ${status}\uFF09\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\u8BE5\u8D26\u53F7`;
-  }
-  const snippet = text.trim().slice(0, 80).replace(/\s+/g, " ");
-  return `\u670D\u52A1\u7AEF\u8FD4\u56DE\u4E86\u975E JSON \u54CD\u5E94\uFF08HTTP ${status}\uFF09\uFF1A${snippet}`;
-}
-async function fetchCheckinStatus(credential, product, fetcher = fetch) {
-  const result = await postJson2(CHECKIN_ACTIVITY_STATUS_PATH, credential, product, fetcher);
-  if (!result.ok) return null;
-  const body = result.body;
-  if (body.code !== 0) return null;
-  const data = body.data;
-  if (typeof data !== "object" || data === null) return null;
-  const record = data;
-  return {
-    active: readBool3(record, "active"),
-    todayCheckedIn: readBool3(record, "today_checked_in"),
-    streakDays: readNumber5(record, "streak_days"),
-    dailyCredit: readNumber5(record, "daily_credit"),
-    todayCredit: readNumber5(record, "today_credit"),
-    isStreakDay: readBool3(record, "is_streak_day"),
-    totalCredits: readNumber5(record, "total_credits"),
-    checkinDates: readStringArray(record, "checkin_dates"),
-    activityName: readString4(record, "activity_name"),
-    themeName: readString4(record, "theme_name"),
-    endTime: readString4(record, "end_time")
-  };
-}
-async function claimDailyCheckin(credential, product, fetcher = fetch) {
-  const result = await postJson2(DAILY_CHECKIN_PATH, credential, product, fetcher);
-  if (!result.ok) {
-    return { kind: "failed", code: -1, message: result.message };
-  }
-  const body = result.body;
-  const code = typeof body.code === "number" ? body.code : -1;
-  const message2 = readString4(body, "msg");
-  if (code === CODE_ALREADY_CLAIMED || code === CODE_ALREADY_CLAIMED_ALT) {
-    return { kind: "already-claimed", message: message2.length > 0 ? message2 : "\u4ECA\u5929\u5DF2\u7B7E\u5230" };
-  }
-  if (code === CODE_NO_QUALIFICATION || code === CODE_ACTIVITY_ENDED) {
-    return { kind: "inactive", message: message2.length > 0 ? message2 : "\u5F53\u524D\u65E0\u9886\u53D6\u8D44\u683C" };
-  }
-  if (code !== 0) {
-    return { kind: "failed", code, message: message2.length > 0 ? message2 : "\u9886\u53D6\u5931\u8D25" };
-  }
-  const data = body.data;
-  if (typeof data !== "object" || data === null) {
-    return { kind: "failed", code, message: "\u9886\u53D6\u54CD\u5E94\u7F3A\u5C11 data \u5B57\u6BB5" };
-  }
-  const record = data;
-  const delayed = readString4(record, "message");
-  return {
-    kind: "claimed",
-    credit: readNumber5(record, "credit"),
-    streakDays: readNumber5(record, "streak_days"),
-    isStreakDay: readBool3(record, "is_streak_day"),
-    ...delayed.length > 0 ? { delayedMessage: delayed } : {}
-  };
-}
-function readPreciseNumber(source, baseKey) {
-  const precise = source[`${baseKey}Precise`];
-  if (typeof precise === "string") {
-    const parsed = Number.parseFloat(precise);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  if (typeof precise === "number" && Number.isFinite(precise)) return precise;
-  return readNumber5(source, baseKey);
-}
-var PACKAGE_STATUS_EXPIRED = 3;
-function parseCreditPackage(entry) {
-  const name2 = readString4(entry, "PackageName") || readString4(entry, "SubProductName") || readString4(entry, "PackageCode");
-  const unit = readString4(entry, "CapacityUnit") || readString4(entry, "OriginUnit");
-  const status = entry.Status;
-  const expiredTime = readString4(entry, "ExpiredTime");
-  const deductionEndTime = readNumber5(entry, "DeductionEndTime");
-  const expiredAt = expiredTime.length > 0 ? Date.parse(expiredTime.replace(" ", "T")) : Number.NaN;
-  const active = status !== PACKAGE_STATUS_EXPIRED && !(Number.isFinite(expiredAt) && Date.now() >= expiredAt) && !(deductionEndTime > 0 && Date.now() >= deductionEndTime);
-  return {
-    name: name2,
-    unit,
-    remaining: readPreciseNumber(entry, "CycleCapacityRemain"),
-    total: readPreciseNumber(entry, "CycleCapacitySize"),
-    used: readPreciseNumber(entry, "CycleCapacityUsed"),
-    active,
-    cycleStartTime: readString4(entry, "CycleStartTime"),
-    cycleEndTime: readString4(entry, "CycleEndTime"),
-    expiredTime,
-    ...deductionEndTime > 0 ? { deductionEndTime } : {}
-  };
-}
-async function fetchCreditBalance(credential, product, fetcher = fetch) {
-  const result = await postJson2(USER_RESOURCE_PATH, credential, product, fetcher);
-  if (!result.ok) return null;
-  const body = result.body;
-  if (body.code !== 0) return null;
-  const outer = body.data;
-  if (typeof outer !== "object" || outer === null) return null;
-  const response = outer.Response;
-  if (typeof response !== "object" || response === null) return null;
-  const inner = response.Data;
-  if (typeof inner !== "object" || inner === null) return null;
-  const accounts = inner.Accounts;
-  if (!Array.isArray(accounts)) return null;
-  const packages = [];
-  for (const item of accounts) {
-    if (typeof item !== "object" || item === null) continue;
-    packages.push(parseCreditPackage(item));
-  }
-  const total = roundCredits3(
-    packages.reduce((sum, pkg) => sum + (pkg.active ? pkg.remaining : 0), 0)
-  );
-  const expiredTotal = roundCredits3(
-    packages.reduce((sum, pkg) => sum + (pkg.active ? 0 : pkg.remaining), 0)
-  );
-  return { total, packages, expiredTotal };
-}
 function roundCredits3(value) {
   return Math.round(value * 100) / 100;
 }
@@ -51825,7 +49488,7 @@ async function creditsHeaders(credential, product) {
     "User-Agent": "Qoder"
   });
 }
-function readNumber6(source, key) {
+function readNumber5(source, key) {
   if (typeof source !== "object" || source === null) return void 0;
   const value = source[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -51835,16 +49498,16 @@ function readNumber6(source, key) {
   }
   return void 0;
 }
-function readString5(source, key) {
+function readString4(source, key) {
   if (typeof source !== "object" || source === null) return void 0;
   const value = source[key];
   return typeof value === "string" && value.length > 0 ? value : void 0;
 }
 var QODER_PLAN_PACKAGE = "\u5957\u9910\u989D\u5EA6";
 function toPackage(name2, quota, options = {}) {
-  const total = readNumber6(quota, "total");
-  const used = readNumber6(quota, "used");
-  const remainingRaw = readNumber6(quota, "remaining");
+  const total = readNumber5(quota, "total");
+  const used = readNumber5(quota, "used");
+  const remainingRaw = readNumber5(quota, "remaining");
   if (total === void 0 && used === void 0 && remainingRaw === void 0) return void 0;
   const totalValue = Math.max(0, total ?? 0);
   const usedValue = Math.max(0, used ?? 0);
@@ -51852,7 +49515,7 @@ function toPackage(name2, quota, options = {}) {
   const expMs = options.expiredTime && options.expiredTime.length > 0 ? Date.parse(options.expiredTime.replace(" ", "T")) : Number.NaN;
   return {
     name: name2,
-    unit: readString5(quota, "unit") ?? "credits",
+    unit: readString4(quota, "unit") ?? "credits",
     remaining,
     total: totalValue,
     used: usedValue,
@@ -51895,9 +49558,9 @@ async function fetchQoderCreditBalance(credential, product, fetcher = fetch) {
   if (Array.isArray(dedicated)) {
     for (const item of dedicated) {
       const pkg = toPackage(
-        readString5(item, "name") ?? readString5(item, "id") ?? "\u4E13\u7528\u8D44\u6E90\u5305",
+        readString4(item, "name") ?? readString4(item, "id") ?? "\u4E13\u7528\u8D44\u6E90\u5305",
         item,
-        { expiredTime: readString5(item, "expiresAt") ?? readString5(item, "expires_at") ?? "" }
+        { expiredTime: readString4(item, "expiresAt") ?? readString4(item, "expires_at") ?? "" }
       );
       if (pkg !== void 0) packages.push(pkg);
     }
@@ -51913,13 +49576,13 @@ function parseQoderCampaigns(body) {
   const campaigns = [];
   if (Array.isArray(raw)) {
     for (const item of raw) {
-      const id = readString5(item, "campaignId");
+      const id = readString4(item, "campaignId");
       if (id === void 0) continue;
       campaigns.push({
         campaignId: id,
-        ...readString5(item, "campaignKey") !== void 0 ? { campaignKey: readString5(item, "campaignKey") } : {},
-        ...readString5(item, "actionType") !== void 0 ? { actionType: readString5(item, "actionType") } : {},
-        ...readString5(item, "claimStatus") !== void 0 ? { claimStatus: readString5(item, "claimStatus") } : {},
+        ...readString4(item, "campaignKey") !== void 0 ? { campaignKey: readString4(item, "campaignKey") } : {},
+        ...readString4(item, "actionType") !== void 0 ? { actionType: readString4(item, "actionType") } : {},
+        ...readString4(item, "claimStatus") !== void 0 ? { claimStatus: readString4(item, "claimStatus") } : {},
         ...benefitAmount(item) !== void 0 ? { amount: benefitAmount(item) } : {}
       });
     }
@@ -51932,7 +49595,7 @@ function parseQoderCampaigns(body) {
 }
 function benefitAmount(item) {
   if (typeof item !== "object" || item === null) return void 0;
-  return readNumber6(item.benefit, "amount");
+  return readNumber5(item.benefit, "amount");
 }
 async function loadCampaigns(credential, product, fetcher) {
   let response;
@@ -51963,7 +49626,7 @@ function parseClaimResult(body) {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return {};
   const root = body;
   return {
-    ...readString5(root, "status") !== void 0 ? { status: readString5(root, "status") } : {},
+    ...readString4(root, "status") !== void 0 ? { status: readString4(root, "status") } : {},
     ...typeof root.replayed === "boolean" ? { replayed: root.replayed } : {},
     ...benefitAmount(root) !== void 0 ? { amount: benefitAmount(root) } : {}
   };
@@ -52064,11 +49727,11 @@ function classifyTraeCheckinError(httpStatus, code) {
   }
   return { type: "Unknown", cooldownSecs: 0 };
 }
-function readNumber7(source, key) {
+function readNumber6(source, key) {
   const value = source[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
-function readString6(source, key) {
+function readString5(source, key) {
   const value = source[key];
   return typeof value === "string" ? value : "";
 }
@@ -52078,7 +49741,7 @@ function readClaimCode(body) {
   if (typeof raw === "string" && /^-?\d+$/.test(raw.trim())) return Number(raw.trim());
   return raw === void 0 ? 0 : -1;
 }
-async function postJson3(path2, credential, body, fetcher, userId) {
+async function postJson2(path2, credential, body, fetcher, userId) {
   const uid = userId ?? credential.uid;
   if (uid.length === 0) {
     return { ok: false, message: "\u7F3A\u5C11 user_id\uFF0C\u65E0\u6CD5\u6784\u9020\u8BBE\u5907\u8EAB\u4EFD", httpStatus: 0 };
@@ -52111,7 +49774,7 @@ async function postJson3(path2, credential, body, fetcher, userId) {
   }
 }
 async function fetchTraeCheckinStatus(credential, _product, fetcher = fetch) {
-  const result = await postJson3(TRAE_CHECKIN_STATUS_PATH, credential, "{}", fetcher, credential.uid);
+  const result = await postJson2(TRAE_CHECKIN_STATUS_PATH, credential, "{}", fetcher, credential.uid);
   if (!result.ok) return null;
   const body = result.body;
   const code = readClaimCode(body);
@@ -52119,11 +49782,11 @@ async function fetchTraeCheckinStatus(credential, _product, fetcher = fetch) {
   return {
     active: body.enable === true,
     todayCheckedIn: body.checked_in === true,
-    streakDays: readNumber7(body, "streak_days") || 0,
-    dailyCredit: readNumber7(body, "credits") || 0,
+    streakDays: readNumber6(body, "streak_days") || 0,
+    dailyCredit: readNumber6(body, "credits") || 0,
     todayCredit: 0,
     isStreakDay: false,
-    totalCredits: readNumber7(body, "total_credits") || 0,
+    totalCredits: readNumber6(body, "total_credits") || 0,
     checkinDates: [],
     activityName: "",
     themeName: "",
@@ -52135,7 +49798,7 @@ async function claimTraeDailyCheckin(credential, product, fetcher = fetch, gener
   const doClaim = async () => {
     let lastError = { ok: false, httpStatus: 0, message: "", code: 0 };
     for (let attempt = 0; attempt <= Math.max(0, retryCount); attempt++) {
-      const result = await postJson3(TRAE_CHECKIN_CLAIM_PATH, credential, "{}", fetcher, uid);
+      const result = await postJson2(TRAE_CHECKIN_CLAIM_PATH, credential, "{}", fetcher, uid);
       if (result.ok) {
         const c = readClaimCode(result.body);
         return { ok: true, body: result.body, httpStatus: result.httpStatus, message: "", code: c };
@@ -52160,12 +49823,12 @@ async function claimTraeDailyCheckin(credential, product, fetcher = fetch, gener
     return {
       kind: "failed",
       code: 9074,
-      message: readString6(body, "message") || readString6(body, "msg") || "\u7B7E\u5230\u4EBA\u6570\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5",
+      message: readString5(body, "message") || readString5(body, "msg") || "\u7B7E\u5230\u4EBA\u6570\u8FC7\u591A\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5",
       errorType: "BusinessError",
       cooldownSecs: 300
     };
   }
-  const msg = readString6(body, "message") || readString6(body, "msg") || "";
+  const msg = readString5(body, "message") || readString5(body, "msg") || "";
   if (code === 0) {
     const status = await fetchTraeCheckinStatus(credential, product, fetcher);
     return {
@@ -52185,7 +49848,7 @@ async function claimTraeDailyCheckin(credential, product, fetcher = fetch, gener
   };
 }
 async function fetchTraeCreditBalance(credential, _product, fetcher = fetch) {
-  const result = await postJson3(
+  const result = await postJson2(
     TRAE_ENT_USAGE_PATH,
     credential,
     JSON.stringify({ require_usage: true, req_source: 2 }),
@@ -52206,16 +49869,16 @@ async function fetchTraeCreditBalance(credential, _product, fetcher = fetch) {
     if (typeof base !== "object" || base === null) continue;
     const quota = base.quota;
     if (typeof quota !== "object" || quota === null) continue;
-    const creditsLimit = readNumber7(quota, "credits_limit");
+    const creditsLimit = readNumber6(quota, "credits_limit");
     if (creditsLimit <= 0) continue;
     const usage = entry.usage;
-    const used = typeof usage === "object" && usage !== null ? readNumber7(usage, "credits_amount") : 0;
-    const expireSec = readNumber7(entry, "expire_time");
+    const used = typeof usage === "object" && usage !== null ? readNumber6(usage, "credits_amount") : 0;
+    const expireSec = readNumber6(entry, "expire_time");
     const deductionEndMs = expireSec > 0 ? expireSec * 1e3 : void 0;
     const pkg = {
       // ⚠️ 包名用 `display_desc`（实测"每月登录赠送"/"签到奖励"/"免费"），
       // 不是 `base.name` —— 后者实测为 undefined，旧代码全部回退成了"资源包"。
-      name: readString6(base, "display_desc") || readString6(entry, "display_desc") || "\u8D44\u6E90\u5305",
+      name: readString5(base, "display_desc") || readString5(entry, "display_desc") || "\u8D44\u6E90\u5305",
       unit: "credits",
       remaining: creditsLimit - used,
       total: creditsLimit,
@@ -52235,7 +49898,7 @@ async function fetchTraeCreditBalance(credential, _product, fetcher = fetch) {
 // vendor/channel-pack/src/cline-credits.ts
 var CLINE_CREDITS_TIMEOUT_MS = 3e4;
 var CLINE_BALANCE_SCALE = 1e5;
-function readNumber8(source, key) {
+function readNumber7(source, key) {
   const value = source[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim().length > 0) {
@@ -52270,7 +49933,7 @@ function parseClineBalanceResponse(value) {
   }
   const data = typeof record.data === "object" && record.data !== null && !Array.isArray(record.data) ? record.data : void 0;
   if (data === void 0) return { error: "\u54CD\u5E94\u7F3A\u5C11 data \u5B57\u6BB5" };
-  const rawBalance = readNumber8(data, "balance");
+  const rawBalance = readNumber7(data, "balance");
   if (rawBalance === void 0) return { error: "\u54CD\u5E94\u7F3A\u5C11 balance \u5B57\u6BB5" };
   return { rawBalance };
 }
@@ -52726,8 +50389,8 @@ async function fetchMinimaxCreditBalance(credential, fetcher = fetch, product = 
 }
 
 // vendor/channel-pack/src/gemini.ts
-import { randomBytes as randomBytes6 } from "node:crypto";
-import { LlmError as LlmError12, ReasoningEffortId as ReasoningEffortId9 } from "@deepseek-ai/dsh-llm";
+import { randomBytes as randomBytes7 } from "node:crypto";
+import { LlmError as LlmError11, ReasoningEffortId as ReasoningEffortId8 } from "@deepseek-ai/dsh-llm";
 var GEMINI_ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com";
 var GEMINI_ENDPOINT_SANDBOX = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 var GEMINI_ENDPOINTS = [GEMINI_ENDPOINT_DAILY, GEMINI_ENDPOINT_SANDBOX];
@@ -52837,7 +50500,7 @@ function marshalAlphabetical(value) {
   return sortedStringify(value);
 }
 function newGeminiRequestId(nowMs = Date.now()) {
-  return `agent/${nowMs}/${randomBytes6(4).toString("hex")}`;
+  return `agent/${nowMs}/${randomBytes7(4).toString("hex")}`;
 }
 var GEMINI_UPSTREAM_FLASH = "gemini-3.8-flash";
 var GEMINI_BUDGET_LOW = 1e3;
@@ -52888,7 +50551,7 @@ function geminiCanonicalModelId(modelId) {
 }
 function geminiModelSpec(modelId, effort) {
   if (geminiCanonicalModelId(modelId) !== GEMINI_UPSTREAM_FLASH) {
-    throw new LlmError12(
+    throw new LlmError11(
       `gemini: \u6A21\u578B "${modelId}" \u4E0D\u5728\u672C provider \u76EE\u5F55\u4E2D\uFF08\u4EC5\u652F\u6301 ${GEMINI_UPSTREAM_FLASH}\uFF09`,
       "INVALID_REQUEST",
       // ⚠️ `status` 只落在 `LlmError.failure`（不是顶层属性），且网关的
@@ -52907,8 +50570,8 @@ function geminiModelSpec(modelId, effort) {
 function geminiReasoningInfo(entry) {
   const options = entry.effortOptions;
   if (options === void 0 || options.length === 0) return void 0;
-  const efforts = options.map((id) => ({ id: ReasoningEffortId9(id), name: geminiEffortLabel(id) }));
-  const defaultEffort = entry.defaultEffort !== void 0 && options.includes(entry.defaultEffort) ? ReasoningEffortId9(entry.defaultEffort) : void 0;
+  const efforts = options.map((id) => ({ id: ReasoningEffortId8(id), name: geminiEffortLabel(id) }));
+  const defaultEffort = entry.defaultEffort !== void 0 && options.includes(entry.defaultEffort) ? ReasoningEffortId8(entry.defaultEffort) : void 0;
   return { efforts, ...defaultEffort === void 0 ? {} : { defaultEffort } };
 }
 var GEMINI_SCHEMA_KEYS = /* @__PURE__ */ new Set([
@@ -53024,7 +50687,7 @@ function parseGeminiAccountTier(payload) {
   if (tier === void 0) return void 0;
   return { id: tier.id, name: tier.name, label: tierLabel(tier.id, tier.name) };
 }
-var cache3 = /* @__PURE__ */ new Map();
+var cache4 = /* @__PURE__ */ new Map();
 function parseGeminiQuotaWindow(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
   const record = raw;
@@ -53094,11 +50757,11 @@ async function fetchGeminiCreditBalance(credential, _product = GEMINI, options =
   if (token === "") return { balance: null, error: GEMINI_UNAUTHORIZED_MESSAGE };
   const now = options.now?.() ?? Date.now();
   if (options.force !== true) {
-    const cached2 = cache3.get(token);
+    const cached2 = cache4.get(token);
     if (cached2 !== void 0 && now - cached2.at < GEMINI_QUOTA_CACHE_TTL_MS) return cached2.result;
   }
   const result = await requestQuota(credential, options.fetcher ?? fetch);
-  cache3.set(token, { at: now, result });
+  cache4.set(token, { at: now, result });
   return result;
 }
 async function requestQuota(credential, fetcher) {
@@ -53334,7 +50997,7 @@ var LoomyBalanceSelector = class {
 };
 
 // vendor/channel-pack/src/zcode-auth.ts
-import { Service as Service9 } from "@deepseek-ai/cordis";
+import { Service as Service8 } from "@deepseek-ai/cordis";
 
 // vendor/channel-pack/src/zcode.ts
 var PHONE_RE = /^1[3-9]\d{9}$/;
@@ -53672,7 +51335,7 @@ try {
   };
 } catch (error) { /* \u5185\u6838\u65E0 WebGL \u65F6\u5FFD\u7565 */ }
 `;
-var sleep4 = (ms) => new Promise((resolve2) => {
+var sleep3 = (ms) => new Promise((resolve2) => {
   const timer = setTimeout(resolve2, ms);
   timer.unref?.();
 });
@@ -54084,7 +51747,7 @@ var ZcodeCaptchaBrowser = class {
         }
       } catch {
       }
-      await sleep4(300);
+      await sleep3(300);
     }
     if (debuggerUrl === void 0) {
       this.kill();
@@ -54213,7 +51876,7 @@ var ZcodeCaptchaBrowser = class {
         lastError = error instanceof Error ? error : new Error(String(error));
         this.discardPage(page);
         if (attempt < attempts) {
-          await sleep4(300);
+          await sleep3(300);
         }
       } finally {
         if (this.reusablePage === page) this.releasePage(page);
@@ -54290,7 +51953,7 @@ var ZcodeCaptchaBrowser = class {
           `zcode: captcha \u9875\u9762\u88AB\u5360\u7528\u8D85\u8FC7 ${waitTimeoutMs}ms\uFF08\u7591\u4F3C\u4E0A\u4E00\u6B21 mint \u672A\u5F52\u8FD8\uFF09`
         );
       }
-      await sleep4(50);
+      await sleep3(50);
     }
     this.pageBusy = true;
     const idleReuseMs = this.options.idleReuseMs ?? Number.POSITIVE_INFINITY;
@@ -54356,7 +52019,7 @@ var ZcodeCaptchaBrowser = class {
       await cdp.send("Runtime.enable");
       await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_PATCH });
       await cdp.send("Page.navigate", { url: resolveCaptchaPageOrigin(this.options) });
-      await sleep4(this.options.navigationWaitMs ?? 1500);
+      await sleep3(this.options.navigationWaitMs ?? 1500);
       const page = { targetId, ws, cdp, lastUsedAt: Date.now() };
       this.reusablePage = page;
       return page;
@@ -55045,8 +52708,8 @@ var CarrierPageServer = class {
   /** 真绑一次端口。成功 ⇒ 记下 server 并回 true；`EADDRINUSE` 之类 ⇒ 回 false（换候选）。 */
   tryListen(port) {
     return new Promise((resolve2) => {
-      const server = createHttpServer((request2, response) => {
-        this.handle(request2, response);
+      const server = createHttpServer((request, response) => {
+        this.handle(request, response);
       });
       const settle = (ok) => {
         resolve2(ok);
@@ -55075,14 +52738,14 @@ var CarrierPageServer = class {
    * ⚠ 判**路径**而不是「路径含 carrier」：`/api/channel-pack/captcha-carrier`（插件自己那条
    * 旧路由）在这个服务上必须 404，否则两处语义会悄悄合并成一条。
    */
-  handle(request2, response) {
-    const path2 = (request2.url ?? "").split("?")[0];
+  handle(request, response) {
+    const path2 = (request.url ?? "").split("?")[0];
     if (path2 !== CARRIER_PAGE_ROUTE) {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end("not found");
       return;
     }
-    if (request2.method !== "GET") {
+    if (request.method !== "GET") {
       response.writeHead(405, { "content-type": "text/plain; charset=utf-8", allow: "GET" });
       response.end("method not allowed");
       return;
@@ -55152,7 +52815,7 @@ function buildCarrierPageHtml(config) {
 }
 
 // vendor/channel-pack/src/zcode-login.ts
-import { randomBytes as randomBytes7, randomUUID as randomUUID8 } from "node:crypto";
+import { randomBytes as randomBytes8, randomUUID as randomUUID8 } from "node:crypto";
 var ZCODE_ORIGIN = "https://zcode.z.ai";
 var ZCODE_OAUTH_CLI_INIT_URL = `${ZCODE_ORIGIN}/api/v1/oauth/cli/init`;
 var zcodeOauthCliPollUrl = (flowId) => `${ZCODE_ORIGIN}/api/v1/oauth/cli/poll/${encodeURIComponent(flowId)}`;
@@ -55165,7 +52828,7 @@ var ZcodeLoginError = class extends Error {
   }
 };
 function generateFlowSecret() {
-  return randomBytes7(32).toString("hex");
+  return randomBytes8(32).toString("hex");
 }
 function generateDeviceMid() {
   return randomUUID8();
@@ -55906,7 +53569,7 @@ async function withTimeout(work, ms) {
     if (timer !== void 0) clearTimeout(timer);
   }
 }
-var ZcodeAuth = class extends Service9 {
+var ZcodeAuth = class extends Service8 {
   product;
   fetchImpl;
   /** 注入的账号池（测试用；生产走 ctx.get）。 */
@@ -57357,7 +55020,7 @@ function emptyCheckinStatus(active, actionRequired = false) {
 }
 
 // vendor/channel-pack/src/zcode-adapter.ts
-import { EMPTY_RESPONSE_CODE as EMPTY_RESPONSE_CODE2, LlmAdapter as LlmAdapter9, LlmError as LlmError14, ReasoningEffortId as ReasoningEffortId10 } from "@deepseek-ai/dsh-llm";
+import { EMPTY_RESPONSE_CODE as EMPTY_RESPONSE_CODE2, LlmAdapter as LlmAdapter8, LlmError as LlmError13, ReasoningEffortId as ReasoningEffortId9 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/zcode-identity.ts
 var OFFICIAL_CLI_PREFIX = "You are ZCode, an interactive coding agent";
@@ -57448,7 +55111,7 @@ function withContextPrefix(messages, now = /* @__PURE__ */ new Date()) {
 }
 
 // vendor/channel-pack/src/zcode-anthropic.ts
-import { LlmError as LlmError13, ToolCallId as ToolCallId6 } from "@deepseek-ai/dsh-llm";
+import { LlmError as LlmError12, ToolCallId as ToolCallId5 } from "@deepseek-ai/dsh-llm";
 function parseToolArguments(raw) {
   if (raw === void 0 || raw === null) return {};
   if (typeof raw === "object") return raw;
@@ -57676,7 +55339,7 @@ async function* consumeAnthropicSse(body, options) {
       const error = payload.error;
       const message2 = typeof error === "object" && error !== null ? error.message : void 0;
       const type2 = typeof error === "object" && error !== null ? error.type : void 0;
-      throw new LlmError13(
+      throw new LlmError12(
         `${options.label}: ${typeof message2 === "string" ? message2 : JSON.stringify(payload).slice(0, 300)}`,
         // overloaded 是暂时性的，值得重试；其余按服务端错误处理。
         type2 === "overloaded_error" ? "RATE_LIMIT" : "SERVER"
@@ -57742,7 +55405,7 @@ async function* consumeAnthropicSse(body, options) {
         yield {
           type: "tool-call-delta",
           index,
-          id: ToolCallId6(block.callId),
+          id: ToolCallId5(block.callId),
           ...block.name.length > 0 ? { name: block.name } : {},
           argumentsDelta: partial
         };
@@ -57771,7 +55434,7 @@ async function* consumeAnthropicSse(body, options) {
     }
   }
   if (!sawAny) {
-    throw new LlmError13(
+    throw new LlmError12(
       `${options.label}: \u6A21\u578B\u8FD4\u56DE\u4E86\u7A7A\u54CD\u5E94\uFF08\u65E0\u4EFB\u4F55 text / thinking / tool \u5185\u5BB9\uFF09`,
       "EMPTY_RESPONSE"
     );
@@ -57794,7 +55457,7 @@ async function* consumeAnthropicSse(body, options) {
       index: block.index,
       block: {
         type: "tool-call",
-        id: ToolCallId6(block.callId),
+        id: ToolCallId5(block.callId),
         name: block.name,
         arguments: args
       }
@@ -57957,7 +55620,7 @@ function fallbackToRemote3(model) {
     ...model.defaultReasoningLevel !== void 0 ? { defaultReasoningLevel: model.defaultReasoningLevel } : {}
   };
 }
-function positiveMaxTokens3(value) {
+function positiveMaxTokens2(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : void 0;
 }
 var ZCODE_STREAM_IDLE_RETRY_STEP_MS = 3e4;
@@ -57971,7 +55634,7 @@ function resolveRequestTimeoutMs(product) {
   const raw = Number(process.env.DSH_ZCODE_REQUEST_TIMEOUT_MS);
   return Number.isFinite(raw) ? raw : product.requestTimeoutMs;
 }
-var ZcodeAdapter = class extends LlmAdapter9 {
+var ZcodeAdapter = class extends LlmAdapter8 {
   constructor(options) {
     super();
     this.options = options;
@@ -58087,22 +55750,22 @@ var ZcodeAdapter = class extends LlmAdapter9 {
   async resolveModel(provider, model, _signal) {
     const all = await this.loadModels();
     const entry = all.find((item) => item.id === model);
-    const fallback = this.fallbackIndex.get(model);
+    const fallback2 = this.fallbackIndex.get(model);
     const resolved = {
       provider,
       id: model,
-      name: entry?.name ?? fallback?.name ?? model,
+      name: entry?.name ?? fallback2?.name ?? model,
       inputModalities: this.inputModalitiesFor(entry)
     };
-    const contextWindow = entry?.contextWindow ?? fallback?.contextWindow;
+    const contextWindow = entry?.contextWindow ?? fallback2?.contextWindow;
     if (contextWindow !== void 0 && contextWindow > 0) {
       resolved.context = { contextWindow };
     }
-    const maxTokens = positiveMaxTokens3(entry?.maxTokens ?? fallback?.maxTokens);
+    const maxTokens = positiveMaxTokens2(entry?.maxTokens ?? fallback2?.maxTokens);
     if (maxTokens !== void 0) resolved.defaultMaxTokens = maxTokens;
-    const levels = entry?.reasoningLevels ?? fallback?.reasoningLevels;
+    const levels = entry?.reasoningLevels ?? fallback2?.reasoningLevels;
     if (levels !== void 0 && levels.length > 0) {
-      const defaultLevel = entry?.defaultReasoningLevel ?? fallback?.defaultReasoningLevel;
+      const defaultLevel = entry?.defaultReasoningLevel ?? fallback2?.defaultReasoningLevel;
       resolved.reasoning = {
         /**
          * ⚠ **`id` 必须保持小写**（`low`/`high`/`max`）—— 它是要发给上游的
@@ -58115,8 +55778,8 @@ var ZcodeAdapter = class extends LlmAdapter9 {
          *
          * ⚠ `ReasoningEffortId` 是 branded 类型，必须用构造函数（同 qoder 的写法）。
          */
-        efforts: levels.map((id) => ({ id: ReasoningEffortId10(id), name: reasoningEffortLabel(id) })),
-        ...defaultLevel !== void 0 && levels.includes(defaultLevel) ? { defaultEffort: ReasoningEffortId10(defaultLevel) } : {}
+        efforts: levels.map((id) => ({ id: ReasoningEffortId9(id), name: reasoningEffortLabel(id) })),
+        ...defaultLevel !== void 0 && levels.includes(defaultLevel) ? { defaultEffort: ReasoningEffortId9(defaultLevel) } : {}
       };
     }
     return resolved;
@@ -58226,20 +55889,20 @@ var ZcodeAdapter = class extends LlmAdapter9 {
   async *streamScoped(options, controller, timeoutMs) {
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     let imageUrls;
     if (imageRefs.size > 0) {
       const all = await this.loadModels();
       const entry = all.find((item) => item.id === options.model);
       if (!this.inputModalitiesFor(entry).includes("image")) {
-        throw new LlmError14(
+        throw new LlmError13(
           `zcode: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError14(
+        throw new LlmError13(
           "zcode: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08\u5BBF\u4E3B\u672A\u63D0\u4F9B attachments.readImage\uFF09",
           "UNSUPPORTED_CONTENT"
         );
@@ -58267,7 +55930,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
     let activeAccountId = this.options.currentAccountId?.();
     if (activeAccountId !== void 0 && activeAccountId.length > 0) tried.add(activeAccountId);
     let credential = await this.resolveCredentialOrThrow(options);
-    const wire = serializeMessages4(options.messages, imageUrls);
+    const wire = serializeMessages3(options.messages, imageUrls);
     const messages = withContextPrefix(toAnthropicMessages(wire));
     const system = buildZcodeSystemBlocks(options.system, {
       cwd: process.cwd(),
@@ -58297,7 +55960,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       }
     }
     const timedOut = () => controller.signal.aborted && options.signal?.aborted !== true;
-    const timeoutError = (cause) => new LlmError14(
+    const timeoutError = (cause) => new LlmError13(
       `zcode: \u8BF7\u6C42\u8D85\u65F6\uFF08${timeoutMs}ms \u5185\u672A\u5B8C\u6210\uFF09\u2014\u2014 \u4E0A\u6E38\u53EF\u80FD\u957F\u65F6\u95F4\u4E0D\u8FD4\u56DE\u6570\u636E`,
       "TIMEOUT",
       cause === void 0 ? void 0 : { cause }
@@ -58378,7 +56041,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
               break;
             }
           }
-          throw new LlmError14(
+          throw new LlmError13(
             `zcode: ${describeUpstreamError(response.status, text)}`,
             "QUOTA_EXCEEDED",
             { status: response.status }
@@ -58436,7 +56099,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
           shape: describeZcodeRequestShape(body.system, body.messages),
           now: Date.now()
         }) : void 0;
-        throw new LlmError14(
+        throw new LlmError13(
           `zcode: ${describeUpstreamError(response.status, text, diagnostic)}`,
           httpErrorCodeForZcode(response.status, text),
           { status: response.status }
@@ -58444,7 +56107,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       }
       if (switchedAccount) continue;
       if (response === void 0) {
-        throw new LlmError14("zcode: \u4E0A\u6E38\u8BF7\u6C42\u672A\u53D1\u51FA\uFF08\u5185\u90E8\u72B6\u6001\u5F02\u5E38\uFF09", "SERVER");
+        throw new LlmError13("zcode: \u4E0A\u6E38\u8BF7\u6C42\u672A\u53D1\u51FA\uFF08\u5185\u90E8\u72B6\u6001\u5F02\u5E38\uFF09", "SERVER");
       }
       if (response.body === null) {
         if (quotaRound < this.product.quotaSwitchMax) {
@@ -58455,7 +56118,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
             continue;
           }
         }
-        throw new LlmError14(
+        throw new LlmError13(
           zcodeEntitlementErrorMessage(options.model, tried.size),
           "QUOTA_EXCEEDED"
         );
@@ -58483,7 +56146,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
               continue;
             }
           }
-          throw new LlmError14(
+          throw new LlmError13(
             zcodeEntitlementErrorMessage(options.model, tried.size),
             "QUOTA_EXCEEDED",
             { cause: error }
@@ -58508,7 +56171,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0) {
-      throw new LlmError14(
+      throw new LlmError13(
         "zcode: \u6CA1\u6709\u53EF\u7528\u7684\u51ED\u636E \u2014\u2014 \u8BF7\u5728 Channel Pack \u7684 ZCode \u9762\u677F\u70B9\u300C\u6DFB\u52A0\u8D26\u53F7\u300D\u5B8C\u6210\u767B\u5F55\uFF08\u672C\u63D2\u4EF6\u53EA\u7528\u5B83\u81EA\u5DF1\u7684\u6388\u6743\u6D41\u7A0B\uFF0C\u4E0D\u4F1A\u8BFB\u53D6\u672C\u673A ZCode \u5BA2\u6237\u7AEF\u7684\u767B\u5F55\u6001\uFF09",
         "MISSING_CREDENTIAL"
       );
@@ -58547,13 +56210,13 @@ var ZcodeAdapter = class extends LlmAdapter9 {
       if (error instanceof GateAbortedError) throw error;
       if (userSignal?.aborted === true) throw error;
       if (signal.aborted) {
-        throw new LlmError14(
+        throw new LlmError13(
           `zcode: \u8BF7\u6C42\u8D85\u65F6\uFF08${timeoutMs}ms \u5185\u672A\u5B8C\u6210\uFF09\u2014\u2014 \u4E0A\u6E38\u53EF\u80FD\u957F\u65F6\u95F4\u4E0D\u8FD4\u56DE\u6570\u636E`,
           "TIMEOUT",
           { cause: error }
         );
       }
-      throw new LlmError14(
+      throw new LlmError13(
         `zcode: \u8BF7\u6C42\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`,
         "TRANSPORT",
         { cause: error }
@@ -58628,7 +56291,7 @@ var ZcodeAdapter = class extends LlmAdapter9 {
   }
 };
 function isFastEntitlementMiss(error, elapsedMs) {
-  if (!(error instanceof LlmError14)) return false;
+  if (!(error instanceof LlmError13)) return false;
   if (error.code !== EMPTY_RESPONSE_CODE2) return false;
   return elapsedMs < ZCODE_FAST_EMPTY_MS;
 }
@@ -58641,7 +56304,7 @@ async function defaultAdapterSleep(ms, signal) {
   await new Promise((resolve2, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new LlmError14("zcode: \u9000\u907F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "TRANSPORT"));
+      reject(new LlmError13("zcode: \u9000\u907F\u7B49\u5F85\u671F\u95F4\u8BF7\u6C42\u5DF2\u53D6\u6D88", "TRANSPORT"));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -58729,8 +56392,13 @@ function registerZcodeLlm(ctx, options) {
   return adapter;
 }
 
+// vendor/channel-pack/src/retired-providers.ts
+function isRetiredProvider(provider) {
+  return provider === "buddy" || provider === "workbuddy";
+}
+
 // vendor/channel-pack/src/channel-pack-rpc.ts
-import { credentialRef as credentialRef13 } from "@deepseek-ai/dsh-credentials";
+import { credentialRef as credentialRef12 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/openai-gateway/config.ts
 var DEFAULT_GATEWAY_HOST = "127.0.0.1";
@@ -58776,11 +56444,11 @@ function effortView(efforts, defaultEffort) {
     }
   }
   if (rows.length === 0) return void 0;
-  const fallback = effortIdOf(defaultEffort);
+  const fallback2 = effortIdOf(defaultEffort);
   return {
     efforts: rows,
     // ⚠️ 默认档必须是模型真声明过的 id，否则客户端照着它填就会 400。
-    ...fallback === void 0 || !rows.some((row) => row.id === fallback) ? {} : { default: fallback },
+    ...fallback2 === void 0 || !rows.some((row) => row.id === fallback2) ? {} : { default: fallback2 },
     openai_efforts: openaiEfforts
   };
 }
@@ -58951,42 +56619,11 @@ var BUDDY_BALANCE_TIER = Object.freeze({
   /** 无余额 / 查询失败。 */
   none: 2
 });
-function splitBuddyCreditsByExpiry(balance, now = Date.now(), windowMs = BUDDY_EXPIRING_WINDOW_MS) {
-  if (balance === null || balance === void 0) return void 0;
-  let expiring = 0;
-  let permanent = 0;
-  for (const pkg of balance.packages) {
-    if (pkg.active !== true) continue;
-    const remaining = positiveOrZero(pkg.remaining);
-    if (remaining <= 0) continue;
-    const endTime = pkg.deductionEndTime;
-    const known = typeof endTime === "number" && Number.isFinite(endTime) && endTime > 0;
-    if (known && endTime - now < windowMs) expiring += remaining;
-    else permanent += remaining;
-  }
-  return { expiring, permanent };
-}
-function buddyBalanceTier(balance, options = {}) {
-  if (positiveOrZero(balance.expiringBalance) > 0) return BUDDY_BALANCE_TIER.expiring;
-  if (options.allowPermanent === false) return BUDDY_BALANCE_TIER.none;
-  if (positiveOrZero(balance.permanentBalance) > 0) return BUDDY_BALANCE_TIER.permanent;
-  return BUDDY_BALANCE_TIER.none;
-}
-function buddyTierUsable(tier) {
-  return tier !== BUDDY_BALANCE_TIER.none;
-}
-function positiveOrZero(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-function rankBuddyAccountsByBalance(accounts, options = {}) {
-  return accounts.map((account, index) => ({ account, index, tier: buddyBalanceTier(account, options) })).sort((a, b) => a.tier - b.tier || a.index - b.index).map((entry) => entry.account);
-}
 
 // vendor/channel-pack/src/cline-quota.ts
 var CLINE_QUOTA_TIMEOUT_MS = 3e4;
 var CLINE_USAGE_LIMITS_PATH = "/api/v1/users/me/plan/usage-limits";
-function readNumber9(source, key) {
+function readNumber8(source, key) {
   const value = source[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim().length > 0) {
@@ -58995,7 +56632,7 @@ function readNumber9(source, key) {
   }
   return void 0;
 }
-function readString7(source, key) {
+function readString6(source, key) {
   const value = source[key];
   if (typeof value !== "string") return void 0;
   const trimmed = value.trim();
@@ -59039,15 +56676,15 @@ function parseClineUsageLimits(value) {
   for (const item of raw) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const entry = item;
-    const type = readString7(entry, "type");
+    const type = readString6(entry, "type");
     if (type === void 0) continue;
     windows.push({
       type,
-      percentUsed: readNumber9(entry, "percentUsed") ?? 0,
+      percentUsed: readNumber8(entry, "percentUsed") ?? 0,
       // ⚠️ `resetsAt` 是 ISO 字符串。若网关某天回数字时间戳，也不要在这里
       // 猜单位（秒/毫秒），原样转成字符串交由展示层判定 —— 猜错会显示
       // 1970 年或 5 万年后的时间，比不显示更难排查。
-      resetsAt: readString7(entry, "resetsAt") ?? ""
+      resetsAt: readString6(entry, "resetsAt") ?? ""
     });
   }
   return { windows, error: serverError === "" ? void 0 : serverError };
@@ -59097,20 +56734,20 @@ async function fetchClineUsageLimits(credential, product, fetcher = fetch, optio
 }
 
 // vendor/channel-pack/src/account-probe.ts
-import { credentialRef as credentialRef10 } from "@deepseek-ai/dsh-credentials";
-import { createUserMessage, LlmError as LlmError16 } from "@deepseek-ai/dsh-llm";
+import { credentialRef as credentialRef9 } from "@deepseek-ai/dsh-credentials";
+import { createUserMessage, LlmError as LlmError15 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/gemini-adapter.ts
 import {
-  CONTEXT_WINDOW_EXCEEDED_CODE as CONTEXT_WINDOW_EXCEEDED_CODE3,
-  isContextWindowExceededError as isContextWindowExceededError3,
-  LlmAdapter as LlmAdapter10,
-  LlmError as LlmError15,
-  ReasoningEffortId as ReasoningEffortId11
+  CONTEXT_WINDOW_EXCEEDED_CODE as CONTEXT_WINDOW_EXCEEDED_CODE2,
+  isContextWindowExceededError as isContextWindowExceededError2,
+  LlmAdapter as LlmAdapter9,
+  LlmError as LlmError14,
+  ReasoningEffortId as ReasoningEffortId10
 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/gemini-messages.ts
-import { ToolCallId as ToolCallId7 } from "@deepseek-ai/dsh-llm";
+import { ToolCallId as ToolCallId6 } from "@deepseek-ai/dsh-llm";
 function canonicalArgs(args) {
   if (args === void 0 || args === null) return "{}";
   if (typeof args !== "object" || Array.isArray(args)) return sortedStringify(args);
@@ -59202,17 +56839,17 @@ function translateGeminiRequest(options) {
       generation
     ) : base;
   }
-  const request2 = {
+  const request = {
     contents,
     generationConfig: buildGenerationConfig(options.spec, options.maxTokens, options.temperature),
     sessionId
   };
   const systemText = [...new Set([options.system, collectHarnessSystem(normalized)].filter((text) => typeof text === "string" && text !== ""))].join("\n\n");
   if (systemText !== "") {
-    request2.systemInstruction = { role: "system", parts: [{ text: systemText }] };
+    request.systemInstruction = { role: "system", parts: [{ text: systemText }] };
   }
   if (options.tools !== void 0 && options.tools.length > 0) {
-    request2.tools = [{
+    request.tools = [{
       functionDeclarations: options.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -59222,11 +56859,11 @@ function translateGeminiRequest(options) {
     }];
   }
   const toolConfig = buildToolConfig(options.toolChoice, options.tools);
-  if (toolConfig !== void 0) request2.toolConfig = toolConfig;
+  if (toolConfig !== void 0) request.toolConfig = toolConfig;
   return {
     model: options.spec.upstream,
     project: options.project ?? GEMINI_DEFAULT_PROJECT,
-    request: request2,
+    request,
     requestId: options.requestId,
     userAgent: "antigravity"
   };
@@ -59346,7 +56983,7 @@ async function* consumeGeminiSse(options) {
     } else {
       content = {
         type: "tool-call",
-        id: ToolCallId7(block.toolId ?? ""),
+        id: ToolCallId6(block.toolId ?? ""),
         name: block.toolName ?? "",
         arguments: block.text
       };
@@ -59402,7 +57039,7 @@ async function* consumeGeminiSse(options) {
           yield {
             type: "tool-call-delta",
             index: block.index,
-            id: ToolCallId7(block.toolId ?? ""),
+            id: ToolCallId6(block.toolId ?? ""),
             name: part.functionCall.name,
             argumentsDelta: argsJson
           };
@@ -59580,9 +57217,9 @@ function isGeminiSessionOverflow(text) {
 var GEMINI_MAX_SESSION_BUMPS = 1;
 var GEMINI_TOKEN_COUNT_OVERFLOW = /\btoken\s+count\b[\s\S]{0,60}?\bexceeds?\s+the\s+maximum\b/i;
 function isGeminiContextOverflow(text) {
-  return isContextWindowExceededError3(text) || GEMINI_TOKEN_COUNT_OVERFLOW.test(text);
+  return isContextWindowExceededError2(text) || GEMINI_TOKEN_COUNT_OVERFLOW.test(text);
 }
-var GeminiAdapter = class extends LlmAdapter10 {
+var GeminiAdapter = class extends LlmAdapter9 {
   constructor(options) {
     super();
     this.options = options;
@@ -59671,11 +57308,11 @@ var GeminiAdapter = class extends LlmAdapter10 {
   async collectInlineImages(messages, entry, model) {
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     if (imageRefs.size === 0) return void 0;
     if (entry?.supportsImage !== true) {
-      throw new LlmError15(
+      throw new LlmError14(
         `gemini: \u6A21\u578B "${model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
         "UNSUPPORTED_CONTENT"
       );
@@ -59687,7 +57324,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
       if (inline === void 0) {
         const readImage = this.options.readImage;
         if (readImage === void 0) {
-          throw new LlmError15(
+          throw new LlmError14(
             "gemini: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08readImage / readImageRequest \u5747\u672A\u63D0\u4F9B\uFF09",
             "UNSUPPORTED_CONTENT"
           );
@@ -59695,7 +57332,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
         try {
           inline = await readImage(ref);
         } catch (error) {
-          throw new LlmError15(
+          throw new LlmError14(
             "gemini: \u56FE\u7247\u9644\u4EF6\u8BFB\u53D6\u5931\u8D25\uFF1B\u9644\u4EF6\u670D\u52A1\u53EF\u80FD\u672A\u5C31\u7EEA\uFF0C\u6216\u8BE5\u5BF9\u8C61\u5DF2\u4E0D\u5B58\u5728\u3002",
             "UNSUPPORTED_CONTENT",
             { cause: error }
@@ -59703,20 +57340,20 @@ var GeminiAdapter = class extends LlmAdapter10 {
         }
       }
       if (inline === void 0) {
-        throw new LlmError15(
+        throw new LlmError14(
           "gemini: \u56FE\u7247\u9644\u4EF6\u8BFB\u53D6\u4E0D\u5230\u5185\u5BB9\uFF1B\u9644\u4EF6\u670D\u52A1\u53EF\u80FD\u672A\u5C31\u7EEA\uFF0C\u6216\u8BE5\u5BF9\u8C61\u5DF2\u4E0D\u5B58\u5728\u3002",
           "UNSUPPORTED_CONTENT"
         );
       }
       if (inline.data.byteLength > GEMINI_MAX_IMAGE_BYTES_INLINE) {
-        throw new LlmError15(
+        throw new LlmError14(
           `gemini: \u56FE\u7247\u4F53\u79EF ${inline.data.byteLength} \u5B57\u8282\u8D85\u8FC7\u4E0A\u6E38\u5185\u8054\u4E0A\u9650 ${GEMINI_MAX_IMAGE_BYTES_INLINE} \u5B57\u8282`,
           "UNSUPPORTED_CONTENT"
         );
       }
       const data = normalizeBase64(Buffer.from(inline.data).toString("base64"));
       if (data === void 0) {
-        throw new LlmError15("gemini: \u56FE\u7247\u7F16\u7801\u4E0D\u662F\u5408\u6CD5 base64", "UNSUPPORTED_CONTENT");
+        throw new LlmError14("gemini: \u56FE\u7247\u7F16\u7801\u4E0D\u662F\u5408\u6CD5 base64", "UNSUPPORTED_CONTENT");
       }
       images.set(id, { mediaType: inline.mediaType === "" ? "image/png" : inline.mediaType, data });
     }
@@ -59736,7 +57373,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
   async *stream(options) {
     const entry = this.loadModels().find((item) => item.id === geminiCanonicalModelId(options.model));
     if (entry === void 0) {
-      throw new LlmError15(
+      throw new LlmError14(
         `gemini: \u6A21\u578B "${options.model}" \u4E0D\u5728\u672C provider \u76EE\u5F55\u4E2D\uFF08\u4EC5\u652F\u6301 ${GEMINI_UPSTREAM_FLASH}\uFF09`,
         "INVALID_REQUEST",
         // 模型名写错是确定性失败：带上 404，网关才不会把它当 502 让客户端白重试。
@@ -59749,7 +57386,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token === "") {
-      throw new LlmError15("gemini: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError14("gemini: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const requested = options.reasoningEffort === void 0 ? void 0 : String(options.reasoningEffort);
     const declared = entry === void 0 ? void 0 : geminiReasoningInfo(entry);
@@ -59791,7 +57428,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
             ...options.signal === void 0 ? {} : { signal: options.signal }
           });
           if (probe.error !== void 0) {
-            throw new LlmError15(
+            throw new LlmError14(
               `gemini: \u9879\u76EE\u53F7\u63A2\u6D4B\u5931\u8D25\uFF0C\u672A\u53D1\u63A8\u7406\uFF08\u4E0E\u539F\u7248\u4E00\u81F4\uFF09\u2014 ${probe.error}`,
               "SERVER"
             );
@@ -59830,9 +57467,9 @@ var GeminiAdapter = class extends LlmAdapter10 {
         const wire = marshalAlphabetical(envelope);
         const wireBytes = Buffer.byteLength(wire, "utf8");
         if (wireBytes > GEMINI_MAX_REQUEST_BODY_BYTES) {
-          throw new LlmError15(
+          throw new LlmError14(
             `gemini: \u8BF7\u6C42\u4F53 ${wireBytes} \u5B57\u8282\u8D85\u8FC7\u4E0A\u9650 ${GEMINI_MAX_REQUEST_BODY_BYTES} \u5B57\u8282`,
-            CONTEXT_WINDOW_EXCEEDED_CODE3
+            CONTEXT_WINDOW_EXCEEDED_CODE2
           );
         }
         let response;
@@ -59845,8 +57482,8 @@ var GeminiAdapter = class extends LlmAdapter10 {
             signal: options.signal
           });
         } catch (error) {
-          if (error instanceof LlmError15) throw error;
-          throw new LlmError15(
+          if (error instanceof LlmError14) throw error;
+          throw new LlmError14(
             `gemini: \u8BF7\u6C42\u53D1\u9001\u5931\u8D25 \u2014 ${error instanceof Error ? error.message : String(error)}`,
             "TRANSPORT",
             { cause: error }
@@ -59854,7 +57491,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
         }
         if (response.ok) {
           if (response.body === null) {
-            throw new LlmError15("gemini: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
+            throw new LlmError14("gemini: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
           }
           const body = response.body;
           try {
@@ -59925,7 +57562,7 @@ var GeminiAdapter = class extends LlmAdapter10 {
               continue;
             }
           }
-          throw new LlmError15(
+          throw new LlmError14(
             `gemini: \u6A21\u578B ${options.model} \u7684\u6240\u6709\u8D26\u53F7\u5747\u4E0D\u53EF\u7528\uFF08\u9650\u6D41\u6216\u989D\u5EA6\u8017\u5C3D\uFF09\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5`,
             "QUOTA_EXCEEDED",
             { status }
@@ -59950,15 +57587,15 @@ var GeminiAdapter = class extends LlmAdapter10 {
     const detail = text === "" ? "" : ` \u2014 ${text.slice(0, 500)}`;
     const message2 = `gemini: HTTP ${status}${detail}`;
     if (status === 400 && isGeminiContextOverflow(text)) {
-      return new LlmError15(message2, CONTEXT_WINDOW_EXCEEDED_CODE3, { status });
+      return new LlmError14(message2, CONTEXT_WINDOW_EXCEEDED_CODE2, { status });
     }
     if (status === 400 && isGeminiQuotaText(text)) {
-      return new LlmError15(message2, "QUOTA_EXCEEDED", { status });
+      return new LlmError14(message2, "QUOTA_EXCEEDED", { status });
     }
-    if (status === 429) return new LlmError15(message2, "RATE_LIMIT", { status });
-    if (status === 403 || status === 404) return new LlmError15(message2, "SERVER", { status });
-    if (status === 401) return new LlmError15(message2, "AUTH", { status });
-    return new LlmError15(message2, httpErrorCode4(status), { status });
+    if (status === 429) return new LlmError14(message2, "RATE_LIMIT", { status });
+    if (status === 403 || status === 404) return new LlmError14(message2, "SERVER", { status });
+    if (status === 401) return new LlmError14(message2, "AUTH", { status });
+    return new LlmError14(message2, httpErrorCode3(status), { status });
   }
 };
 function registerGeminiLlm(ctx, options) {
@@ -59974,30 +57611,22 @@ var PROBE_PROMPT = "\u53EA\u56DE\u7B54\u4E24\u4E2A\u5B57\uFF1A\u6536\u5230";
 var PROBE_SYSTEM = "You are a helpful assistant.";
 var PROBE_TIMEOUT_MS = 12e4;
 function isRateLimitFailure(error) {
-  if (error instanceof LlmError16) {
+  if (error instanceof LlmError15) {
     if (error.code === "RATE_LIMIT" || error.code === "QUOTA_EXCEEDED" || error.code === "QUOTA") return true;
   }
   const message2 = error instanceof Error ? error.message : String(error);
   return isRateLimited(message2);
 }
 async function probeWithAdapter(entry, credential, modelId, timeoutMs) {
+  if (isRetiredProvider(entry.provider)) throw new Error("provider-retired: WorkBuddy \u6E20\u9053\u5DF2\u79FB\u9664");
   const signal = AbortSignal.timeout(timeoutMs);
-  const ref = credentialRef10(entry.credentialRef);
-  const buddyProduct = productById(entry.provider);
+  const ref = credentialRef9(entry.credentialRef);
   const lobsteraiProduct = lobsteraiProductById(entry.provider);
   const qoderProduct = qoderProductById(entry.provider);
   const clineProduct = clineProductById(entry.provider);
   const zcodeProduct = zcodeProductById(entry.provider);
   let adapter;
-  if (buddyProduct !== void 0) {
-    adapter = new BuddyAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential,
-      refresh: async () => {
-      },
-      product: buddyProduct
-    });
-  } else if (lobsteraiProduct !== void 0) {
+  if (lobsteraiProduct !== void 0) {
     adapter = new LobsteraiAdapter({
       credentialRef: ref,
       resolveCredential: async () => credential,
@@ -60180,7 +57809,7 @@ async function resetAllAccounts(pool, provider) {
 }
 
 // vendor/channel-pack/src/backup.ts
-import { credentialRef as credentialRef11 } from "@deepseek-ai/dsh-credentials";
+import { credentialRef as credentialRef10 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/types.ts
 var BACKUP_FORMAT = "dsh-codearts-auth/backup";
@@ -60195,7 +57824,7 @@ async function exportBackup(pool, credentials) {
   const warnings = [];
   for (const entry of state.accounts) {
     try {
-      const resolved = await credentials.resolve(credentialRef11(entry.credentialRef));
+      const resolved = await credentials.resolve(credentialRef10(entry.credentialRef));
       if (resolved === void 0) {
         warnings.push(`${entry.id}: \u51ED\u636E\u672A\u914D\u7F6E`);
       } else {
@@ -60271,7 +57900,7 @@ async function importBackup(credentials, pool, raw) {
       continue;
     }
     try {
-      await credentials.set(credentialRef11(refName), value);
+      await credentials.set(credentialRef10(refName), value);
       credentialsImported++;
     } catch (error) {
       skipped.push(refName);
@@ -60296,213 +57925,11 @@ async function importBackup(credentials, pool, raw) {
 }
 
 // vendor/channel-pack/src/opencode-rpc.ts
-import { credentialRef as credentialRef12 } from "@deepseek-ai/dsh-credentials";
+import { credentialRef as credentialRef11 } from "@deepseek-ai/dsh-credentials";
 import { randomBytes as randomBytes10 } from "node:crypto";
-
-// vendor/channel-pack/src/opencode-product.ts
-var OPENCODE = {
-  id: "opencode",
-  // ⚠️ 必须与客户端 `PROVIDERS` 里的 label 逐字一致（rail 宽度算式依赖它，
-  // 且 `opencode-client-panel.spec.ts` 有跨文件一致性断言）。
-  displayName: "OpenCode",
-  // 免费模型的新入口统一挂在 /inference/v1；/zen/v1 对匿名免费模型
-  // 会返回 FreeTierError。这里保留 v1 后缀拆分，便于复用下方路径字段。
-  baseUrl: "https://opencode.ai/inference",
-  chatPath: "/v1/chat/completions",
-  modelsPath: "/v1/models",
-  // ⚠️ 与本仓库其余 provider 的流式超时常量同档（保守值）。
-  chatHeaderTimeoutMs: 6e4,
-  chatChunkTimeoutMs: 12e4,
-  // ⚠️ 匿名凭证是**字面量** `public`：opencode 官方 CLI 在没有 key 时自己就用它
-  // （其 provider.ts 的 opencode 分支：`options: ok ? {} : { apiKey: 'public' }`）。
-  anonymousKey: "public",
-  // ⚠️ 兜底 UA。**v2 形状**（`opencode/<channel>/<version>/<client>`，major ≥ 2）：
-  // 旧的 `opencode/1.18.22` 自 2026-10-14 起被上游按名字拒掉（403 FreeTierError）。
-  // 接线层会用真机 `opencode --version` 的结果改写成同形状（`opencode.ts` 的
-  // `opencodeUserAgentForVersion`）。
-  defaultUserAgent: "opencode/latest/2.0.26/cli",
-  /**
-   * 模型能力元数据源（**远端**，能力的主来源）。
-   *
-   * ⚠️ 不是 `/zen/v1/models` —— 实测它只返回 `id`/`object`/`created`/
-   * `owned_by` 四个字段，**不含任何能力信息**（85 条全如此）。
-   * 能力在 **models.dev** 的 `opencode` 条目里，官方 CLI 自己就用它
-   * （`packages/core/src/models-dev.ts`）。见 `opencode-capability.ts`。
-   */
-  modelsDevUrl: "https://models.dev/api.json",
-  /** 能力表缓存 TTL（与官方 CLI 的 60 分钟同档）。 */
-  modelsDevTtlMs: 60 * 60 * 1e3
-};
-var OPENCODE_MODELS_DEV_URL = OPENCODE.modelsDevUrl;
-var OPENCODE_MODELS_DEV_TTL_MS = OPENCODE.modelsDevTtlMs;
-var OPENCODE_FALLBACK_MODELS = [
-  // ── 匿名可用（chat 端点，无需 key）──
-  { id: "big-pickle", name: "Big Pickle", isFree: true, contextWindow: 262144 },
-  { id: "space-bunny-free", name: "Space Bunny Free", isFree: true, contextWindow: 262144 },
-  { id: "longcat-2.5-preview-free", name: "LongCat 2.5 Preview Free", isFree: true, contextWindow: 262144 },
-  { id: "mimo-v2.6-flash-free", name: "MiMo-V2.6-Flash Free", isFree: true, contextWindow: 262144 },
-  { id: "mimo-v2.5-free", name: "MiMo-V2.5 Free", isFree: true, contextWindow: 262144 },
-  { id: "deepseek-v4.1-flash-free", name: "DeepSeek V4.1 Flash Free", isFree: true, contextWindow: 2e5 },
-  { id: "glm-5.3-flash-free", name: "GLM 5.3 Flash Free", isFree: true, contextWindow: 2e5 },
-  // ⚠️ 这两个官方 docs 标注走 `/v1/models/{id}`（Gemini 风格），但**实测
-  // chat 端点也通** ⇒ 按 chat 处理。**以实测为准，不以 docs 为准。**
-  { id: "nemotron-3-ultra-free", name: "Nemotron 3 Ultra Free", isFree: true, contextWindow: 262144 },
-  { id: "nemotron-3.5-lightning-free", name: "Nemotron 3.5 Lightning Free", isFree: true, contextWindow: 262144 },
-  // ── 需付费 key（chat 端点；实测匿名为 401）──
-  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", isFree: false, contextWindow: 262144 },
-  { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash", isFree: false, contextWindow: 262144 },
-  { id: "glm-5.2", name: "GLM 5.2", isFree: false, contextWindow: 262144 },
-  { id: "kimi-k2.5", name: "Kimi K2.5", isFree: false, contextWindow: 262144 },
-  { id: "minimax-m2.7", name: "minimax M2.7", isFree: false, contextWindow: 262144 },
-  { id: "minimax-m3", name: "minimax M3", isFree: false, contextWindow: 262144 },
-  { id: "qwen3.8-max", name: "Qwen3.8 Max", isFree: false, contextWindow: 262144 }
-];
-var FREE_IDS = new Set(OPENCODE_FALLBACK_MODELS.filter((m) => m.isFree).map((m) => m.id));
-var REACHABLE_IDS = new Set(OPENCODE_FALLBACK_MODELS.map((m) => m.id));
-function isFreeOpencodeModel(id) {
-  return FREE_IDS.has(id);
-}
-function isReachableOpencodeModel(id) {
-  return REACHABLE_IDS.has(id);
-}
-function readableDetail(body) {
-  const text = body.trim();
-  if (text === "") return "\uFF08\u4E0A\u6E38\u672A\u8FD4\u56DE\u9519\u8BEF\u8BE6\u60C5\uFF09";
-  try {
-    const data = JSON.parse(text);
-    const nested = typeof data.error === "object" && data.error !== null ? data.error.message : data.error;
-    const parts = [data.message, nested, data.msg].filter((v) => typeof v === "string" && v.length > 0);
-    if (parts.length > 0) return parts.join(" ");
-  } catch {
-  }
-  return text.length > 500 ? `${text.slice(0, 500)}\u2026` : text;
-}
-function classifyOpencodeError(status, body, headers) {
-  const retryAfterMs = retryAfterMsFromRecord(headers);
-  const detail = readableDetail(body);
-  const lower = body.toLowerCase();
-  if (body.includes("FreeUsageLimitError")) {
-    return { kind: "free_usage_limit", ...retryAfterMs === void 0 ? {} : { retryAfterMs }, detail };
-  }
-  if (body.includes("GoUsageLimitError")) {
-    return { kind: "go_usage_limit", ...retryAfterMs === void 0 ? {} : { retryAfterMs }, detail };
-  }
-  if (body.includes("FreeTierError")) {
-    return { kind: "free_tier", detail };
-  }
-  if (status === 429 || lower.includes("too many requests") || lower.includes("rate limit")) {
-    return { kind: "rate_limit", ...retryAfterMs === void 0 ? {} : { retryAfterMs }, detail };
-  }
-  if (status === 0 || lower.includes("fetch failed") || lower.includes("terminated") || lower.includes("econnreset") || lower.includes("socket hang up") || lower.includes("getaddrinfo") || lower.includes("econnrefused")) {
-    return { kind: "transport", detail };
-  }
-  if (status === 402 || lower.includes("insufficient account funds") || lower.includes("insufficient funds") || lower.includes("insufficient balance")) {
-    return { kind: "quota", detail };
-  }
-  if (status === 401 || status === 403) return { kind: "auth", detail };
-  if (status >= 500) return { kind: "server", detail };
-  return { kind: "auth", detail };
-}
 
 // vendor/channel-pack/src/opencode-auth.ts
 import { randomBytes as randomBytes9 } from "node:crypto";
-
-// vendor/channel-pack/src/opencode.ts
-import { createHash as createHash6, randomBytes as randomBytes8 } from "node:crypto";
-var BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-var SESSION_TAIL_LENGTH = 26;
-var SESSION_RANDOM_LENGTH = SESSION_TAIL_LENGTH - 12;
-function randomBase62(length) {
-  const bytes = randomBytes8(length);
-  let out = "";
-  for (let i = 0; i < length; i++) out += BASE62[bytes[i] % BASE62.length];
-  return out;
-}
-function deriveProjectId(identity, generation) {
-  const inner = createHash6("sha256").update(`${identity} ${generation}`).digest("hex");
-  return createHash6("sha1").update(`git-remote:opencode/${inner}`).digest("hex");
-}
-function deriveSessionId2() {
-  const timestamp = Date.now();
-  if (timestamp !== lastSessionStamp) {
-    lastSessionStamp = timestamp;
-    sessionSequence = 0;
-  }
-  sessionSequence += 1;
-  const value = ~(BigInt(timestamp) * 0x1000n + BigInt(sessionSequence));
-  let hex = "";
-  for (let i = 0; i < 6; i += 1) {
-    hex += Number(value >> BigInt(40 - 8 * i) & 0xffn).toString(16).padStart(2, "0");
-  }
-  return `ses_${hex}${randomBase62(SESSION_RANDOM_LENGTH)}`;
-}
-var lastSessionStamp = 0;
-var sessionSequence = 0;
-var OPENCODE_V2_UA = /^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i;
-function opencodeUserAgent(override) {
-  const value = override?.trim();
-  if (value !== void 0 && value.length > 0 && OPENCODE_V2_UA.test(value)) return value;
-  return OPENCODE.defaultUserAgent;
-}
-function opencodeUserAgentForVersion(version) {
-  const value = version?.trim();
-  if (value === void 0 || !/^\d+\.\d+\.\d+$/.test(value)) return void 0;
-  const [major] = value.split(".");
-  if (Number(major) < 2) return void 0;
-  return `opencode/latest/${value}/cli`;
-}
-function opencodeHeaders(fingerprint, sessionId, userAgent) {
-  return {
-    "x-opencode-project": fingerprint.projectId,
-    "x-opencode-session": sessionId,
-    // v2：这四个头同值，缺一即 403。
-    "x-opencode-session-id": sessionId,
-    "x-session-affinity": sessionId,
-    "x-session-id": sessionId,
-    "x-opencode-client": "cli",
-    "user-agent": userAgent
-  };
-}
-function maskLabel(url) {
-  return url.replace(/^(\w+:\/\/[^:@/]+):[^@/]*@/, "$1:***@");
-}
-function authorityOf(raw) {
-  const afterScheme = raw.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
-  const cut = afterScheme.search(/[/?#]/);
-  return cut === -1 ? afterScheme : afterScheme.slice(0, cut);
-}
-function hasExplicitPort(authority) {
-  const hostPart = authority.includes("@") ? authority.slice(authority.lastIndexOf("@") + 1) : authority;
-  return /:\d+$/.test(hostPart);
-}
-function normalizeProxy(input) {
-  const raw = input.trim();
-  if (raw.length === 0) return { ok: false, reason: "\u4EE3\u7406\u5730\u5740\u4E3A\u7A7A\uFF08\u5982\u9700\u6E05\u9664\uFF0C\u8BF7\u70B9\u300C\u6E05\u9664\u4EE3\u7406\u300D\uFF09" };
-  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) ? raw : `http://${raw}`;
-  const url = withScheme.replace(/^socks5h:\/\//, "socks5://");
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { ok: false, reason: "\u65E0\u6CD5\u89E3\u6790\u4E3A URL\uFF08\u5F62\u5982 http://host:port\uFF09" };
-  }
-  const kind = parsed.protocol === "http:" || parsed.protocol === "https:" ? "http" : parsed.protocol === "socks5:" ? "socks5" : void 0;
-  if (kind === void 0) {
-    return { ok: false, reason: `\u4E0D\u652F\u6301\u7684\u534F\u8BAE ${parsed.protocol.replace(":", "")}\uFF08\u4EC5\u652F\u6301 http/https/socks5\uFF09` };
-  }
-  if (parsed.hostname.length === 0) return { ok: false, reason: "\u7F3A\u5C11\u4E3B\u673A\u540D" };
-  if (!hasExplicitPort(authorityOf(raw))) return { ok: false, reason: "\u7F3A\u5C11\u7AEF\u53E3\uFF08\u5982 http://127.0.0.1:7897\uFF09" };
-  const scheme = kind === "socks5" ? "socks5" : parsed.protocol.replace(":", "");
-  const auth = parsed.username.length > 0 ? `${parsed.username}${parsed.password.length > 0 ? `:${parsed.password}` : ""}@` : "";
-  const rawHostPort = authorityOf(raw);
-  const hostOnly = auth.length > 0 ? rawHostPort.slice(rawHostPort.lastIndexOf("@") + 1) : rawHostPort;
-  const portMatch = /:(\d+)$/.exec(hostOnly);
-  const port = portMatch?.[1] ?? parsed.port;
-  const normalized = `${scheme}://${auth}${parsed.hostname}:${port}`;
-  return { ok: true, proxy: { kind, url: normalized, label: maskLabel(normalized) } };
-}
-
-// vendor/channel-pack/src/opencode-auth.ts
 function newAccountFingerprint(apiKey) {
   return { projectId: deriveProjectId(apiKey, 0), generation: 0 };
 }
@@ -60556,170 +57983,6 @@ async function ensureDefaultAnonymousSlot(addEntry, writeCredential, listEntries
   }
 }
 
-// vendor/channel-pack/src/opencode-proxy.ts
-var import_undici = __toESM(require_undici(), 1);
-import { connect as netConnect } from "node:net";
-import { URL as URL2 } from "node:url";
-var PROXY_CACHE_LIMIT = 16;
-var cache4 = /* @__PURE__ */ new Map();
-function buildProxyDispatcher(proxy) {
-  const existing = cache4.get(proxy.url);
-  if (existing !== void 0) return existing;
-  const created = createProxyDispatcher(proxy);
-  cache4.delete(proxy.url);
-  cache4.set(proxy.url, created);
-  while (cache4.size > PROXY_CACHE_LIMIT) {
-    const oldest = cache4.keys().next();
-    if (oldest.done === true) break;
-    const victim = cache4.get(oldest.value);
-    cache4.delete(oldest.value);
-    if (victim !== void 0) {
-      void Promise.resolve(victim.close?.()).catch(() => {
-      });
-    }
-  }
-  return created;
-}
-function createProxyDispatcher(proxy) {
-  return proxy.kind === "http" ? buildHttpDispatcher(proxy.url) : buildSocksDispatcher(proxy);
-}
-async function closeAllProxyDispatchers() {
-  const all = [...cache4.values()];
-  cache4.clear();
-  await Promise.allSettled(all.map(async (d) => {
-    try {
-      await d.close();
-    } catch {
-    }
-  }));
-}
-function buildHttpDispatcher(url) {
-  return new import_undici.ProxyAgent({
-    uri: url,
-    // ⚠️ `pipelining: 0` 是必需的（见模块头）；`clientFactory` 由 undici 在
-    // 每次建连时调用，用它把默认 Pool 换成禁用复用的 Pool。
-    clientFactory: (origin, opts) => new import_undici.Pool(origin, { ...opts, pipelining: 0 })
-  });
-}
-function buildSocks5Handshake(proxy) {
-  const parsed = new URL2(proxy.url);
-  const wantsAuth = parsed.username.length > 0;
-  return wantsAuth ? new Uint8Array([5, 2, 0, 2]) : new Uint8Array([5, 1, 0]);
-}
-async function openSocks5Tunnel(proxy, host, port) {
-  const parsed = new URL2(proxy.url);
-  const socket = await new Promise((resolve2, reject) => {
-    const s = netConnect({ host: parsed.hostname, port: Number(parsed.port) });
-    s.once("connect", () => resolve2(s));
-    s.once("error", reject);
-  });
-  const fail = (error) => {
-    throw error;
-  };
-  const write = (bytes) => new Promise((resolve2, reject) => {
-    socket.write(Buffer.from(bytes), (err) => err ? reject(err) : resolve2());
-  });
-  let leftover = Buffer.alloc(0);
-  let pending;
-  const detach = () => {
-    socket.off("data", onData);
-    socket.off("error", onError);
-    socket.off("close", onClose);
-  };
-  const fulfill = () => {
-    if (pending === void 0 || leftover.length < pending.n) return;
-    const n = pending.n;
-    const target = pending;
-    pending = void 0;
-    const value = new Uint8Array(leftover.subarray(0, n));
-    leftover = leftover.subarray(n);
-    detach();
-    target.resolve(value);
-  };
-  const onData = (chunk) => {
-    leftover = leftover.length === 0 ? chunk : Buffer.concat([leftover, chunk]);
-    fulfill();
-  };
-  const onError = (error) => {
-    const target = pending;
-    pending = void 0;
-    detach();
-    target?.reject(error);
-  };
-  const onClose = () => {
-    const target = pending;
-    pending = void 0;
-    detach();
-    target?.reject(new Error("SOCKS5 \u4EE3\u7406\u5728\u63E1\u624B\u5B8C\u6210\u524D\u5173\u95ED\u4E86\u8FDE\u63A5"));
-  };
-  const read = (n) => new Promise((resolve2, reject) => {
-    if (n <= 0) {
-      resolve2(new Uint8Array(0));
-      return;
-    }
-    pending = { n, resolve: resolve2, reject };
-    socket.on("data", onData);
-    socket.once("error", onError);
-    socket.once("close", onClose);
-    fulfill();
-  });
-  try {
-    await write(buildSocks5Handshake(proxy));
-    const methodReply = await read(2);
-    const method = methodReply[1];
-    if (method === 2) {
-      const user = Buffer.from(decodeURIComponent(parsed.username), "utf8");
-      const pass = Buffer.from(decodeURIComponent(parsed.password), "utf8");
-      await write(new Uint8Array([1, user.length, ...user, pass.length, ...pass]));
-      const authReply = await read(2);
-      if (authReply[1] !== 0) fail(new Error("SOCKS5 \u7528\u6237\u540D/\u5BC6\u7801\u8BA4\u8BC1\u5931\u8D25"));
-    } else if (method !== 0) {
-      fail(new Error(`SOCKS5 \u670D\u52A1\u7AEF\u8981\u6C42\u672A\u77E5\u8BA4\u8BC1\u65B9\u5F0F 0x${(method ?? 0).toString(16)}`));
-    }
-    const target = Buffer.from(host, "utf8");
-    await write(new Uint8Array([
-      5,
-      1,
-      0,
-      3,
-      target.length,
-      ...target,
-      port >>> 8 & 255,
-      port & 255
-    ]));
-    const reply2 = await read(4);
-    if (reply2[1] !== 0) {
-      fail(new Error(`SOCKS5 CONNECT \u88AB\u62D2\u7EDD\uFF08\u5E94\u7B54\u7801 0x${(reply2[1] ?? 0).toString(16)}\uFF09`));
-    }
-    const atyp = reply2[3];
-    if (atyp === 1) await read(4 + 2);
-    else if (atyp === 4) await read(16 + 2);
-    else if (atyp === 3) await read(1).then((lenByte) => read((lenByte[0] ?? 0) + 2));
-    else fail(new Error(`SOCKS5 \u5E94\u7B54\u7684\u5730\u5740\u7C7B\u578B 0x${(atyp ?? 0).toString(16)} \u4E0D\u53D7\u652F\u6301`));
-    return socket;
-  } catch (error) {
-    socket.destroy();
-    throw error;
-  }
-}
-function buildSocksDispatcher(proxy) {
-  return new import_undici.Agent({
-    connect: ((opts, callback) => {
-      const host = String(opts.hostname ?? opts.host ?? "");
-      const port = Number(opts.port ?? 443);
-      if (host.length === 0) {
-        callback(new Error("SOCKS5 \u4EE3\u7406\uFF1A\u76EE\u6807 host \u4E3A\u7A7A"), void 0);
-        return;
-      }
-      openSocks5Tunnel(proxy, host, port).then((socket) => {
-        callback(null, socket);
-      }).catch((error) => {
-        callback(error, void 0);
-      });
-    })
-  });
-}
-
 // vendor/channel-pack/src/opencode-rpc.ts
 var KEY_PATTERN = /^sk-[A-Za-z0-9_-]{20,}$/;
 var EXIT_IP_URL = "http://ip-api.com/json/?fields=status,query,country";
@@ -60745,7 +58008,7 @@ async function handleOpencodeRpc(ctx, pool, method, payload) {
           return done({ accountId: id, existed: true });
         }
         const nickname = typeof req.nickname === "string" && req.nickname.trim().length > 0 ? req.nickname.trim() : `OpenCode ${apiKey.slice(-6)}`;
-        await ctx.credentials.set(credentialRef12(refName), JSON.stringify({
+        await ctx.credentials.set(credentialRef11(refName), JSON.stringify({
           api_key: apiKey,
           nickname,
           // 指纹在此**首次固化**，之后由池里的代次权威重算（见 index.ts 接线注释）。
@@ -60770,7 +58033,7 @@ async function handleOpencodeRpc(ctx, pool, method, payload) {
         const refName = `OPENCODE_ANON_${randomBytes10(4).toString("hex").toUpperCase()}`;
         const count2 = pool.listAccountsByProvider(OPENCODE.id).filter((a) => a.id.startsWith(`${OPENCODE.id}-anon-`)).length;
         const nickname = typeof req?.nickname === "string" && req.nickname.trim().length > 0 ? req.nickname.trim() : `\u533F\u540D\u901A\u9053 ${count2 + 1}`;
-        await ctx.credentials.set(credentialRef12(refName), JSON.stringify({
+        await ctx.credentials.set(credentialRef11(refName), JSON.stringify({
           api_key: OPENCODE.anonymousKey,
           nickname
         }));
@@ -60905,19 +58168,12 @@ function createBadgePreferenceStore(ctx) {
 }
 
 // vendor/channel-pack/src/badge-subscription.ts
-var PLAN_PACKAGE_PATTERN = /plan|subscription|套餐|体验版/i;
 var BALANCE_PLAN_LABEL = "\u5957\u9910";
-var planPackageSelector = Object.freeze({
-  kind: "package",
-  matches: (name2) => PLAN_PACKAGE_PATTERN.test(name2)
-});
 var qoderPlanSelector = Object.freeze({
   kind: "package",
   matches: (name2) => name2 === QODER_PLAN_PACKAGE
 });
 var BADGE_PLAN_SELECTORS = Object.freeze({
-  buddy: planPackageSelector,
-  workbuddy: planPackageSelector,
   qoder: qoderPlanSelector,
   qodercn: qoderPlanSelector,
   zcode: Object.freeze({ kind: "balance" })
@@ -60967,10 +58223,10 @@ function badgeTtlMs(env = process.env) {
 function badgeFailureTtlMs(env = process.env) {
   return nonNegativeMs2(env[DSH_CHANNEL_PACK_BADGE_TTL_MS], BADGE_FAILURE_TTL_MS);
 }
-function nonNegativeMs2(raw, fallback) {
-  if (typeof raw !== "string" || raw.trim().length === 0) return fallback;
+function nonNegativeMs2(raw, fallback2) {
+  if (typeof raw !== "string" || raw.trim().length === 0) return fallback2;
   const parsed = Number(raw.trim());
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback2;
 }
 var BadgeRpcFailure = class extends Error {
   constructor(detail) {
@@ -61400,14 +58656,6 @@ function normalizeZcodeLoginProvider(raw) {
   }
   return ZCODE_LOGIN_PROVIDER;
 }
-function parseBuddyCredential(raw) {
-  try {
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string" ? parsed : void 0;
-  } catch {
-    return void 0;
-  }
-}
 function parseCodeArtsCredential(raw) {
   try {
     const parsed = JSON.parse(raw);
@@ -61461,8 +58709,6 @@ function buildRaccoonNickname(credential, fallbackId) {
 }
 var PERMANENT_LOCK_PROVIDERS = /* @__PURE__ */ new Set([
   LOOMY.id,
-  CODEBUDDY.id,
-  WORKBUDDY.id,
   RACCOON.id
 ]);
 var LONG_TERM_PREFERRED_PROVIDERS = /* @__PURE__ */ new Set([
@@ -61516,18 +58762,15 @@ var CREDITS_CLAIMABLE_WITHOUT_STATUS = /* @__PURE__ */ new Set([
   ZCODE.id
 ]);
 async function collectCreditsStatus(accounts, product, deps) {
-  const fetcher = deps.fetcher ?? fetch;
-  const fetchStatus = deps.fetchStatus ?? (async (credential, product2) => fetchCheckinStatus(
-    credential,
-    product2,
-    fetcher
-  ));
+  const fetchStatus = deps.fetchStatus ?? (async () => {
+    throw new Error("\u8BE5\u6E20\u9053\u672A\u63D0\u4F9B\u7B7E\u5230\u72B6\u6001\u67E5\u8BE2");
+  });
   const results = [];
   for (const entry of accounts) {
     let status = null;
     let error;
     try {
-      const resolved = await deps.resolve(credentialRef13(entry.credentialRef));
+      const resolved = await deps.resolve(credentialRef12(entry.credentialRef));
       if (resolved === void 0) {
         error = "\u51ED\u636E\u672A\u914D\u7F6E";
       } else {
@@ -61550,24 +58793,19 @@ async function collectCreditsStatus(accounts, product, deps) {
   return results;
 }
 async function collectClaimResults(accounts, product, deps) {
-  const fetcher = deps.fetcher ?? fetch;
-  const fetchStatus = deps.fetchStatus ?? (async (credential, product2) => fetchCheckinStatus(
-    credential,
-    product2,
-    fetcher
-  ));
-  const claim = deps.claim ?? (async (credential, product2) => claimDailyCheckin(
-    credential,
-    product2,
-    fetcher
-  ));
+  const fetchStatus = deps.fetchStatus ?? (async () => {
+    throw new Error("\u8BE5\u6E20\u9053\u672A\u63D0\u4F9B\u7B7E\u5230\u72B6\u6001\u67E5\u8BE2");
+  });
+  const claim = deps.claim ?? (async () => {
+    throw new Error("\u8BE5\u6E20\u9053\u672A\u63D0\u4F9B\u7B7E\u5230\u9886\u53D6");
+  });
   const precheck = deps.precheckStatus !== false;
   const results = [];
   const outcomes = [];
   for (const entry of accounts) {
     let outcome;
     try {
-      const resolved = await deps.resolve(credentialRef13(entry.credentialRef));
+      const resolved = await deps.resolve(credentialRef12(entry.credentialRef));
       if (resolved === void 0) {
         outcome = { kind: "failed", code: -1, message: "\u51ED\u636E\u672A\u914D\u7F6E" };
       } else {
@@ -61599,12 +58837,9 @@ async function collectClaimResults(accounts, product, deps) {
   return { results, summary: computeClaimSummary(outcomes) };
 }
 async function collectCreditBalances(accounts, product, deps) {
-  const fetcher = deps.fetcher ?? fetch;
-  const fetchBalance = deps.fetchBalance ?? (async (credential, product2) => fetchCreditBalance(
-    credential,
-    product2,
-    fetcher
-  ));
+  const fetchBalance = deps.fetchBalance ?? (async () => {
+    throw new Error("\u8BE5\u6E20\u9053\u672A\u63D0\u4F9B\u4F59\u989D\u67E5\u8BE2");
+  });
   const fetchDetailed = deps.fetchBalanceDetailed;
   const results = [];
   for (const entry of accounts) {
@@ -61612,7 +58847,7 @@ async function collectCreditBalances(accounts, product, deps) {
     let error;
     let extra;
     try {
-      const resolved = await deps.resolve(credentialRef13(entry.credentialRef));
+      const resolved = await deps.resolve(credentialRef12(entry.credentialRef));
       if (resolved === void 0) {
         error = "\u51ED\u636E\u672A\u914D\u7F6E";
       } else {
@@ -61681,14 +58916,12 @@ function providerIdsOf(llm, modelAdapters) {
   const keys = Object.keys(modelAdapters ?? {});
   return keys.length > 0 ? keys.map((id) => ({ id })) : void 0;
 }
-function registerChannelPackRpc(ctx, pool, codearts, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config = {}) {
+function registerChannelPackRpc(ctx, pool, codearts, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config = {}) {
   ctx.inject(["connection"], (connectionCtx) => {
     registerChannelPackEndpoints(
       connectionCtx,
       pool,
       codearts,
-      buddy,
-      workbuddy,
       lobsterai,
       qoder,
       qoderCn,
@@ -61723,7 +58956,7 @@ async function fullCatalogIds(ctx, modelAdapters, provider) {
     return { error: `\u8BFB\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25\uFF1A${reason}` };
   }
 }
-function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config = {}) {
+function registerChannelPackEndpoints(ctx, pool, codearts, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config = {}) {
   const connection = ctx.connection ?? ctx.get("connection");
   if (!connection || typeof connection.fetch?.register !== "function") {
     ctx.logger.warn("[channel-pack] connection.fetch not available, RPC endpoints not registered");
@@ -61746,7 +58979,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
     store: createAutoCheckinStore(ctx),
     listProviderIds: async () => {
       const accounts = await pool.listAllAccounts();
-      return [...new Set(accounts.map((entry) => entry.provider))].sort();
+      return [...new Set(accounts.filter((entry) => !isRetiredProvider(entry.provider)).map((entry) => entry.provider))].sort();
     },
     claim: (provider) => handleMethod("credits.claimAll", { provider }),
     warn: (message2) => ctx.logger?.warn?.(message2)
@@ -61765,17 +58998,17 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
     path: CHANNEL_PACK_API_PATH,
     methods: ["POST"],
     requestBody: "buffered",
-    async fetch(request2) {
-      if (request2.method !== "POST") {
+    async fetch(request) {
+      if (request.method !== "POST") {
         return new Response("method not allowed", { status: 405 });
       }
-      const contentType = request2.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+      const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
       if (contentType !== "application/json") {
         return new Response("content type must be application/json", { status: 415 });
       }
       let message2;
       try {
-        message2 = await request2.json();
+        message2 = await request.json();
       } catch {
         return new Response("body is not JSON", { status: 400 });
       }
@@ -61785,7 +59018,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         return reply(rpcId, { ok: false, error: { code: "gateway/bad-request", message: "Invalid Channel Pack management request." } });
       }
       try {
-        const result = await handleMethod(call.method, call.payload, request2.signal);
+        const result = await handleMethod(call.method, call.payload, request.signal);
         return reply(rpcId, result);
       } catch (error) {
         const message3 = error instanceof Error ? error.message : String(error);
@@ -61809,8 +59042,8 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
     path: CAPTCHA_CARRIER_PATH,
     methods: ["GET"],
     requestBody: "buffered",
-    async fetch(request2) {
-      if (request2.method !== "GET") {
+    async fetch(request) {
+      if (request.method !== "GET") {
         return new Response("method not allowed", { status: 405 });
       }
       const html = buildCarrierPageHtml(await carrierCaptchaConfig());
@@ -61829,7 +59062,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
     const out = [];
     for (const account of accounts) {
       try {
-        const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+        const resolved = await ctx.credentials.resolve(credentialRef12(account.credentialRef));
         if (!resolved) {
           out.push(account);
           continue;
@@ -61890,7 +59123,21 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
       packages
     };
   }
-  async function handleMethod(method, payload, _signal) {
+  async function handleMethod(method, payload, signal) {
+    const request = payload !== null && typeof payload === "object" ? payload : void 0;
+    const account = typeof request?.accountId === "string" ? pool.findAccount(request.accountId) : void 0;
+    if (isRetiredProvider(request?.provider) || isRetiredProvider(account?.provider)) {
+      return { ok: false, error: { code: "provider-retired", message: "WorkBuddy \u56FD\u5185\u7248\u548C\u56FD\u9645\u7248\u6E20\u9053\u5DF2\u79FB\u9664\uFF1B\u5386\u53F2\u8D26\u53F7\u51ED\u636E\u4FDD\u6301\u4E0D\u53D8\u3002" } };
+    }
+    const codeartsFetcher = (input, init) => {
+      const fetcher = config.codeartsFetcher ?? directFetch;
+      if (!signal) return fetcher(input, init);
+      const upstreamSignal = init?.signal ?? (input instanceof Request ? input.signal : void 0);
+      return fetcher(input, {
+        ...init,
+        signal: upstreamSignal ? AbortSignal.any([signal, upstreamSignal]) : signal
+      });
+    };
     if (method.startsWith("opencode.")) {
       if (config.disableOpencode === true) {
         return { ok: false, error: { code: "provider-disabled", message: "OpenCode account integration is disabled in this host" } };
@@ -61913,47 +59160,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         const id = `${provider}-${shortId()}`;
         const suffix = shortId().toUpperCase();
         const refName = `${provider.toUpperCase()}_ACCOUNT_${suffix}`;
-        const product = productById(provider);
-        if (product !== void 0) {
-          let state;
-          let authUrl;
-          try {
-            const authState = await fetchAuthState(void 0, void 0, product);
-            state = authState.state;
-            authUrl = decorateLoginUrl(authState.authUrl, product);
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
-            throw new Error(`\u65E0\u6CD5\u83B7\u53D6 ${product.displayName} \u767B\u5F55\u5730\u5740\uFF08Host \u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF09\uFF1A${reason}`);
-          }
-          const ref = credentialRef13(refName);
-          await pool.addAccount({
-            id,
-            provider: product.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            refreshable: false,
-            createdAt: Date.now()
-          });
-          runBuddyLoginFlow({ openBrowser: () => {
-          }, state, product }).then(async (flow) => {
-            await ctx.credentials.set(ref, flow.access);
-            (product.id === CODEBUDDY.id ? buddy : workbuddy).scheduleRefresh();
-            const credential = parseBuddyCredential(flow.access);
-            await pool.updateAccount(id, {
-              nickname: credential?.nickname ?? id,
-              // Buddy 的 expires_at 是字符串形式的毫秒时间戳，
-              // 必须用 credentialExpiresAtMs 解析（Date.parse 对纯数字串会得到 NaN）。
-              expiresAt: credential ? credentialExpiresAtMs(credential) : void 0,
-              refreshable: Boolean(credential?.refresh_token)
-            });
-          }).catch((err) => {
-            ctx.logger.warn(`[channel-pack] background ${product.id} login failed for ${id}: ${err}`);
-            void pool.removeAccount(id).catch(() => {
-            });
-          });
-          return { ok: true, value: { accountId: id, loginUrl: authUrl } };
-        } else if (provider === "codearts") {
+        if (provider === "codearts") {
           const started = await codearts.startLogin({ refName });
           await pool.addAccount({
             id,
@@ -62004,11 +59211,11 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           });
           return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } };
         } else if (isQoderFamily(provider)) {
-          const { product: product2, auth } = requireQoderFamily(provider);
+          const { product, auth } = requireQoderFamily(provider);
           const started = await auth.startLogin({ refName });
           await pool.addAccount({
             id,
-            provider: product2.id,
+            provider: product.id,
             nickname: id,
             enabled: true,
             credentialRef: refName,
@@ -62019,10 +59226,10 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             const credential = parseQoderCredential(loginResult.access);
             let nickname = credential?.nickname;
             if ((nickname === void 0 || nickname.length === 0) && credential !== void 0) {
-              nickname = await fetchQoderUserNickname(credential, product2);
+              nickname = await fetchQoderUserNickname(credential, product);
               if (nickname !== void 0 && loginResult.access.length > 0) {
                 const updated = withQoderNickname(credential, nickname);
-                await ctx.credentials.set(credentialRef13(refName), JSON.stringify(updated));
+                await ctx.credentials.set(credentialRef12(refName), JSON.stringify(updated));
               }
             }
             await pool.updateAccount(id, {
@@ -62031,7 +59238,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               refreshable: credential !== void 0 && isQoderRefreshable(credential)
             });
           }).catch((error) => {
-            ctx.logger.warn(`[channel-pack] background ${product2.id} login failed for ${id}: ${String(error)}`);
+            ctx.logger.warn(`[channel-pack] background ${product.id} login failed for ${id}: ${String(error)}`);
             void pool.removeAccount(id).catch(() => {
             });
           });
@@ -62349,12 +59556,6 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             case "codearts":
               await codearts.refreshAccountCredential(entry.credentialRef, pool, entry.id);
               break;
-            case "buddy":
-              await buddy.refreshAccountCredential(entry.credentialRef, pool, entry.id);
-              break;
-            case "workbuddy":
-              await workbuddy.refreshAccountCredential(entry.credentialRef, pool, entry.id);
-              break;
             case LOBSTERAI.id:
               await lobsterai.refreshAccountCredential(entry.credentialRef, pool, entry.id);
               break;
@@ -62407,7 +59608,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         const accounts = await pool.listAllAccounts();
         const entry = accounts.find((a) => a.id === req.accountId);
         if (!entry) return { ok: true, value: { done: false } };
-        const ref = credentialRef13(entry.credentialRef);
+        const ref = credentialRef12(entry.credentialRef);
         const resolved = await ctx.credentials.resolve(ref);
         if (!resolved) return { ok: true, value: { done: false } };
         if (entry.provider === ZCODE.id) {
@@ -62461,8 +59662,8 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             value: { done: false, error: "\u8BF7\u5148\u53D1\u9001\u9A8C\u8BC1\u7801" }
           };
         }
-        const account = pool.findAccount(req.accountId);
-        if (account === void 0) {
+        const account2 = pool.findAccount(req.accountId);
+        if (account2 === void 0) {
           return {
             ok: true,
             value: { done: false, error: "\u8D26\u53F7\u4E0D\u5B58\u5728\uFF08\u53EF\u80FD\u5DF2\u88AB\u5220\u9664\uFF09" }
@@ -62470,7 +59671,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         try {
           const result = await loomy.loginWithSmsCode(pending.phone, req.code, pending.msgid, {
-            refName: account.credentialRef
+            refName: account2.credentialRef
           });
           const credential = JSON.parse(result.access);
           await pool.updateAccount(req.accountId, {
@@ -62503,11 +59704,11 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider !== LOOMY.id && req.provider !== RACCOON.id) {
           return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
         }
-        const account = pool.findAccount(req.accountId);
-        if (account === void 0) {
+        const account2 = pool.findAccount(req.accountId);
+        if (account2 === void 0) {
           return { ok: false, error: { code: "bad-request", message: "\u8D26\u53F7\u4E0D\u5B58\u5728" } };
         }
-        const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+        const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
         if (!resolved) {
           return { ok: false, error: { code: "bad-request", message: "\u51ED\u636E\u672A\u914D\u7F6E" } };
         }
@@ -62575,8 +59776,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         const lockResponse = () => ({
           provider,
-          locked: pool.permanentLocked(provider),
-          ...provider === CODEBUDDY.id || provider === WORKBUDDY.id ? { windowDays: buddyExpiringWindowDays() } : {}
+          locked: pool.permanentLocked(provider)
         });
         if (req.locked === void 0) {
           return { ok: true, value: lockResponse() };
@@ -62627,7 +59827,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             return { ok: false, error: { code: "bad-request", message: "accountId \u5FC5\u987B\u662F\u975E\u7A7A\u5B57\u7B26\u4E32\u6216 null" } };
           }
           const accountId = req.accountId.trim();
-          if (!pool.listAccountsByProvider(provider).some((account) => account.id === accountId)) {
+          if (!pool.listAccountsByProvider(provider).some((account2) => account2.id === accountId)) {
             return { ok: false, error: { code: "bad-request", message: `\u8D26\u53F7\u4E0D\u5B58\u5728\uFF1A${accountId}` } };
           }
           await pool.setLongTermPreferred(provider, accountId);
@@ -62650,11 +59850,11 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         if (req.provider !== LOOMY.id && req.provider !== RACCOON.id) {
           return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
         }
-        const account = pool.findAccount(req.accountId);
-        if (account === void 0) {
+        const account2 = pool.findAccount(req.accountId);
+        if (account2 === void 0) {
           return { ok: false, error: { code: "bad-request", message: "\u8D26\u53F7\u4E0D\u5B58\u5728" } };
         }
-        const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+        const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
         if (!resolved) {
           return { ok: false, error: { code: "bad-request", message: "\u51ED\u636E\u672A\u914D\u7F6E" } };
         }
@@ -62698,10 +59898,10 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
       // 重测发一次最小对话请求：正常返回才清除标记，仍受限则保留并回报原因。
       case "account.retest": {
         const req = payload;
-        const account = await retestAccount(pool, req.accountId);
+        const account2 = await retestAccount(pool, req.accountId);
         return {
           ok: true,
-          value: { accounts: [account], clearedCount: account.cleared.length }
+          value: { accounts: [account2], clearedCount: account2.cleared.length }
         };
       }
       // 重测该 provider 下的全部账号。**包含已停用账号**——用户明确要求
@@ -62767,18 +59967,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
       // ── 每日签到（积分领取）──
       // 查询某 provider 下全部启用账号的签到状态。
       //
-      // 四个 provider 分属**三套互不相同的协议**，各自在自己的分支里处理：
-      //   - CodeBuddy 系（buddy / workbuddy）：`productById()` 取 BuddyProduct，
-      //     走 `collectCreditsStatus` 的默认实现；
-      //   - `lobsterai`：slot → context 三步，无独立状态端点；
-      //   - `codearts`：华为云 SDK-HMAC-SHA256 签名，无独立状态端点。
-      //
-      // ⚠️ 只有 CodeBuddy 系能经 `productById()` 解析出产品配置；后两者
-      // **必须各自提前分支**，否则会落到下面的 bad-request。历史上 CodeArts
-      // 就是因此恒回 `unsupported provider: codearts`（客户端在面板挂载时
-      // 无条件调用 credits.balances，于是每打开一次设置页都在控制台报错并把
-      // 账号卡片标成查询失败）。现在 CodeArts 已有真实实现，该 bad-request
-      // 只对**未知** provider 生效。
+      // 各渠道显式分派协议，未知或退役渠道不调用任何默认端点。
       case "credits.status": {
         const req = payload;
         if (req.provider === "codearts") {
@@ -62852,68 +60041,59 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           );
           return { ok: true, value: { accounts: value } };
         }
-        const product = productById(req.provider);
-        if (product === void 0) {
-          const claimable = CREDITS_CLAIMABLE_WITHOUT_STATUS.has(req.provider);
-          if (!claimable) {
-            return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
-          }
-          const accounts2 = await pool.listAccounts(req.provider);
-          return {
-            ok: true,
-            value: {
-              accounts: accounts2.map((entry) => ({
-                accountId: entry.id,
-                nickname: entry.nickname,
-                status: null,
-                unsupported: true
-              }))
-            }
-          };
+        const claimable = CREDITS_CLAIMABLE_WITHOUT_STATUS.has(req.provider);
+        if (!claimable) {
+          return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
         }
         const accounts = await pool.listAccounts(req.provider);
-        const results = await collectCreditsStatus(accounts, product, {
-          resolve: (ref) => ctx.credentials.resolve(ref),
-          warn: (msg) => ctx.logger?.warn?.(msg)
-        });
-        return { ok: true, value: { accounts: results } };
+        return {
+          ok: true,
+          value: {
+            accounts: accounts.map((entry) => ({
+              accountId: entry.id,
+              nickname: entry.nickname,
+              status: null,
+              unsupported: true
+            }))
+          }
+        };
       }
       // 一键领取：逐账号顺序执行（并发易触发风控），单个账号失败不中断整体。
       case "credits.claimAll": {
         const req = payload;
         const accounts = await pool.listAccounts(req.provider);
         if (isQoderFamily(req.provider)) {
-          const { product: product2 } = requireQoderFamily(req.provider);
-          const value2 = await collectClaimResults(accounts, void 0, {
+          const { product } = requireQoderFamily(req.provider);
+          const value = await collectClaimResults(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
-            claim: (credential) => claimQoderDailyCheckin(credential, product2),
+            claim: (credential) => claimQoderDailyCheckin(credential, product),
             precheckStatus: false,
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: value2 };
+          return { ok: true, value };
         }
         if (req.provider === "codearts") {
-          const value2 = await collectClaimResults(accounts, void 0, {
+          const value = await collectClaimResults(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
-            claim: (credential) => claimCodeArtsDailyCheckin(credential),
+            claim: (credential) => claimCodeArtsDailyCheckin(credential, codeartsFetcher),
             precheckStatus: false,
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: value2 };
+          return { ok: true, value };
         }
         if (req.provider === LOBSTERAI.id) {
           const clientVersion = await lobsterai.resolveClientVersion();
-          const value2 = await collectClaimResults(accounts, LOBSTERAI, {
+          const value = await collectClaimResults(accounts, LOBSTERAI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
-            claim: (credential, product2) => claimLobsteraiDailyCheckin(credential, product2, clientVersion),
+            claim: (credential, product) => claimLobsteraiDailyCheckin(credential, product, clientVersion),
             // 领取流程内部已做 slot/context 预检，不需要外部再查一次状态。
             precheckStatus: false,
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: value2 };
+          return { ok: true, value };
         }
         if (req.provider === TRAE.id) {
-          const value2 = await collectClaimResults(accounts, void 0, {
+          const value = await collectClaimResults(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             // ⚠️ **必须开启状态预检**（`precheckStatus` 默认为 true，不要传 false）。
             //
@@ -62933,16 +60113,16 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             ),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: value2 };
+          return { ok: true, value };
         }
         if (req.provider === LOOMY.id) {
           const values = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             if (!resolved) {
               values.push({
-                accountId: account.id,
-                nickname: account.nickname,
+                accountId: account2.id,
+                nickname: account2.nickname,
                 outcome: { kind: "failed", code: -1, message: "\u51ED\u636E\u672A\u914D\u7F6E" }
               });
               continue;
@@ -62952,14 +60132,14 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               credential = JSON.parse(resolved.value);
             } catch {
               values.push({
-                accountId: account.id,
-                nickname: account.nickname,
+                accountId: account2.id,
+                nickname: account2.nickname,
                 outcome: { kind: "failed", code: -1, message: "\u51ED\u636E\u89E3\u6790\u5931\u8D25" }
               });
               continue;
             }
             const outcome = await loomy.claimDailyQuota(credential);
-            values.push({ accountId: account.id, nickname: account.nickname, outcome });
+            values.push({ accountId: account2.id, nickname: account2.nickname, outcome });
           }
           return {
             ok: true,
@@ -62978,38 +60158,29 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             }
           };
         }
-        if (req.provider === "workbuddy") {
-          return {
-            ok: false,
-            error: {
-              code: "bad-request",
-              message: "WorkBuddy \u56FD\u9645\u7248\u4E0D\u652F\u6301\u6BCF\u65E5\u7B7E\u5230\uFF08\u5176\u540E\u7AEF\u6CA1\u6709\u7B7E\u5230\u63A5\u53E3\uFF09"
-            }
-          };
-        }
         if (req.provider === RACCOON.id) {
-          const value2 = await collectClaimResults(accounts, RACCOON, {
+          const value = await collectClaimResults(accounts, RACCOON, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             fetchStatus: (credential) => raccoon.fetchDailyGrantStatus(credential),
             claim: (credential) => raccoon.claimDailyGrant(credential),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: value2 };
+          return { ok: true, value };
         }
         if (req.provider === MINIMAX.id) {
-          const value2 = await collectClaimResults(accounts, void 0, {
+          const value = await collectClaimResults(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             fetchStatus: (credential) => fetchMinimaxSigninStatus(credential),
             claim: (credential) => claimMinimaxDailyCheckin(credential),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: value2 };
+          return { ok: true, value };
         }
         if (req.provider === ZCODE.id) {
           const results = [];
           const outcomes = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             let accountOutcomes;
             if (!resolved) {
               accountOutcomes = [{ kind: "failed", code: -1, message: "\u51ED\u636E\u672A\u914D\u7F6E" }];
@@ -63029,7 +60200,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               }
             }
             for (const outcome of accountOutcomes) {
-              results.push({ accountId: account.id, nickname: account.nickname, outcome });
+              results.push({ accountId: account2.id, nickname: account2.nickname, outcome });
               outcomes.push(outcome);
             }
           }
@@ -63038,15 +60209,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             value: { results, summary: computeClaimSummary(outcomes) }
           };
         }
-        const product = productById(req.provider);
-        if (product === void 0) {
-          return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
-        }
-        const value = await collectClaimResults(accounts, product, {
-          resolve: (ref) => ctx.credentials.resolve(ref),
-          warn: (msg) => ctx.logger?.warn?.(msg)
-        });
-        return { ok: true, value };
+        return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
       }
       // 积分余额（Credits Balance）：逐账号顺序查询。
       //
@@ -63091,11 +60254,11 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         const req = payload;
         const accounts = await pool.listAccounts(req.provider);
         if (req.provider === "codearts") {
-          const values2 = await collectCreditBalances(accounts, void 0, {
+          const values = await collectCreditBalances(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             onBalanceSample: (accountId, balances) => config.creditUsage?.sample("codearts", accountId, balances),
             fetchBalanceDetailed: async (credential) => {
-              const result = await fetchCodeArtsAccountInfoDetailed(credential);
+              const result = await fetchCodeArtsAccountInfoDetailed(credential, codeartsFetcher);
               if (!result.ok) return { balance: null, error: `\u8D26\u6237\u4FE1\u606F\u67E5\u8BE2\u5931\u8D25\uFF1A${result.message}` };
               const info = result.info;
               if (!info.isCreditPackage) {
@@ -63109,32 +60272,32 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             },
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === LOBSTERAI.id) {
-          const values2 = await collectCreditBalances(accounts, LOBSTERAI, {
+          const values = await collectCreditBalances(accounts, LOBSTERAI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             onBalanceSample: (accountId, balances) => config.creditUsage?.sample("lobsterai", accountId, balances),
-            fetchBalance: (credential, product2) => fetchLobsteraiCreditBalance(credential, product2),
+            fetchBalance: (credential, product) => fetchLobsteraiCreditBalance(credential, product),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
           return {
             ok: true,
             value: {
-              accounts: values2,
+              accounts: values,
               windowDays: buddyExpiringWindowDays()
             }
           };
         }
         if (isQoderFamily(req.provider)) {
-          const { product: product2 } = requireQoderFamily(req.provider);
-          const values2 = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          const { product } = requireQoderFamily(req.provider);
+          const values = [];
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             if (!resolved) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u672A\u914D\u7F6E"
               });
@@ -63144,15 +60307,15 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             try {
               credential = JSON.parse(resolved.value);
             } catch {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u89E3\u6790\u5931\u8D25"
               });
               continue;
             }
-            const balance = await fetchQoderCreditBalance(credential, product2);
+            const balance = await fetchQoderCreditBalance(credential, product);
             if (balance !== null) {
               const balances = {};
               for (const pkg of balance.packages) {
@@ -63160,25 +60323,25 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
                   balances[pkg.name] = pkg.remaining;
                 }
               }
-              if (Object.keys(balances).length > 0) config.creditUsage?.sample(QODER.id, account.id, balances);
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(QODER.id, account2.id, balances);
             }
-            values2.push({
-              accountId: account.id,
-              nickname: account.nickname,
+            values.push({
+              accountId: account2.id,
+              nickname: account2.nickname,
               balance,
               // 查不到时带上原因，卡片显示原因而非 0（与其它 provider 同约定）。
               ...balance === null ? { error: "\u79EF\u5206\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" } : {}
             });
           }
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === OPENCODE.id) {
-          const values2 = accounts.map((account) => {
+          const values = accounts.map((account2) => {
             const now = Date.now();
-            const limits = Object.entries(account.modelRateLimits ?? {});
+            const limits = Object.entries(account2.modelRateLimits ?? {});
             const limitedUntil = limits.reduce((max, [, resetAt]) => Math.max(max, Number(resetAt) || 0), 0);
             const limitedModels = limits.filter(([, resetAt]) => Number(resetAt) > now).length;
-            const available2 = account.enabled && limitedUntil <= now ? 1 : 0;
+            const available2 = account2.enabled && limitedUntil <= now ? 1 : 0;
             const balance = {
               total: available2,
               packages: [{
@@ -63192,26 +60355,26 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
                 cycleEndTime: "",
                 expiredTime: ""
               }],
-              expiredTotal: account.enabled && limitedUntil > now ? 1 : 0
+              expiredTotal: account2.enabled && limitedUntil > now ? 1 : 0
             };
             return {
-              accountId: account.id,
-              nickname: account.nickname,
+              accountId: account2.id,
+              nickname: account2.nickname,
               balance,
-              ...!account.enabled ? { error: "\u5DF2\u505C\u7528" } : limitedUntil > now ? { error: `\u9650\u989D\u4E2D\uFF0C${new Date(limitedUntil).toLocaleString("zh-CN")} \u6062\u590D` } : {}
+              ...!account2.enabled ? { error: "\u5DF2\u505C\u7528" } : limitedUntil > now ? { error: `\u9650\u989D\u4E2D\uFF0C${new Date(limitedUntil).toLocaleString("zh-CN")} \u6062\u590D` } : {}
             };
           });
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === TRAE.id) {
-          const values2 = await collectCreditBalances(accounts, TRAE, {
+          const values = await collectCreditBalances(accounts, TRAE, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             onBalanceSample: (accountId, balances) => config.creditUsage?.sample("trae", accountId, balances),
-            fetchBalance: (credential, product2) => fetchTraeCreditBalance(credential, product2),
+            fetchBalance: (credential, product) => fetchTraeCreditBalance(credential, product),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
           const usage = config.creditUsage?.snapshot("trae", 1);
-          const withCrossCheck = values2.map((row) => {
+          const withCrossCheck = values.map((row) => {
             const balance = row.balance;
             if (balance === null || balance === void 0) return row;
             let upstreamTotal = 0;
@@ -63247,16 +60410,16 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           };
         }
         if (req.provider === MINIMAX.id) {
-          const values2 = await collectCreditBalances(accounts, void 0, {
+          const values = await collectCreditBalances(accounts, void 0, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             onBalanceSample: (accountId, balances) => config.creditUsage?.sample("minimax", accountId, balances),
             fetchBalance: (credential) => fetchMinimaxCreditBalance(credential),
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === GEMINI.id) {
-          const values2 = await collectCreditBalances(accounts, GEMINI, {
+          const values = await collectCreditBalances(accounts, GEMINI, {
             resolve: (ref) => ctx.credentials.resolve(ref),
             onBalanceSample: (accountId, balances) => config.creditUsage?.sample("gemini", accountId, balances),
             fetchBalanceDetailed: async (credential) => {
@@ -63270,16 +60433,16 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             },
             warn: (msg) => ctx.logger?.warn?.(msg)
           });
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === CLINE.id) {
-          const values2 = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          const values = [];
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             if (!resolved) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u672A\u914D\u7F6E"
               });
@@ -63289,9 +60452,9 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             try {
               credential = JSON.parse(resolved.value);
             } catch {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u89E3\u6790\u5931\u8D25"
               });
@@ -63305,11 +60468,11 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
                   balances[pkg.name] = pkg.remaining;
                 }
               }
-              if (Object.keys(balances).length > 0) config.creditUsage?.sample(CLINE.id, account.id, balances);
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(CLINE.id, account2.id, balances);
             }
-            values2.push({
-              accountId: account.id,
-              nickname: account.nickname,
+            values.push({
+              accountId: account2.id,
+              nickname: account2.nickname,
               balance: result.balance,
               // 查不到时带上**具体原因**（含 HTTP 状态码与错误体摘要），
               // 而不是笼统一句「查询失败」—— 卡片显示原因而非 0
@@ -63317,16 +60480,16 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
               ...result.balance === null ? { error: result.error ?? "\u79EF\u5206\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" } : {}
             });
           }
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === LOOMY.id) {
-          const values2 = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          const values = [];
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             if (!resolved) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u672A\u914D\u7F6E"
               });
@@ -63336,33 +60499,33 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             try {
               credential = JSON.parse(resolved.value);
             } catch {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u89E3\u6790\u5931\u8D25"
               });
               continue;
             }
             const balance = await loomy.fetchCreditBalance(credential);
-            values2.push({
-              accountId: account.id,
-              nickname: account.nickname,
+            values.push({
+              accountId: account2.id,
+              nickname: account2.nickname,
               balance,
               // 查不到时带原因（不显示成 0，0 是「已用光」的语义）。
               ...balance === null ? { error: "\u79EF\u5206\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" } : {}
             });
           }
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === RACCOON.id) {
-          const values2 = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          const values = [];
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             if (!resolved) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u672A\u914D\u7F6E"
               });
@@ -63372,34 +60535,34 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             try {
               credential = JSON.parse(resolved.value);
             } catch {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u89E3\u6790\u5931\u8D25"
               });
               continue;
             }
             const balance = await raccoon.fetchCreditBalance(credential);
-            values2.push({
-              accountId: account.id,
-              nickname: account.nickname,
+            values.push({
+              accountId: account2.id,
+              nickname: account2.nickname,
               balance,
               // ⚠️ 查不到时带原因（**不显示成 0** —— 0 是「已用光」的语义，
               // 把「查询失败」显示成 0 会让用户以为自己积分没了）。
               ...balance === null ? { error: "\u79EF\u5206\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" } : {}
             });
           }
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
         if (req.provider === ZCODE.id) {
-          const values2 = [];
-          for (const account of accounts) {
-            const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+          const values = [];
+          for (const account2 of accounts) {
+            const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
             if (!resolved) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u672A\u914D\u7F6E"
               });
@@ -63409,9 +60572,9 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             try {
               credential = JSON.parse(resolved.value);
             } catch {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u51ED\u636E\u89E3\u6790\u5931\u8D25"
               });
@@ -63419,27 +60582,27 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             }
             const result = await zcode.fetchBalanceFor(credential);
             if (result === void 0) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u989D\u5EA6\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u7F51\u7EDC\u5F02\u5E38\uFF09"
               });
               continue;
             }
             if (result.enterprise === true) {
-              values2.push({
-                accountId: account.id,
-                nickname: account.nickname,
+              values.push({
+                accountId: account2.id,
+                nickname: account2.nickname,
                 balance: null,
                 error: "\u4F01\u4E1A\u7248\u8D26\u53F7\u4E0D\u4E0B\u53D1\u989D\u5EA6\u6570\u5B57\uFF0C\u8BF7\u5728 ZCode \u5185\u67E5\u770B"
               });
               continue;
             }
             const balance_sample = buildZcodeBalance(result);
-            values2.push({
-              accountId: account.id,
-              nickname: account.nickname,
+            values.push({
+              accountId: account2.id,
+              nickname: account2.nickname,
               /**
                * ⚠ `CreditBalance` 的形状是 `{total, packages[], expiredTotal?}`
                * 这类**积分包**结构，而 ZCode 是「按日的 token 额度池」。
@@ -63468,27 +60631,12 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
                   balances[pkg.name] = pkg.remaining;
                 }
               }
-              if (Object.keys(balances).length > 0) config.creditUsage?.sample(ZCODE.id, account.id, balances);
+              if (Object.keys(balances).length > 0) config.creditUsage?.sample(ZCODE.id, account2.id, balances);
             }
           }
-          return { ok: true, value: { accounts: values2 } };
+          return { ok: true, value: { accounts: values } };
         }
-        const product = productById(req.provider);
-        if (product === void 0) {
-          return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
-        }
-        const values = await collectCreditBalances(accounts, product, {
-          resolve: (ref) => ctx.credentials.resolve(ref),
-          onBalanceSample: (accountId, balances) => config.creditUsage?.sample(product.id, accountId, balances),
-          warn: (msg) => ctx.logger?.warn?.(msg)
-        });
-        return {
-          ok: true,
-          value: {
-            accounts: values,
-            windowDays: buddyExpiringWindowDays()
-          }
-        };
+        return { ok: false, error: { code: "bad-request", message: `unsupported provider: ${req.provider}` } };
       }
       // ── Cline「订阅额度」：官方额度窗口 + 请求记录 ──
       //
@@ -63508,12 +60656,12 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         const accounts = await pool.listAccounts(req.provider);
         const values = [];
-        for (const account of accounts) {
-          const resolved = await ctx.credentials.resolve(credentialRef13(account.credentialRef));
+        for (const account2 of accounts) {
+          const resolved = await ctx.credentials.resolve(credentialRef12(account2.credentialRef));
           if (!resolved) {
             values.push({
-              accountId: account.id,
-              nickname: account.nickname,
+              accountId: account2.id,
+              nickname: account2.nickname,
               ok: false,
               windows: [],
               error: "\u51ED\u636E\u672A\u914D\u7F6E"
@@ -63525,8 +60673,8 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
             credential = JSON.parse(resolved.value);
           } catch {
             values.push({
-              accountId: account.id,
-              nickname: account.nickname,
+              accountId: account2.id,
+              nickname: account2.nickname,
               ok: false,
               windows: [],
               error: "\u51ED\u636E\u89E3\u6790\u5931\u8D25"
@@ -63535,8 +60683,8 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
           }
           const result = await fetchClineUsageLimits(credential, CLINE);
           values.push({
-            accountId: account.id,
-            nickname: account.nickname,
+            accountId: account2.id,
+            nickname: account2.nickname,
             ok: result.ok,
             windows: result.windows,
             // ⚠️ 失败时带上**具体原因**（含 HTTP 状态与网关文案），
@@ -63810,7 +60958,7 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
         }
         const statuses = {};
         for (const provider of req.providers) {
-          if (provider.length === 0) continue;
+          if (provider.length === 0 || isRetiredProvider(provider)) continue;
           const catalog = modelAdapters?.[provider]?.listAllModels();
           const total = catalog?.length ?? 0;
           const disabledMap = pool.listDisabledModels(provider);
@@ -63922,14 +61070,14 @@ function registerChannelPackEndpoints(ctx, pool, codearts, buddy, workbuddy, lob
       }
       // ── 本机 OpenAI 网关（`src/openai-gateway/`）──
       case "gateway.getEnabled": {
-        const degrade = async (step, run, fallback) => {
+        const degrade = async (step, run, fallback2) => {
           try {
             return await run();
           } catch (error) {
             ctx.logger.warn(
               `[channel-pack] gateway.getEnabled \u7684\u300C${step}\u300D\u8BFB\u53D6\u5931\u8D25\uFF0C\u8BE5\u5B57\u6BB5\u964D\u7EA7\u4E3A\u9ED8\u8BA4\u503C\uFF1A${String(error)}`
             );
-            return fallback;
+            return fallback2;
           }
         };
         const blockedByEnv = await degrade("env \u5F00\u5173", () => !isGatewayEnabled(process.env), true);
@@ -64297,7 +61445,7 @@ function loadOrCreateApiKey(home, env = process.env) {
 
 // vendor/channel-pack/src/openai-gateway/messages.ts
 import { randomUUID as randomUUID9 } from "node:crypto";
-import { ReasoningEffortId as ReasoningEffortId12 } from "@deepseek-ai/dsh-llm";
+import { ReasoningEffortId as ReasoningEffortId11 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/openai-gateway/images.ts
 var DEFAULT_IMAGE_LIMITS = {
@@ -64374,39 +61522,6 @@ async function toImageBlock2(url, bridge, limits, already) {
     throw new Error("\u56FE\u7247\u4FDD\u5B58\u5931\u8D25\uFF1A\u9644\u4EF6\u670D\u52A1\u6CA1\u6709\u8FD4\u56DE\u53EF\u7528\u7684\u56FE\u7247\u5F15\u7528");
   }
   return { type: "image", attachment: ref };
-}
-
-// vendor/channel-pack/src/openai-gateway/tencent-fingerprint.ts
-var TENCENT_PROVIDERS = ["buddy", "workbuddy"];
-var CONTENT_FINGERPRINTS = [
-  {
-    // ZCode 内建常量：`$Js="Main branch (you will usually use this for PRs)"`。
-    // 每个 git 仓库里的会话都会被注入（拼在 `Main branch … : <分支名>` 这一行）。
-    find: "Main branch (you will usually use this for PRs)",
-    replace: "Main branch (PRs usually go here)",
-    note: "Gitee IKJNA1\uFF1B\u672C\u673A 2026-10-05 \u5BF9 workbuddy / CodeBuddy \u53CC\u7AEF\u70B9\u5B9E\u6D4B\u590D\u73B0"
-  }
-];
-function escapeRegExp(literal) {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-var COMPILED = CONTENT_FINGERPRINTS.map((rule) => ({
-  replace: rule.replace,
-  findLower: rule.find.toLowerCase(),
-  // `g` = 全部出现都改写；`i` = 大小写不敏感（实测全小写 / 全大写同样被拦）。
-  pattern: new RegExp(escapeRegExp(rule.find), "gi")
-}));
-function isTencentContentFingerprintProvider(provider) {
-  return TENCENT_PROVIDERS.includes(provider);
-}
-function rewriteTencentContentFingerprints(text, provider) {
-  if (!isTencentContentFingerprintProvider(provider)) return text;
-  let out = text;
-  for (const rule of COMPILED) {
-    if (!out.toLowerCase().includes(rule.findLower)) continue;
-    out = out.replace(rule.pattern, rule.replace);
-  }
-  return out;
 }
 
 // vendor/channel-pack/src/openai-gateway/messages.ts
@@ -64545,7 +61660,7 @@ async function convertMessage(raw, provider, model, bridge, limits) {
   if (role === "system") {
     return createGatewayMessage("system", [{
       type: "text",
-      text: rewriteTencentContentFingerprints(textFromContent(value.content), provider)
+      text: textFromContent(value.content)
     }], gatewaySource());
   }
   if (role === "user") {
@@ -64640,7 +61755,7 @@ async function toGenerateOptions(body, signal, reasoningEffortOverride, maxToken
     // ⚠️ 判据是 `== null`（同时排除 undefined 与 null）：`null` = 明确不下发，
     // 两者都不能写进请求。写成 `=== undefined` 会把 null 塞进
     // `ReasoningEffortId(null)`，等于又发了一个非法档位。
-    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId12(reasoningEffort) },
+    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId11(reasoningEffort) },
     signal
   };
 }
@@ -64685,7 +61800,7 @@ function findCaseInsensitiveSuggestion(requested, catalog) {
 
 // vendor/channel-pack/src/openai-gateway/responses.ts
 import { createHash as createHash7, randomUUID as randomUUID11 } from "node:crypto";
-import { ReasoningEffortId as ReasoningEffortId13 } from "@deepseek-ai/dsh-llm";
+import { ReasoningEffortId as ReasoningEffortId12 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/openai-gateway/stream.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
@@ -65109,7 +62224,7 @@ async function toMessages(input, provider, model, bridge, limits) {
       if (raw.role === "system" || raw.role === "developer") {
         messages.push(createGatewayMessage("system", [{
           type: "text",
-          text: rewriteTencentContentFingerprints(textFromContent(content), provider)
+          text: textFromContent(content)
         }], gatewaySource()));
         continue;
       }
@@ -65197,7 +62312,7 @@ async function toResponsesGenerateOptions(body, signal, reasoningEffortOverride,
     }
     messages.push(createGatewayMessage("system", [{
       type: "text",
-      text: rewriteTencentContentFingerprints(body.instructions, provider)
+      text: body.instructions
     }], gatewaySource()));
   }
   messages.push(...await toMessages(body.input, provider, model, images.bridge, limits));
@@ -65210,7 +62325,7 @@ async function toResponsesGenerateOptions(body, signal, reasoningEffortOverride,
     ...tools === void 0 ? {} : { tools },
     ...maxTokens === void 0 ? {} : { maxTokens },
     ...temperature === void 0 ? {} : { temperature },
-    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId13(reasoningEffort) },
+    ...reasoningEffort == null ? {} : { reasoningEffort: ReasoningEffortId12(reasoningEffort) },
     signal
   };
 }
@@ -65341,8 +62456,8 @@ function hasContent(item) {
   return finalText(item).length > 0;
 }
 function responseJson(options) {
-  const request2 = options.request;
-  const effort = isObject2(request2.reasoning) ? request2.reasoning.effort ?? null : null;
+  const request = options.request;
+  const effort = isObject2(request.reasoning) ? request.reasoning.effort ?? null : null;
   return {
     id: options.id,
     object: "response",
@@ -65351,23 +62466,23 @@ function responseJson(options) {
     background: false,
     error: options.error ?? null,
     incomplete_details: options.status === "incomplete" ? { reason: "max_output_tokens" } : null,
-    instructions: typeof request2.instructions === "string" ? request2.instructions : null,
-    max_output_tokens: typeof request2.max_output_tokens === "number" ? request2.max_output_tokens : null,
+    instructions: typeof request.instructions === "string" ? request.instructions : null,
+    max_output_tokens: typeof request.max_output_tokens === "number" ? request.max_output_tokens : null,
     model: options.model,
     output: options.output,
-    parallel_tool_calls: request2.parallel_tool_calls === false ? false : true,
+    parallel_tool_calls: request.parallel_tool_calls === false ? false : true,
     previous_response_id: null,
     reasoning: { effort, summary: null },
     store: false,
-    temperature: typeof request2.temperature === "number" ? request2.temperature : null,
+    temperature: typeof request.temperature === "number" ? request.temperature : null,
     text: { format: { type: "text" } },
-    tool_choice: request2.tool_choice ?? "auto",
-    tools: Array.isArray(request2.tools) ? request2.tools : [],
-    top_p: typeof request2.top_p === "number" ? request2.top_p : null,
-    truncation: typeof request2.truncation === "string" ? request2.truncation : "disabled",
+    tool_choice: request.tool_choice ?? "auto",
+    tools: Array.isArray(request.tools) ? request.tools : [],
+    top_p: typeof request.top_p === "number" ? request.top_p : null,
+    truncation: typeof request.truncation === "string" ? request.truncation : "disabled",
     usage: options.usage,
-    user: typeof request2.user === "string" ? request2.user : null,
-    metadata: isObject2(request2.metadata) ? request2.metadata : {}
+    user: typeof request.user === "string" ? request.user : null,
+    metadata: isObject2(request.metadata) ? request.metadata : {}
   };
 }
 function statusOf(state) {
@@ -65393,12 +62508,12 @@ function responsesError(converted) {
   const code = converted.type === "rate_limit_exceeded" || converted.type === "rate_limit_error" ? "rate_limit_exceeded" : "server_error";
   return { code, message: converted.message, status: converted.status, dsh_code: converted.code };
 }
-async function collectResponsesResult(chunks, responseId, model, request2, suggest) {
+async function collectResponsesResult(chunks, responseId, model, request, suggest) {
   const state = {};
   const items = [];
   const open = /* @__PURE__ */ new Map();
   const closed = /* @__PURE__ */ new Set();
-  const nsMap = responsesNamespaceToolMap(request2);
+  const nsMap = responsesNamespaceToolMap(request);
   let outputIndex = 0;
   try {
     for await (const chunk of chunks) {
@@ -65440,25 +62555,25 @@ async function collectResponsesResult(chunks, responseId, model, request2, sugge
   return responseJson({
     id: responseId,
     model,
-    request: request2,
+    request,
     status: statusOf(state),
     output: outputOf(items, nsMap),
     usage: state.usage === void 0 ? null : usageJson2(state.usage)
   });
 }
-async function* toResponsesSse(chunks, responseId, model, request2, suggest) {
+async function* toResponsesSse(chunks, responseId, model, request, suggest) {
   const state = {};
   const items = [];
   const open = /* @__PURE__ */ new Map();
   const closed = /* @__PURE__ */ new Set();
   let outputIndex = 0;
   let sequence = 0;
-  const nsMap = responsesNamespaceToolMap(request2);
+  const nsMap = responsesNamespaceToolMap(request);
   const emit = (type, payload) => `event: ${type}
 data: ${JSON.stringify({ type, sequence_number: sequence++, ...payload })}
 
 `;
-  const snapshot = (status, usage, error) => responseJson({ id: responseId, model, request: request2, status, output: status === "in_progress" ? [] : outputOf(items, nsMap), usage, error });
+  const snapshot = (status, usage, error) => responseJson({ id: responseId, model, request, status, output: status === "in_progress" ? [] : outputOf(items, nsMap), usage, error });
   const emitStatus = (status, usage, error) => emit(`response.${status}`, { response: snapshot(status, usage, error) });
   const openItem = (index, kind, seed) => {
     const item = newItem(index, outputIndex++, kind);
@@ -65674,24 +62789,24 @@ function jsonResponse(response, status, value) {
   });
   response.end(body);
 }
-function readJson(request2, signal) {
+function readJson(request, signal) {
   return new Promise((resolve2, reject) => {
     const chunks = [];
     let size = 0;
     const abort = () => reject(new OpenAiGatewayError("request was aborted", 499, "aborted", "aborted"));
     signal.addEventListener("abort", abort, { once: true });
-    request2.on("data", (chunk) => {
+    request.on("data", (chunk) => {
       const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       size += data.length;
       if (size > BODY_LIMIT) {
         reject(new OpenAiGatewayError("request body is too large", 413, "invalid_request_error", "request_too_large"));
-        request2.destroy();
+        request.destroy();
         return;
       }
       chunks.push(data);
     });
-    request2.on("error", reject);
-    request2.on("end", () => {
+    request.on("error", reject);
+    request.on("end", () => {
       signal.removeEventListener("abort", abort);
       try {
         const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -65703,8 +62818,8 @@ function readJson(request2, signal) {
     });
   });
 }
-function authorized(request2, key) {
-  const value = request2.headers.authorization;
+function authorized(request, key) {
+  const value = request.headers.authorization;
   return typeof value === "string" && value === `Bearer ${key}`;
 }
 function getHome(options) {
@@ -65787,14 +62902,14 @@ function createOpenAiGateway(options) {
     }
     return modelIdsHint;
   };
-  const withRequest = async (request2, response, run) => {
+  const withRequest = async (request, response, run) => {
     const controller = new AbortController();
     active.add(controller);
     const abort = () => controller.abort();
     const onClose = () => {
       if (!response.writableEnded) controller.abort();
     };
-    request2.once("aborted", abort);
+    request.once("aborted", abort);
     response.once("close", onClose);
     try {
       await run(controller.signal);
@@ -65804,7 +62919,7 @@ function createOpenAiGateway(options) {
         jsonResponse(response, converted.status, converted.body);
       }
     } finally {
-      request2.removeListener("aborted", abort);
+      request.removeListener("aborted", abort);
       response.removeListener("close", onClose);
       active.delete(controller);
     }
@@ -65829,9 +62944,9 @@ function createOpenAiGateway(options) {
       `[openai-gateway] ${target}\uFF1A\u601D\u8003\u6863\u4F4D ${notice.requested} \u65E0\u6CD5\u8868\u8FBE\uFF08\u8BE5\u6A21\u578B\u6CA1\u6709\u8FD9\u4E00\u65CF\u7684\u6863\u4F4D\uFF09\uFF0C\u672C\u6B21\u4E0D\u4E0B\u53D1\u8BE5\u53C2\u6570\u3001\u6309\u6A21\u578B\u9ED8\u8BA4\u8D70`
     );
   };
-  const handleChat = async (request2, response) => {
-    await withRequest(request2, response, async (signal) => {
-      const body = await readJson(request2, signal);
+  const handleChat = async (request, response) => {
+    await withRequest(request, response, async (signal) => {
+      const body = await readJson(request, signal);
       const route = parseModelRoute(body.model);
       const modelInfo = await resolveModelInfo(route, signal);
       const reasoningEffort = normalizeReasoningEffort(
@@ -65862,9 +62977,9 @@ function createOpenAiGateway(options) {
       }
     });
   };
-  const handleResponses = async (request2, response) => {
-    await withRequest(request2, response, async (signal) => {
-      const body = await readJson(request2, signal);
+  const handleResponses = async (request, response) => {
+    await withRequest(request, response, async (signal) => {
+      const body = await readJson(request, signal);
       const route = parseModelRoute(body.model);
       const modelInfo = await resolveModelInfo(route, signal);
       const reasoningEffort = normalizeReasoningEffort(
@@ -65900,8 +63015,8 @@ function createOpenAiGateway(options) {
       }
     });
   };
-  const requestHandler = (request2, response) => {
-    if (request2.method === "OPTIONS") {
+  const requestHandler = (request, response) => {
+    if (request.method === "OPTIONS") {
       response.writeHead(204, {
         "access-control-allow-origin": "*",
         "access-control-allow-headers": "Authorization, Content-Type",
@@ -65910,25 +63025,25 @@ function createOpenAiGateway(options) {
       response.end();
       return;
     }
-    if (!authorized(request2, key)) {
+    if (!authorized(request, key)) {
       jsonResponse(response, 401, { error: { message: "Missing or invalid API key", type: "authentication_error", code: "invalid_api_key" } });
       return;
     }
-    const path2 = new URL(request2.url ?? "/", "http://127.0.0.1").pathname;
-    if (path2 === "/v1/models" && request2.method === "GET") {
+    const path2 = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (path2 === "/v1/models" && request.method === "GET") {
       void handleModels(response).catch((error) => jsonResponse(response, 502, { error: { message: String(error), type: "server_error", code: "model_list_failed" } }));
       return;
     }
-    if (path2 === "/v1/reasoning-efforts" && request2.method === "GET") {
+    if (path2 === "/v1/reasoning-efforts" && request.method === "GET") {
       void handleReasoningEfforts(response).catch((error) => jsonResponse(response, 502, { error: { message: String(error), type: "server_error", code: "model_list_failed" } }));
       return;
     }
-    if ((path2 === "/v1/chat/completions" || path2 === "/v1/responses") && request2.method === "POST") {
-      if (!request2.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+    if ((path2 === "/v1/chat/completions" || path2 === "/v1/responses") && request.method === "POST") {
+      if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
         jsonResponse(response, 415, { error: { message: "Content-Type must be application/json", type: "invalid_request_error", code: "invalid_content_type" } });
         return;
       }
-      void (path2 === "/v1/responses" ? handleResponses(request2, response) : handleChat(request2, response));
+      void (path2 === "/v1/responses" ? handleResponses(request, response) : handleChat(request, response));
       return;
     }
     jsonResponse(response, 404, { error: { message: "Not found", type: "invalid_request_error", code: "not_found" } });
@@ -66024,7 +63139,7 @@ function mountOpenAiGateway(ctx, pool) {
 }
 
 // vendor/channel-pack/src/loop-recovery.ts
-import { createUserMessage as createUserMessage2, LlmError as LlmError17 } from "@deepseek-ai/dsh-llm";
+import { createUserMessage as createUserMessage2, LlmError as LlmError16 } from "@deepseek-ai/dsh-llm";
 var LOOP_RESUME_PROMPT = "\u7EE7\u7EED\u672A\u5B8C\u6210\u7684\u4EFB\u52A1\u3002\u4E0A\u4E00\u8F6E\u4F60\u7684\u601D\u8003\u9677\u5165\u4E86\u91CD\u590D\uFF08\u540C\u4E00\u6BB5\u63A8\u7406\u53CD\u590D\u51FA\u73B0\uFF09\u800C\u88AB\u4E2D\u6B62 \u2014\u2014 \u8BF7\u6362\u4E00\u79CD\u601D\u8DEF\uFF0C\u4E0D\u8981\u91CD\u590D\u521A\u624D\u90A3\u6BB5\u63A8\u7406\uFF0C\u76F4\u63A5\u63A8\u8FDB\u4EFB\u52A1\u3002";
 var LOOP_RESUME_DEFAULT_MAX = 2;
 var LOOP_RESUME_MAX_LIMIT = 10;
@@ -66045,7 +63160,7 @@ function resolveLoopResumePolicy(env = process.env) {
   };
 }
 function isReasoningLoopFailure(error) {
-  if (error instanceof LlmError17) return error.code === REASONING_LOOP_CODE;
+  if (error instanceof LlmError16) return error.code === REASONING_LOOP_CODE;
   if (typeof error !== "object" || error === null) return false;
   return error.code === REASONING_LOOP_CODE;
 }
@@ -66448,181 +63563,9 @@ function createTokenLedgerStore(ctx) {
   return new FileLedgerStore(join12(home, "channel-pack", TOKEN_LEDGER_FILE), ctx.logger);
 }
 
-// vendor/channel-pack/src/buddy-balance-selector.ts
-var BUDDY_BALANCE_CACHE_TTL_MS = 6e4;
-var BUDDY_BALANCE_ERROR_CACHE_TTL_MS = 5e3;
-var BuddyBalanceSelector = class {
-  constructor(deps) {
-    this.deps = deps;
-  }
-  cache = /* @__PURE__ */ new Map();
-  /** 清空缓存（凭据变化、手动刷新余额、领取积分后调用）。 */
-  invalidate(accountId) {
-    if (accountId === void 0) this.cache.clear();
-    else this.cache.delete(accountId);
-  }
-  /**
-   * 当前生效的「临时积分」窗口（毫秒）。
-   *
-   * ⚠️ **每次调用都重新解析环境变量**，不能缓存：窗口可被用户随时改，
-   * 而提示文案与选号判据必须取同一个值 —— 缓存会让两者在不同时刻分裂。
-   */
-  windowMs() {
-    return this.deps.windowMs ?? buddyExpiringWindowDays() * 24 * 60 * 60 * 1e3;
-  }
-  /**
-   * 查一个账号的余额分类（**缓存原料、每次现算**）。
-   *
-   * ⚠️ TTL 只用于抑制**网络请求**，绝不能拿来冻结分类：「临时 / 永久」是
-   * **当前时刻的函数** —— 一笔距到期 15.2 天的余额，什么都没人操作，
-   * 过 30 分钟就成了临时积分。所以这里缓存的是 `get-user-resource` 的原始
-   * `CreditBalance`，命中缓存也重新分桶（并重新读一次窗口 env）。
-   * 宿主是长期开着的，时间只会向前流动。
-   *
-   * ⚠️ **查询失败不抛错**：返回 `ok: false` 的条目，由分档逻辑归入最后一档 ——
-   * 让「一个号查不到」不至于让整个选号失败（凭据过期是最常见的失败原因，
-   * 此时应继续用别的号，而不是把错误抛给用户）。
-   *
-   * ⚠️ **失败结果的 TTL 短一个数量级**（与 Loomy 那份同一修复，见
-   * `BUDDY_BALANCE_ERROR_CACHE_TTL_MS`）：把一次抖动缓存满 60 秒，会让
-   * 「查不到」伪装成「额度用尽」整整一分钟。
-   */
-  async balanceOf(account) {
-    const now = this.deps.now?.() ?? Date.now();
-    const cached2 = this.cache.get(account.id);
-    if (cached2 !== void 0) {
-      const ttl = cached2.source.ok ? this.deps.ttlMs ?? BUDDY_BALANCE_CACHE_TTL_MS : this.deps.errorTtlMs ?? BUDDY_BALANCE_ERROR_CACHE_TTL_MS;
-      if (now - cached2.at < ttl) {
-        return this.classify(account.id, cached2.source, now);
-      }
-    }
-    const source = await this.fetchSource(account);
-    this.cache.set(account.id, { at: now, source });
-    const entry = this.classify(account.id, source, now);
-    if (entry.ok && this.deps.onBalanceSample !== void 0) {
-      try {
-        this.deps.onBalanceSample(account.id, {
-          "\u4E34\u65F6\u79EF\u5206": entry.expiringBalance ?? 0,
-          "\u6C38\u4E45\u79EF\u5206": entry.permanentBalance ?? 0
-        });
-      } catch {
-      }
-    }
-    return entry;
-  }
-  /**
-   * 把原料按**当前时刻**分成两桶并定档。
-   *
-   * 单独成函数就是为了「原料只查一次、分类随时间重算」这件事结构上无法被绕过。
-   */
-  classify(id, source, now) {
-    if (source.ok !== true) return failedEntry(id, source.error);
-    const windowMs = this.windowMs();
-    const split = splitBuddyCreditsByExpiry(source.balance, now, windowMs);
-    if (split === void 0) return failedEntry(id, "\u4F59\u989D\u54CD\u5E94\u65E0\u6CD5\u89E3\u6790\u51FA\u79EF\u5206\u6C60");
-    const entry = {
-      id,
-      ok: true,
-      expiringBalance: split.expiring,
-      permanentBalance: split.permanent,
-      split
-    };
-    entry.tier = buddyBalanceTier(entry, { now, windowMs });
-    return entry;
-  }
-  /** 发一次请求取原料（不做任何分类）。 */
-  async fetchSource(account) {
-    let credential;
-    try {
-      credential = await this.deps.resolveCredential(account.credentialRef);
-    } catch (error) {
-      return { ok: false, error: `\u8BFB\u53D6\u51ED\u636E\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}` };
-    }
-    if (credential === void 0) {
-      return { ok: false, error: "\u51ED\u636E\u672A\u914D\u7F6E\u6216\u5DF2\u5931\u6548" };
-    }
-    let balance;
-    try {
-      balance = await (this.deps.fetchBalance ?? ((cred, product) => fetchCreditBalance(cred, product, this.deps.fetcher ?? fetch)))(
-        credential,
-        this.deps.product
-      );
-    } catch (error) {
-      return { ok: false, error: `\u4F59\u989D\u67E5\u8BE2\u5F02\u5E38\uFF1A${error instanceof Error ? error.message : String(error)}` };
-    }
-    if (balance === null) {
-      return { ok: false, error: "\u4F59\u989D\u67E5\u8BE2\u5931\u8D25\uFF08\u51ED\u636E\u5931\u6548\u6216\u54CD\u5E94\u5F02\u5E38\uFF09" };
-    }
-    return { ok: true, balance };
-  }
-  /**
-   * 从候选账号中按「快到期优先」选一个。
-   *
-   * 排序规则见 `rankBuddyAccountsByBalance`：
-   * 有快到期积分 → 只剩永久 → 无余额/查不到。**档内保持传入顺序**（= 手动顺序）。
-   *
-   * ⚠️ **锁定永久积分时（`allowPermanent: false`）**：只剩永久积分的账号落入
-   * `none` 档（不可用）。若**全部候选都不可用**，返回 `ok: false` 并带上原因 ——
-   * 调用方据此报明确错误，而不是硬着头皮消耗永久积分。
-   *
-   * ⚠️ **解锁时不改变既有行为**：所有候选余额都是 0 仍返回第一个候选，
-   * 让上游去报真正的失败原因（凭据、限流、余额），错误信息更准确。
-   *
-   * @param candidates - 已按 `enabled` 与模型限流过滤过的候选（顺序即手动优先级）。
-   * @param options - `allowPermanent` 为 false 时禁止消耗永久积分。
-   */
-  async select(candidates, options = {}) {
-    if (candidates.length === 0) {
-      return { ok: false, reason: { kind: "exhausted" } };
-    }
-    const balances = await Promise.all(candidates.map((c) => this.balanceOf(c)));
-    const byId = new Map(candidates.map((c, i) => [c.id, { account: c, balance: balances[i] }]));
-    const ranked = rankBuddyAccountsByBalance(balances, options);
-    const first = ranked[0];
-    if (first === void 0) {
-      return { ok: false, reason: noAccountReason(balances) };
-    }
-    if (options.allowPermanent === false && !buddyTierUsable(buddyBalanceTier(first, options))) {
-      return { ok: false, reason: noAccountReason(balances) };
-    }
-    const picked = byId.get(first.id);
-    if (picked === void 0) return { ok: false, reason: { kind: "exhausted" } };
-    return { ok: true, account: picked.account, balance: picked.balance };
-  }
-};
-function noAccountReason(balances) {
-  const errors = balances.filter((b) => !b.ok).map((b) => b.error ?? "\u672A\u77E5\u539F\u56E0");
-  return errors.length > 0 ? { kind: "unknown", errors } : { kind: "exhausted" };
-}
-function failedEntry(id, error) {
-  return { id, ok: false, error };
-}
-async function pickBuddyAccount(selector, candidates, options) {
-  const tried = /* @__PURE__ */ new Set();
-  const allowPermanent = options.allowPermanent !== false;
-  let reason;
-  for (let remaining = candidates; remaining.length > 0; ) {
-    const picked = await selector.select(
-      remaining,
-      { ...options.tierOptions, allowPermanent }
-    );
-    if (!picked.ok) {
-      reason = picked.reason;
-      break;
-    }
-    const credential = await options.resolveCredential(picked.account.credentialRef);
-    if (credential !== void 0) {
-      return { kind: "account", account: picked.account, balance: picked.balance, credential, tried };
-    }
-    tried.add(picked.account.id);
-    remaining = remaining.filter((c) => c.id !== picked.account.id);
-  }
-  return { kind: allowPermanent ? "exhausted" : "locked", tried, ...reason ? { reason } : {} };
-}
-
 // vendor/channel-pack/src/minimax-auth.ts
-import { Service as Service10 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef14 } from "@deepseek-ai/dsh-credentials";
+import { Service as Service9 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef13 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/minimax-oauth.ts
 import { createHash as createHash8, randomBytes as randomBytes12 } from "node:crypto";
@@ -66661,10 +63604,10 @@ function buildMinimaxPollBody(auth, product = MINIMAX) {
     code_verifier: auth.codeVerifier
   });
 }
-function buildMinimaxRefreshBody(refreshToken2, product = MINIMAX) {
+function buildMinimaxRefreshBody(refreshToken, product = MINIMAX) {
   return new URLSearchParams({
     grant_type: "refresh_token",
-    refresh_token: refreshToken2,
+    refresh_token: refreshToken,
     client_id: product.clientId,
     scope: product.scope,
     audience: product.audience
@@ -66697,11 +63640,11 @@ function parseMinimaxTokenGrant(payload, previousRefreshToken, product = MINIMAX
   }
   const record = payload;
   const accessToken = nonEmptyString3(record.access_token);
-  const refreshToken2 = nonEmptyString3(record.refresh_token) ?? previousRefreshToken;
+  const refreshToken = nonEmptyString3(record.refresh_token) ?? previousRefreshToken;
   const tokenType = nonEmptyString3(record.token_type);
   const expiresInSec = positiveNumber3(record.expires_in);
   if (accessToken === void 0) throw new Error("MiniMax \u4EE4\u724C\u54CD\u5E94\u7F3A\u5C11 access_token");
-  if (refreshToken2 === void 0) throw new Error("MiniMax \u4EE4\u724C\u54CD\u5E94\u7F3A\u5C11 refresh_token");
+  if (refreshToken === void 0) throw new Error("MiniMax \u4EE4\u724C\u54CD\u5E94\u7F3A\u5C11 refresh_token");
   if (tokenType === void 0 || tokenType.toLowerCase() !== "bearer") {
     throw new Error("MiniMax \u4EE4\u724C\u54CD\u5E94\u7684 token_type \u4E0D\u662F Bearer");
   }
@@ -66716,7 +63659,7 @@ function parseMinimaxTokenGrant(payload, previousRefreshToken, product = MINIMAX
   const accountId = decodeJwtSub(accessToken);
   return {
     access_token: accessToken,
-    refresh_token: refreshToken2,
+    refresh_token: refreshToken,
     token_type: "Bearer",
     expires_at: String(fromJwt ?? expiresAt),
     scope,
@@ -66748,7 +63691,7 @@ async function startMinimaxDeviceAuthorization(fetcher = fetch, product = MINIMA
 }
 async function pollMinimaxDeviceToken(auth, options = {}) {
   const fetcher = options.fetcher ?? fetch;
-  const sleep5 = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const sleep4 = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const now = options.now ?? Date.now;
   const product = options.product ?? MINIMAX;
   const deadline = now() + auth.expiresInSec * 1e3;
@@ -66769,12 +63712,12 @@ async function pollMinimaxDeviceToken(auth, options = {}) {
     const status = nonEmptyString3(record.status);
     const error = nonEmptyString3(record.error);
     if (response.ok && status === "pending") {
-      await sleep5(intervalMs);
+      await sleep4(intervalMs);
       continue;
     }
     if (response.ok && status === "slow_down") {
       intervalMs += 5e3;
-      await sleep5(intervalMs);
+      await sleep4(intervalMs);
       continue;
     }
     if (response.ok && (status === "denied" || status === "access_denied")) {
@@ -66784,12 +63727,12 @@ async function pollMinimaxDeviceToken(auth, options = {}) {
       throw new MinimaxLoginExpiredError();
     }
     if (error === "authorization_pending") {
-      await sleep5(intervalMs);
+      await sleep4(intervalMs);
       continue;
     }
     if (error === "slow_down") {
       intervalMs += 5e3;
-      await sleep5(intervalMs);
+      await sleep4(intervalMs);
       continue;
     }
     if (response.ok) return parseMinimaxTokenGrant(body, void 0, product);
@@ -66797,14 +63740,14 @@ async function pollMinimaxDeviceToken(auth, options = {}) {
   }
   throw new MinimaxLoginExpiredError();
 }
-async function refreshMinimaxCredential(refreshToken2, fetcher = fetch, product = MINIMAX) {
+async function refreshMinimaxCredential(refreshToken, fetcher = fetch, product = MINIMAX) {
   const response = await fetcher(`${product.accountHost}${MINIMAX_TOKEN_PATH}`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: buildMinimaxRefreshBody(refreshToken2, product),
+    body: buildMinimaxRefreshBody(refreshToken, product),
     signal: AbortSignal.timeout(MINIMAX_OAUTH_TIMEOUT_MS)
   });
   const body = await response.json().catch(() => void 0);
@@ -66813,7 +63756,7 @@ async function refreshMinimaxCredential(refreshToken2, fetcher = fetch, product 
     const error = nonEmptyString3(record.error) ?? `HTTP ${response.status}`;
     throw new Error(`MiniMax \u7EED\u671F\u5931\u8D25\uFF1A${error}`);
   }
-  return parseMinimaxTokenGrant(body, refreshToken2, product);
+  return parseMinimaxTokenGrant(body, refreshToken, product);
 }
 
 // vendor/channel-pack/src/minimax-auth.ts
@@ -66836,7 +63779,7 @@ function parseMinimaxCredential(value) {
     return void 0;
   }
 }
-var MinimaxAuth = class extends Service10 {
+var MinimaxAuth = class extends Service9 {
   constructor(ctx, options = {}) {
     const product = options.product ?? MINIMAX;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -66893,13 +63836,13 @@ var MinimaxAuth = class extends Service10 {
       ...credential,
       ...options.nickname === void 0 ? {} : { nickname: options.nickname }
     };
-    await this.ctx.credentials.set(credentialRef14(options.refName), JSON.stringify(payload));
+    await this.ctx.credentials.set(credentialRef13(options.refName), JSON.stringify(payload));
     this.lastRefreshError = void 0;
     return { ...credential.account_id === void 0 ? {} : { accountId: credential.account_id } };
   }
   /** 解析默认单凭据。 */
   async resolveDefaultCredential() {
-    const resolved = await this.ctx.credentials.resolve(credentialRef14(this.credentialRefName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef13(this.credentialRefName));
     if (!resolved) return void 0;
     return parseMinimaxCredential(resolved.value);
   }
@@ -66918,7 +63861,7 @@ var MinimaxAuth = class extends Service10 {
         this.fetchImpl,
         this.product
       );
-      await this.ctx.credentials.set(credentialRef14(this.credentialRefName), JSON.stringify(next));
+      await this.ctx.credentials.set(credentialRef13(this.credentialRefName), JSON.stringify(next));
       this.lastRefreshError = void 0;
     } catch (error) {
       const message2 = error instanceof Error ? error.message : String(error);
@@ -66934,7 +63877,7 @@ var MinimaxAuth = class extends Service10 {
    * 也把池值对账（见 `refreshAll` 的注释）。
    */
   async refreshAccountCredential(refName, pool, accountId) {
-    const ref = credentialRef14(refName);
+    const ref = credentialRef13(refName);
     const resolved = await this.ctx.credentials.resolve(ref);
     if (!resolved) throw new Error("\u51ED\u636E\u672A\u914D\u7F6E");
     const credential = parseMinimaxCredential(resolved.value);
@@ -66976,7 +63919,7 @@ var MinimaxAuth = class extends Service10 {
     for (const entry of accounts) {
       if (!entry.refreshable) continue;
       try {
-        const ref = credentialRef14(entry.credentialRef);
+        const ref = credentialRef13(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) {
           await pool.updateAccount(entry.id, { refreshable: false });
@@ -67151,10 +64094,10 @@ function parseMinimaxModelsPayload(payload) {
 }
 
 // vendor/channel-pack/src/minimax-adapter.ts
-import { LlmAdapter as LlmAdapter11, LlmError as LlmError18, ReasoningEffortId as ReasoningEffortId14 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter10, LlmError as LlmError17, ReasoningEffortId as ReasoningEffortId13 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/minimax-messages.ts
-import { ToolCallId as ToolCallId8 } from "@deepseek-ai/dsh-llm";
+import { ToolCallId as ToolCallId7 } from "@deepseek-ai/dsh-llm";
 function buildMinimaxMessagesPayload(options) {
   const payload = {
     model: options.model,
@@ -67421,7 +64364,7 @@ async function* consumeMinimaxSse(options) {
         yield {
           type: "tool-call-delta",
           index,
-          id: ToolCallId8(state?.toolId ?? ""),
+          id: ToolCallId7(state?.toolId ?? ""),
           argumentsDelta: d.partial_json
         };
       }
@@ -67439,7 +64382,7 @@ async function* consumeMinimaxSse(options) {
       } else {
         block = {
           type: "tool-call",
-          id: ToolCallId8(state.toolId ?? ""),
+          id: ToolCallId7(state.toolId ?? ""),
           name: state.toolName ?? "",
           arguments: state.toolArgs
         };
@@ -67496,14 +64439,14 @@ function minimaxReasoningInfo(entry) {
     if (!ids.includes("none")) ids.push("none");
   }
   const efforts = ids.map((id) => {
-    if (id === "none") return { id: ReasoningEffortId14(id), name: "\u5173\u95ED\u601D\u8003" };
-    if (id === "on") return { id: ReasoningEffortId14(id), name: "\u5F00\u542F\u601D\u8003" };
-    return { id: ReasoningEffortId14(id), name: id };
+    if (id === "none") return { id: ReasoningEffortId13(id), name: "\u5173\u95ED\u601D\u8003" };
+    if (id === "on") return { id: ReasoningEffortId13(id), name: "\u5F00\u542F\u601D\u8003" };
+    return { id: ReasoningEffortId13(id), name: id };
   });
-  const defaultEffort = entry.defaultEffort !== void 0 && ids.includes(entry.defaultEffort) ? ReasoningEffortId14(entry.defaultEffort) : void 0;
+  const defaultEffort = entry.defaultEffort !== void 0 && ids.includes(entry.defaultEffort) ? ReasoningEffortId13(entry.defaultEffort) : void 0;
   return { efforts, ...defaultEffort === void 0 ? {} : { defaultEffort } };
 }
-var MinimaxAdapter = class extends LlmAdapter11 {
+var MinimaxAdapter = class extends LlmAdapter10 {
   constructor(options) {
     super();
     this.options = options;
@@ -67627,23 +64570,23 @@ var MinimaxAdapter = class extends LlmAdapter11 {
       credential = await this.options.resolveCredential(options.model);
     }
     if (credential === void 0 || credential.access_token === "") {
-      throw new LlmError18("minimax: no usable credential; log in first", "MISSING_CREDENTIAL");
+      throw new LlmError17("minimax: no usable credential; log in first", "MISSING_CREDENTIAL");
     }
     const entry = (await this.loadModels()).find((item) => item.id === options.model);
     const imageRefs = /* @__PURE__ */ new Map();
     for (const message2 of options.messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, imageRefs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, imageRefs);
     }
     let images;
     if (imageRefs.size > 0) {
       if (entry?.supportsImage !== true) {
-        throw new LlmError18(
+        throw new LlmError17(
           `minimax: \u6A21\u578B "${options.model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165`,
           "UNSUPPORTED_CONTENT"
         );
       }
       if (this.options.readImage === void 0) {
-        throw new LlmError18(
+        throw new LlmError17(
           "minimax: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1\uFF08readImage \u672A\u63D0\u4F9B\uFF09",
           "UNSUPPORTED_CONTENT"
         );
@@ -67683,15 +64626,15 @@ var MinimaxAdapter = class extends LlmAdapter11 {
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      const code = response.status === 402 ? "QUOTA_EXCEEDED" : httpErrorCode4(response.status);
-      throw new LlmError18(
+      const code = response.status === 402 ? "QUOTA_EXCEEDED" : httpErrorCode3(response.status);
+      throw new LlmError17(
         `minimax: HTTP ${response.status}${text === "" ? "" : ` \u2014 ${text.slice(0, 500)}`}`,
         code,
         { status: response.status }
       );
     }
     if (response.body === null) {
-      throw new LlmError18("minimax: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
+      throw new LlmError17("minimax: \u54CD\u5E94\u7F3A\u5C11 body", "EMPTY_RESPONSE");
     }
     yield* consumeMinimaxSse({ body: response.body, signal: options.signal });
   }
@@ -67704,154 +64647,8 @@ function registerMinimaxLlm(ctx, options) {
 }
 
 // vendor/channel-pack/src/gemini-auth.ts
-import { Service as Service11 } from "@deepseek-ai/cordis";
-import { credentialRef as credentialRef15 } from "@deepseek-ai/dsh-credentials";
-
-// vendor/channel-pack/src/channel-fetch.ts
-var import_undici2 = __toESM(require_undici(), 1);
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import path from "node:path";
-function parseWindowsProxy(output) {
-  const value = (name2) => new RegExp(`^\\s*${name2}\\s+REG_\\w+\\s+(.+)$`, "mi").exec(output)?.[1]?.trim() ?? "";
-  if (Number(value("ProxyEnable")) !== 1 || value("ProxyServer") === "") return void 0;
-  return { server: value("ProxyServer"), bypass: value("ProxyOverride") };
-}
-async function readWindowsProxy() {
-  const executable = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe");
-  try {
-    const { stdout } = await promisify(execFile)(executable, [
-      "query",
-      "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
-    ], { windowsHide: true, timeout: 2e3, maxBuffer: 64 * 1024, encoding: "utf8" });
-    return stdout;
-  } catch {
-    return "";
-  }
-}
-function loopback(host) {
-  return host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(host);
-}
-function channelProxyBypassed(target, patterns, windows = false) {
-  const hostname = target.hostname.toLowerCase();
-  const port = target.port || (target.protocol === "https:" ? "443" : "80");
-  return patterns.split(/[;,\s]+/).filter(Boolean).some((raw) => {
-    let pattern = raw.toLowerCase();
-    if (pattern === "*") return true;
-    if (windows && pattern === "<local>") return !hostname.includes(".") && !hostname.includes(":");
-    const withPort = /^(.*):(\d+)$/.exec(pattern);
-    if (withPort) {
-      if (withPort[2] !== port) return false;
-      pattern = withPort[1];
-    }
-    if (pattern.includes("*")) {
-      const escaped = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
-      return new RegExp(`^${escaped}$`, "i").test(hostname);
-    }
-    const domain = pattern.replace(/^\./, "");
-    return hostname === domain || !windows && hostname.endsWith(`.${domain}`);
-  });
-}
-function windowsProxyFor(target, config) {
-  if (channelProxyBypassed(target, config.bypass, true)) return void 0;
-  if (!config.server.includes("=")) return config.server;
-  const entries = new Map(config.server.split(";").map((row) => {
-    const at = row.indexOf("=");
-    return [row.slice(0, at).trim().toLowerCase(), row.slice(at + 1).trim()];
-  }));
-  const selected = entries.get(target.protocol.slice(0, -1));
-  if (selected) return selected;
-  const socks = entries.get("socks");
-  return socks ? `socks5://${socks.replace(/^socks5h?:\/\//, "")}` : void 0;
-}
-var ChannelNetworkError = class extends Error {
-  name = "ChannelNetworkError";
-};
-function networkFailure(error, route) {
-  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) return error;
-  const codes = /* @__PURE__ */ new Set();
-  let current = error;
-  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
-    const record = current;
-    if (typeof record.code === "string" && /^[A-Z][A-Z0-9_]{1,80}$/.test(record.code)) codes.add(record.code);
-    current = record.cause;
-  }
-  return new ChannelNetworkError(`\u6E20\u9053\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF08${route}${codes.size ? `\uFF1B${[...codes].join("\u3001")}` : ""}\uFF09\uFF1A\u8BF7\u68C0\u67E5\u4EE3\u7406\u8FDE\u901A\u6027\u540E\u91CD\u8BD5`, { cause: error });
-}
-function createChannelFetch(options = {}) {
-  const dispatchers = /* @__PURE__ */ new Map();
-  let system;
-  let systemAt = 0;
-  let closed = false;
-  const fetchImpl = (input, init) => (options.fetchImpl ?? globalThis.fetch)(input, init);
-  const fetcher = async (input, init) => {
-    if (closed) throw new Error("\u6E20\u9053\u51FA\u7F51\u670D\u52A1\u5DF2\u505C\u6B62");
-    const target = new URL(input instanceof Request ? input.url : String(input));
-    const signal = init?.signal ?? (input instanceof Request ? input.signal : void 0);
-    signal?.throwIfAborted();
-    let route = "\u76F4\u8FDE";
-    try {
-      if (init?.dispatcher !== void 0) {
-        route = "\u8C03\u7528\u65B9\u6307\u5B9A\u4EE3\u7406";
-        return await fetchImpl(input, init);
-      }
-      if (loopback(target.hostname)) {
-        return await fetchImpl(input, init);
-      }
-      if (options.outlet?.active()) {
-        route = "\u63D2\u4EF6\u51FA\u53E3\u4EE3\u7406";
-        return await options.outlet.fetch(input, { ...init, redirect: "error" });
-      }
-      const env = options.environment ?? process.env;
-      const envValue = (name2) => env[name2.toLowerCase()] ?? env[name2];
-      const proxy = (target.protocol === "https:" ? envValue("HTTPS_PROXY") : envValue("HTTP_PROXY")) || envValue("ALL_PROXY");
-      let address;
-      if (proxy) {
-        route = "\u73AF\u5883\u4EE3\u7406";
-        if (!channelProxyBypassed(target, envValue("NO_PROXY") ?? "")) address = proxy;
-      } else if ((options.platform ?? process.platform) === "win32") {
-        if (!system || Date.now() - systemAt >= 3e4) {
-          systemAt = Date.now();
-          system = (options.readSystemProxy ?? readWindowsProxy)().then(parseWindowsProxy);
-        }
-        const config = await system;
-        signal?.throwIfAborted();
-        if (closed) throw new Error("\u6E20\u9053\u51FA\u7F51\u670D\u52A1\u5DF2\u505C\u6B62");
-        if (config) {
-          address = windowsProxyFor(target, config);
-          route = "Windows \u7CFB\u7EDF\u4EE3\u7406";
-        }
-      }
-      if (!address) {
-        if (route !== "\u76F4\u8FDE") route = "\u76F4\u8FDE\uFF0C\u4EE3\u7406\u4F8B\u5916\u6216\u5F53\u524D\u534F\u8BAE\u65E0\u4EE3\u7406";
-        return await fetchImpl(input, init);
-      }
-      const proxyUrl = new URL(address.includes("://") ? address : `http://${address}`);
-      const authority = `${proxyUrl.hostname}:${proxyUrl.port || (proxyUrl.protocol === "https:" ? "443" : proxyUrl.protocol.startsWith("socks") ? "1080" : "80")}`;
-      const auth = proxyUrl.username ? `${proxyUrl.username}${proxyUrl.password ? `:${proxyUrl.password}` : ""}@` : "";
-      const parsed = normalizeProxy(`${proxyUrl.protocol}//${auth}${authority}`);
-      if (!parsed.ok) throw new Error("\u4EE3\u7406\u5730\u5740\u65E0\u6548");
-      let dispatcher = dispatchers.get(parsed.proxy.url);
-      if (!dispatcher) {
-        dispatcher = options.dispatcherFor ? options.dispatcherFor(parsed.proxy) : new import_undici2.Dispatcher1Wrapper(createProxyDispatcher(parsed.proxy));
-        dispatchers.set(parsed.proxy.url, dispatcher);
-      }
-      return await fetchImpl(input, { ...init, dispatcher });
-    } catch (error) {
-      if (signal?.aborted) throw signal.reason;
-      throw networkFailure(error, route);
-    }
-  };
-  return {
-    fetch: fetcher,
-    async close() {
-      closed = true;
-      const all = [...dispatchers.values()];
-      dispatchers.clear();
-      await Promise.allSettled(all.map((dispatcher) => dispatcher.destroy()));
-    }
-  };
-}
+import { Service as Service10 } from "@deepseek-ai/cordis";
+import { credentialRef as credentialRef14 } from "@deepseek-ai/dsh-credentials";
 
 // vendor/channel-pack/src/gemini-oauth.ts
 import { createServer as createServer8 } from "node:http";
@@ -67918,7 +64715,7 @@ function parseGeminiTokenGrant(payload, previousRefreshToken) {
   const accessToken = typeof record.access_token === "string" ? record.access_token : "";
   if (accessToken === "") throw new Error("\u4EE4\u724C\u7AEF\u70B9\u672A\u8FD4\u56DE access_token");
   const rawRefresh = typeof record.refresh_token === "string" ? record.refresh_token : "";
-  const refreshToken2 = rawRefresh !== "" ? rawRefresh : previousRefreshToken;
+  const refreshToken = rawRefresh !== "" ? rawRefresh : previousRefreshToken;
   const rawTokenType = typeof record.token_type === "string" ? record.token_type : "";
   const expiresIn = typeof record.expires_in === "number" && Number.isFinite(record.expires_in) && record.expires_in > 0 ? Math.floor(record.expires_in) : 3600;
   const grant = {
@@ -67926,7 +64723,7 @@ function parseGeminiTokenGrant(payload, previousRefreshToken) {
     token_type: rawTokenType === "" ? "Bearer" : rawTokenType,
     expires_in: expiresIn
   };
-  if (refreshToken2 !== void 0 && refreshToken2 !== "") grant.refresh_token = refreshToken2;
+  if (refreshToken !== void 0 && refreshToken !== "") grant.refresh_token = refreshToken;
   const scope = typeof record.scope === "string" ? record.scope : "";
   if (scope !== "") grant.scope = scope;
   const idToken = typeof record.id_token === "string" ? record.id_token : "";
@@ -67961,8 +64758,8 @@ function credentialFromGeminiGrant(grant, previous = {}, nowMs = Date.now()) {
     expires_in: grant.expires_in,
     expiry: geminiExpiryFrom(grant.expires_in, nowMs)
   };
-  const refreshToken2 = grant.refresh_token ?? previous.refresh_token;
-  if (refreshToken2 !== void 0 && refreshToken2 !== "") credential.refresh_token = refreshToken2;
+  const refreshToken = grant.refresh_token ?? previous.refresh_token;
+  if (refreshToken !== void 0 && refreshToken !== "") credential.refresh_token = refreshToken;
   const scope = grant.scope ?? previous.scope;
   if (scope !== void 0 && scope !== "") credential.scope = scope;
   const identity = grant.id_token === void 0 ? {} : geminiIdentityFromIdToken(grant.id_token);
@@ -68015,21 +64812,21 @@ async function exchangeGeminiCode(code, redirectUri, options = {}) {
   );
   return parseGeminiTokenGrant(payload);
 }
-async function refreshGeminiCredential(refreshToken2, options = {}) {
-  if (refreshToken2 === "") throw new Error("\u6CA1\u6709 refresh_token\uFF0C\u9700\u8981\u91CD\u65B0\u6388\u6743");
+async function refreshGeminiCredential(refreshToken, options = {}) {
+  if (refreshToken === "") throw new Error("\u6CA1\u6709 refresh_token\uFF0C\u9700\u8981\u91CD\u65B0\u6388\u6743");
   const fetcher = options.fetcher ?? fetch;
   const payload = await postGeminiForm(
     GEMINI_TOKEN_ENDPOINT,
     {
       client_id: geminiClientId(),
       client_secret: geminiClientSecret(),
-      refresh_token: refreshToken2,
+      refresh_token: refreshToken,
       grant_type: "refresh_token"
     },
     fetcher,
     options.signal
   );
-  return parseGeminiTokenGrant(payload, refreshToken2);
+  return parseGeminiTokenGrant(payload, refreshToken);
 }
 async function fetchGeminiUserInfo(accessToken, options = {}) {
   const fetcher = options.fetcher ?? fetch;
@@ -68185,7 +64982,7 @@ var GeminiRefreshTokenExpiredError = class extends Error {
     this.name = "RefreshTokenExpiredError";
   }
 };
-var GeminiAuth = class extends Service11 {
+var GeminiAuth = class extends Service10 {
   constructor(ctx, options = {}) {
     const product = options.product ?? GEMINI;
     super(ctx, options.serviceName ?? `${product.id}Auth`);
@@ -68219,7 +65016,7 @@ var GeminiAuth = class extends Service11 {
     return queue;
   }
   async readCredential(refName) {
-    const resolved = await this.ctx.credentials.resolve(credentialRef15(refName));
+    const resolved = await this.ctx.credentials.resolve(credentialRef14(refName));
     if (!resolved) return void 0;
     return parseGeminiCredential(resolved.value);
   }
@@ -68259,7 +65056,7 @@ var GeminiAuth = class extends Service11 {
    * 展示名走 `geminiAccountLabel`（邮箱优先，回退 `sub`）。
    */
   async persistLogin(credential, options) {
-    await this.ctx.credentials.set(credentialRef15(options.refName), JSON.stringify(credential));
+    await this.ctx.credentials.set(credentialRef14(options.refName), JSON.stringify(credential));
     return credential.sub === void 0 ? {} : { accountId: credential.sub };
   }
   /** 解析默认单凭据。 */
@@ -68276,7 +65073,7 @@ var GeminiAuth = class extends Service11 {
       throw new GeminiRefreshTokenExpiredError("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     const next = await this.refreshCredential(credential);
-    await this.ctx.credentials.set(credentialRef15(this.credentialRefName), JSON.stringify(next));
+    await this.ctx.credentials.set(credentialRef14(this.credentialRefName), JSON.stringify(next));
   }
   /**
    * 续期**指定 ref**（RPC `account.refresh` / 定时器）。
@@ -68292,7 +65089,7 @@ var GeminiAuth = class extends Service11 {
       if (!isGeminiRefreshable(credential)) {
         throw new GeminiRefreshTokenExpiredError("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
       }
-      const ref = credentialRef15(refName);
+      const ref = credentialRef14(refName);
       if (pool === void 0) {
         const next = await this.refreshCredential(credential);
         await this.ctx.credentials.set(ref, JSON.stringify(next));
@@ -68326,7 +65123,7 @@ var GeminiAuth = class extends Service11 {
   async refreshAll(pool) {
     const accounts = await pool.listAccounts(this.product.id);
     for (const entry of accounts) {
-      const ref = credentialRef15(entry.credentialRef);
+      const ref = credentialRef14(entry.credentialRef);
       let credential;
       try {
         const resolved = await this.ctx.credentials.resolve(ref);
@@ -68428,7 +65225,7 @@ var GeminiAuth = class extends Service11 {
     }
     for (const entry of entries) {
       try {
-        const ref = credentialRef15(entry.credentialRef);
+        const ref = credentialRef14(entry.credentialRef);
         const resolved = await this.ctx.credentials.resolve(ref);
         if (!resolved) continue;
         let credential = parseGeminiCredential(resolved.value);
@@ -68479,12 +65276,12 @@ var GeminiAuth = class extends Service11 {
    * 一旦字段合并逻辑分叉，就会出现「某条路径丢了 sub/email」。
    */
   async refreshCredential(credential) {
-    const refreshToken2 = credential.refresh_token;
-    if (!refreshToken2) {
+    const refreshToken = credential.refresh_token;
+    if (!refreshToken) {
       throw new GeminiRefreshTokenExpiredError("\u51ED\u636E\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
     }
     try {
-      const grant = await refreshGeminiCredential(refreshToken2, { fetcher: this.fetchImpl });
+      const grant = await refreshGeminiCredential(refreshToken, { fetcher: this.fetchImpl });
       return credentialFromGeminiGrant(grant, credential);
     } catch (error) {
       if (error instanceof ChannelNetworkError) throw error;
@@ -68651,7 +65448,7 @@ function createGeminiSigStore(ctx) {
 }
 
 // vendor/channel-pack/src/opencode-adapter.ts
-import { LlmAdapter as LlmAdapter12, LlmError as LlmError19, ReasoningEffortId as ReasoningEffortId15 } from "@deepseek-ai/dsh-llm";
+import { LlmAdapter as LlmAdapter11, LlmError as LlmError18, ReasoningEffortId as ReasoningEffortId14 } from "@deepseek-ai/dsh-llm";
 
 // vendor/channel-pack/src/opencode-messages.ts
 var FREE_LANE_GATE_TOOLS = ["read", "shell"];
@@ -68887,7 +65684,7 @@ var MEASURED_IMAGE_OVERRIDES = {
   "longcat-2.5-preview-free": { image: false, note: "2026-10-02 \u5B9E\u6D4B 500\uFF0Cmodels.dev \u591A\u62A5 image" }
 };
 var isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
-var EFFORT_NAMES3 = {
+var EFFORT_NAMES2 = {
   none: "\u5173\u95ED\u601D\u8003",
   minimal: "\u6700\u5C0F",
   low: "\u4F4E",
@@ -68897,7 +65694,7 @@ var EFFORT_NAMES3 = {
   max: "\u6700\u5927"
 };
 function opencodeEffortName(id) {
-  return EFFORT_NAMES3[id] ?? id;
+  return EFFORT_NAMES2[id] ?? id;
 }
 function normalizeEfforts(entry) {
   if (!Array.isArray(entry.reasoning_options)) return [];
@@ -69101,7 +65898,7 @@ function resolveOpencodeEffort(model, requested, capabilities) {
   if (translated.kind === "mapped") return { effort: translated.effort, outcome: "mapped" };
   return { outcome: "dropped" };
 }
-var OpencodeAdapter = class extends LlmAdapter12 {
+var OpencodeAdapter = class extends LlmAdapter11 {
   constructor(options) {
     super();
     this.options = options;
@@ -69169,7 +65966,7 @@ var OpencodeAdapter = class extends LlmAdapter12 {
         efforts: capability.efforts.map((effort) => ({
           // ⚠️ `id` 是**品牌类型**（`ReasoningEffortId`），必须经它的构造函数 ——
           // 与 Qoder 同款（`src/qoder-adapter.ts:581`）。
-          id: ReasoningEffortId15(effort),
+          id: ReasoningEffortId14(effort),
           // ⚠️ 没有官方中文的档位（models.dev 会下发 `minimal` / `xhigh` 等
           // Qoder 那份表里没有的值）**回退到 id 本身** —— 宁可显示英文原值，
           // 也不猜一个可能错译的中文。
@@ -69195,10 +65992,10 @@ var OpencodeAdapter = class extends LlmAdapter12 {
   async *stream(options) {
     const slots = await this.options.identitySlots();
     if (slots.length === 0) {
-      throw new LlmError19("opencode: \u6CA1\u6709\u53EF\u7528\u901A\u9053", "MISSING_CREDENTIAL");
+      throw new LlmError18("opencode: \u6CA1\u6709\u53EF\u7528\u901A\u9053", "MISSING_CREDENTIAL");
     }
     if (pickSlot(slots, options.model, /* @__PURE__ */ new Set()) === void 0) {
-      throw new LlmError19(
+      throw new LlmError18(
         `opencode: \u6A21\u578B "${options.model}" \u9700\u8981 API key \u8D26\u53F7\u901A\u9053\uFF08\u533F\u540D\u901A\u9053\u53EA\u652F\u6301\u514D\u8D39\u6A21\u578B\uFF09\uFF0C\u8BF7\u5148\u5728 Channel Pack \u7684 OpenCode \u9762\u677F\u6DFB\u52A0\u4E00\u4E2A\u8D26\u53F7`,
         "MISSING_CREDENTIAL"
       );
@@ -69208,7 +66005,7 @@ var OpencodeAdapter = class extends LlmAdapter12 {
     for (; ; ) {
       const slot2 = pickSlot(slots, options.model, tried);
       if (slot2 === void 0) {
-        throw new LlmError19(
+        throw new LlmError18(
           `opencode: \u6240\u6709\u901A\u9053\u5BF9\u8BE5\u6A21\u578B\u5747\u53D7\u9650${limited.length > 0 ? `\uFF08${limited.join("\u3001")}\uFF09` : ""}`,
           "QUOTA_EXCEEDED"
         );
@@ -69224,13 +66021,13 @@ var OpencodeAdapter = class extends LlmAdapter12 {
         return;
       } catch (error) {
         if (delivered) throw error;
-        if (error instanceof LlmError19 && error.code === "QUOTA_EXCEEDED") throw error;
+        if (error instanceof LlmError18 && error.code === "QUOTA_EXCEEDED") throw error;
         const info = classifyOpencodeFailure(error);
         if (info.kind === "free_tier") {
           this.options.warn?.(
             `opencode: \u514D\u8D39\u901A\u9053\u88AB FreeTierError \u62D2\u7EDD \u2014\u2014 \u68C0\u67E5 session id \u5F62\u72B6\uFF08\u5E94\u4E3A ses_ + 12hex + 14base62\uFF09\uFF1A${info.detail}`
           );
-          throw new LlmError19(
+          throw new LlmError18(
             `opencode: \u514D\u8D39\u901A\u9053\u88AB\u4E0A\u6E38\u62D2\u7EDD\uFF08FreeTierError\uFF09\u3002\u8BE5\u9519\u8BEF\u7531\u8BF7\u6C42\u5F62\u72B6\u89E6\u53D1\uFF08session id \u5F62\u72B6\u4E0D\u5BF9\u65F6\u51FA\u73B0\uFF09\uFF0C\u6362 API key \u6216\u6362\u51FA\u53E3\u90FD\u65E0\u6548\u3002`,
             "AUTH",
             { status: 403 }
@@ -69269,18 +66066,18 @@ var OpencodeAdapter = class extends LlmAdapter12 {
   async resolveImageUrls(model, messages) {
     const refs = /* @__PURE__ */ new Map();
     for (const message2 of messages) {
-      if (Array.isArray(message2.content)) collectImages3(message2.content, refs);
+      if (Array.isArray(message2.content)) collectImages2(message2.content, refs);
     }
     if (refs.size === 0) return void 0;
     const capabilities = getOpencodeCapabilitiesSync();
     if (!supportsOpencodeImage(capabilities.find((c) => c.id === model))) {
-      throw new LlmError19(
+      throw new LlmError18(
         `opencode: \u6A21\u578B "${model}" \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\uFF08\u80FD\u529B\u4EE5\u8FDC\u7AEF models.dev \u4E3A\u51C6\uFF09`,
         "UNSUPPORTED_CONTENT"
       );
     }
     if (this.options.readImage === void 0) {
-      throw new LlmError19("opencode: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
+      throw new LlmError18("opencode: \u56FE\u7247\u8F93\u5165\u9700\u8981\u9644\u4EF6\u670D\u52A1", "UNSUPPORTED_CONTENT");
     }
     const readImage = this.options.readImage;
     const out = /* @__PURE__ */ new Map();
@@ -69294,7 +66091,7 @@ var OpencodeAdapter = class extends LlmAdapter12 {
   /** 用指定槽发一次请求（轮换循环的复用单元）。 */
   async *streamVia(slot2, options) {
     const imageUrls = await this.resolveImageUrls(options.model, options.messages);
-    const messages = serializeMessages4(options.messages, imageUrls);
+    const messages = serializeMessages3(options.messages, imageUrls);
     const effort = resolveOpencodeEffort(
       options.model,
       options.reasoningEffort === void 0 ? void 0 : String(options.reasoningEffort),
@@ -69333,9 +66130,9 @@ var OpencodeAdapter = class extends LlmAdapter12 {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       const retryAfterMs = retryAfterMsFromResponse(response.headers);
-      throw new LlmError19(
+      throw new LlmError18(
         `opencode: HTTP ${response.status} \u2014 ${text.slice(0, 300)}`,
-        httpErrorCode4(response.status),
+        httpErrorCode3(response.status),
         {
           status: response.status,
           // ⚠️ 走 dsh-llm 的**官方契约**字段（`LlmErrorOptions`）：
@@ -69364,10 +66161,10 @@ function classifyOpencodeFailure(error) {
 var sessionIds = /* @__PURE__ */ new WeakMap();
 function sessionIdOf(options) {
   const key = options.messages;
-  if (typeof key !== "object" || key === null) return deriveSessionId2();
+  if (typeof key !== "object" || key === null) return deriveSessionId();
   const existing = sessionIds.get(key);
   if (existing !== void 0) return existing;
-  const created = deriveSessionId2();
+  const created = deriveSessionId();
   sessionIds.set(key, created);
   return created;
 }
@@ -69458,14 +66255,18 @@ function makeReadImageRequest(ctx) {
 }
 function apply(ctx, config = {}) {
   const network = createChannelFetch({ outlet: config.outlet });
+  const signedNetwork = createDirectFetch({ outlet: config.outlet });
+  const detachSignedNetwork = attachDirectFetch(signedNetwork.fetch);
+  ctx.effect(() => () => {
+    detachSignedNetwork();
+    void signedNetwork.close();
+  });
   ctx.effect(() => () => {
     void network.close();
   });
   suppressAutoSettingsPage(ctx);
   registerProviderSettings(
     ctx,
-    "llm-buddy",
-    "llm-workbuddy",
     "llm-codearts",
     "llm-lobsterai",
     "llm-qoder",
@@ -69478,7 +66279,7 @@ function apply(ctx, config = {}) {
     "llm-zcode",
     "llm-gemini"
   );
-  const service = new CodeArtsAuth(ctx);
+  const service = new CodeArtsAuth(ctx, { fetcher: signedNetwork.fetch });
   const pool = new AccountPool(ctx);
   configureDeadModelStore(ctx);
   const tokenLedgerStore = createTokenLedgerStore(ctx);
@@ -69490,17 +66291,9 @@ function apply(ctx, config = {}) {
       detachTokenLedger();
     }
   }, "token-ledger-persistence");
-  void pool.pruneAccountsWithForeignDomain(WORKBUDDY).then((removed) => {
-    if (removed.length > 0) {
-      ctx.logger.info(
-        `[channel-pack] \u5DF2\u6E05\u7406 ${removed.length} \u4E2A WorkBuddy \u65E7\u7248\uFF08\u4E2D\u56FD\u7248\uFF09\u8D26\u53F7\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\uFF1A${removed.join(", ")}`
-      );
-    }
-  }).catch((error) => {
-    ctx.logger.warn(`[channel-pack] \u6E05\u7406 WorkBuddy \u65E7\u7248\u8D26\u53F7\u5931\u8D25\uFF1A${String(error)}`);
-  });
   const codearts = registerCodeArtsLlm(ctx, {
-    credentialRef: credentialRef16(CODEARTS_CREDENTIAL_REF),
+    fetchImpl: signedNetwork.fetch,
+    credentialRef: credentialRef15(CODEARTS_CREDENTIAL_REF),
     resolveCredential: async () => {
       const available2 = await pool.getAvailableAccount("codearts", "");
       if (available2) {
@@ -69522,15 +66315,6 @@ function apply(ctx, config = {}) {
     fetchRemoteModels: () => service.refreshModels(pool),
     accountPool: pool
   });
-  const resolveBuddyCredentialByRef = async (refName) => {
-    const resolved = await ctx.credentials.resolve(credentialRef16(refName));
-    if (!resolved) return void 0;
-    try {
-      return JSON.parse(resolved.value);
-    } catch {
-      return void 0;
-    }
-  };
   const creditUsageStore = createCreditUsageStore(ctx);
   const creditUsage = new CreditUsageLedger(void 0, creditUsageStore, 3e4);
   creditUsage.setLogger((message2) => ctx.logger?.warn?.(`our-free-model: ${message2}`));
@@ -69551,54 +66335,6 @@ function apply(ctx, config = {}) {
     record: (provider, accountId, balances) => recordCreditUsage(provider)(accountId, balances),
     warn: (message2) => ctx.logger?.warn?.(`our-free-model: ${message2}`)
   });
-  const buddyBalanceSelector = new BuddyBalanceSelector({
-    product: CODEBUDDY,
-    resolveCredential: resolveBuddyCredentialByRef,
-    onBalanceSample: recordCreditUsage(CODEBUDDY.id)
-  });
-  const workbuddyBalanceSelector = new BuddyBalanceSelector({
-    product: WORKBUDDY,
-    resolveCredential: resolveBuddyCredentialByRef,
-    onBalanceSample: recordCreditUsage(WORKBUDDY.id)
-  });
-  const pickBuddyCredential = async (options) => {
-    const tried = /* @__PURE__ */ new Set();
-    const candidates = pool.listAccountsByProvider(options.product.id).filter((a) => a.enabled).filter((a) => {
-      const key = options.modelId ?? "";
-      if (key.length === 0) return true;
-      if (!a.modelRateLimits) return true;
-      const resetAt = a.modelRateLimits[key];
-      return resetAt === void 0 || resetAt === 0 || Date.now() >= resetAt;
-    }).map((a) => ({ id: a.id, credentialRef: a.credentialRef }));
-    if (options.isFreeModel === true) {
-      for (const candidate of candidates) {
-        const credential = await resolveBuddyCredentialByRef(candidate.credentialRef);
-        if (credential !== void 0) return { credential, tried };
-        tried.add(candidate.id);
-      }
-    }
-    const allowPermanent = !pool.permanentLocked(options.product.id);
-    const picked = await pickBuddyAccount(options.selector, candidates, {
-      allowPermanent,
-      resolveCredential: resolveBuddyCredentialByRef
-    });
-    if (picked.kind === "account") {
-      return { credential: picked.credential, tried: new Set(picked.tried) };
-    }
-    for (const id of picked.tried) tried.add(id);
-    if (picked.kind === "locked") {
-      const days = buddyExpiringWindowDays();
-      if (picked.reason?.kind === "unknown") {
-        throw new Error(
-          `${options.displayName}\uFF1A\u65E0\u6CD5\u786E\u8BA4\u662F\u5426\u6709\u53EF\u7528\u8D26\u53F7\u3002\u5DF2\u9501\u5B9A\u6C38\u4E45\u79EF\u5206\uFF0C\u800C\u90E8\u5206\u8D26\u53F7\u7684\u4F59\u989D\u67E5\u8BE2\u5931\u8D25\uFF08${picked.reason.errors.slice(0, 2).join("\uFF1B")}\uFF09\u3002\u8FD9\u4E9B\u8D26\u53F7**\u53EF\u80FD\u4ECD\u6709**\u300C${days} \u5929\u5185\u5230\u671F\u300D\u7684\u79EF\u5206 \u2014\u2014 \u8BF7\u91CD\u8BD5\uFF0C\u6216\u5728 Channel Pack \u5BF9\u5E94\u9762\u677F\u68C0\u67E5\u51ED\u636E\u662F\u5426\u5931\u6548\u3002`
-        );
-      }
-      throw new Error(
-        `${options.displayName}\uFF1A\u6CA1\u6709\u53EF\u7528\u8D26\u53F7\u3002\u5DF2\u9501\u5B9A\u6C38\u4E45\u79EF\u5206\uFF0C\u800C\u6240\u6709\u8D26\u53F7\u7684\u300C${days} \u5929\u5185\u5230\u671F\u300D\u79EF\u5206\u90FD\u5DF2\u7528\u5C3D\u3002\u8BF7\u5728 Channel Pack \u7684 ${options.displayName} \u9762\u677F\u89E3\u9501\u6C38\u4E45\u79EF\u5206\uFF0C\u6216\u7B49\u5F85\u8D44\u6E90\u5305\u5230\u671F\u540E\u91CD\u65B0\u53D1\u653E\u989D\u5EA6\u3002`
-      );
-    }
-    return { tried };
-  };
   const throwIfAllAccountsRateLimited = (product, modelId) => {
     const limited = allAccountsRateLimitedForModel(
       // 只统计**启用**账号：停用账号本就不参与自动选号，把它们算进来会
@@ -69607,91 +66343,14 @@ function apply(ctx, config = {}) {
       modelId ?? ""
     );
     if (limited === void 0) return;
-    throw new LlmError20(
+    throw new LlmError19(
       `${product.displayName}\uFF1A\u6A21\u578B ${modelId} \u7684\u53EF\u7528\u8D26\u53F7\u5747\u5728\u9650\u6D41\u4E2D\uFF0C\u6700\u8FD1\u4E00\u4E2A\u5C06\u4E8E ${new Date(limited.resetAtMs).toLocaleString("zh-CN")} \u89E3\u7981\u3002\u53EF\u6539\u7528\u5176\u5B83 provider / \u6A21\u578B\uFF0C\u6216\u7B49\u5F85\u89E3\u7981\u540E\u518D\u8BD5\uFF08\u65E0\u9700\u91CD\u65B0\u767B\u5F55\uFF09\u3002`,
       "QUOTA_EXCEEDED"
     );
   };
-  const buddy = new BuddyAuth(ctx);
-  const buddyAdapter = registerBuddyLlm(ctx, {
-    credentialRef: credentialRef16(BUDDY_CREDENTIAL_REF),
-    resolveCredential: async (modelId) => {
-      const picked = await pickBuddyCredential({
-        product: CODEBUDDY,
-        selector: buddyBalanceSelector,
-        displayName: "CodeBuddy",
-        modelId,
-        // 免费模型跳过「锁定 + 临期积分」这道门（判据见 BuddyAdapter.isFreeModel）。
-        // `buddyAdapter` 在此处是自引用：闭包只在注册完成后才执行，故无 TDZ 问题。
-        isFreeModel: await buddyAdapter.isFreeModel(modelId)
-      });
-      if (picked.credential) return picked.credential;
-      const available2 = await pool.getAvailableAccount(CODEBUDDY.id, modelId ?? "", picked.tried);
-      if (available2) {
-        reportLedgerAccount(CODEBUDDY.id, available2.entry.id);
-        return available2.credential;
-      }
-      throwIfAllAccountsRateLimited(CODEBUDDY, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(BUDDY_CREDENTIAL_REF));
-      if (!resolved) return void 0;
-      try {
-        return JSON.parse(resolved.value);
-      } catch {
-        return void 0;
-      }
-    },
-    // 刷新**账号池里实际使用的那一个账号**，而不是默认单凭据 ref ——
-    // 后者在 Channel Pack 登录路径下根本不存在，会把 401 报成「未配置凭据」
-    // 并自锁。详见 createPoolRefresh 的注释。
-    refresh: createPoolRefresh(pool, "buddy", buddy),
-    fetchRemoteModels: () => buddy.fetchModels(pool),
-    readImage: makeReadImage(ctx),
-    // 图片请求版本（缩放）桥接：issue !IKITT9。不可用时适配器自动回退原图。
-    readImageRequest: makeReadImageRequest(ctx),
-    accountPool: pool,
-    product: CODEBUDDY
-  });
-  const workbuddy = new BuddyAuth(ctx, { product: WORKBUDDY });
-  const workbuddyAdapter = registerBuddyLlm(ctx, {
-    credentialRef: credentialRef16(WORKBUDDY.defaultCredentialRef),
-    resolveCredential: async (modelId) => {
-      const picked = await pickBuddyCredential({
-        product: WORKBUDDY,
-        selector: workbuddyBalanceSelector,
-        displayName: "WorkBuddy",
-        modelId,
-        // 免费模型跳过「锁定 + 临期积分」这道门（判据见 BuddyAdapter.isFreeModel）。
-        // 用户报障「账户可用却提示没有可用账号」正是缺了这一条：免费模型不扣积分，
-        // 却被永久积分锁定拦下。
-        isFreeModel: await workbuddyAdapter.isFreeModel(modelId)
-      });
-      if (picked.credential) return picked.credential;
-      const available2 = await pool.getAvailableAccount(WORKBUDDY.id, modelId ?? "", picked.tried);
-      if (available2) {
-        reportLedgerAccount(WORKBUDDY.id, available2.entry.id);
-        return available2.credential;
-      }
-      throwIfAllAccountsRateLimited(WORKBUDDY, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(WORKBUDDY.defaultCredentialRef));
-      if (!resolved) return void 0;
-      try {
-        return JSON.parse(resolved.value);
-      } catch {
-        return void 0;
-      }
-    },
-    // 同上：必须刷池内账号（`WORKBUDDY_ACCESS_TOKEN` 从未被写入过）。
-    // 这条正是「workbuddy + deepseek-v4.1-flash 一直报未配置凭据」的根因。
-    refresh: createPoolRefresh(pool, "workbuddy", workbuddy),
-    fetchRemoteModels: () => workbuddy.fetchModels(pool),
-    readImage: makeReadImage(ctx),
-    readImageRequest: makeReadImageRequest(ctx),
-    accountPool: pool,
-    product: WORKBUDDY
-  });
   const lobsterai = new LobsteraiAuth(ctx);
   const lobsteraiAdapter = registerLobsteraiLlm(ctx, {
-    credentialRef: credentialRef16(LOBSTERAI.defaultCredentialRef),
+    credentialRef: credentialRef15(LOBSTERAI.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(LOBSTERAI.id, modelId ?? "");
       if (available2) {
@@ -69700,7 +66359,7 @@ function apply(ctx, config = {}) {
         reportLedgerAccount(LOBSTERAI.id, available2.entry.id);
         return available2.credential;
       }
-      const resolved = await ctx.credentials.resolve(credentialRef16(LOBSTERAI.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(LOBSTERAI.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -69725,7 +66384,7 @@ function apply(ctx, config = {}) {
   const qoder = new QoderAuth(ctx);
   const activeQoderAccountId = /* @__PURE__ */ new Map();
   const qoderAdapter = registerQoderLlm(ctx, {
-    credentialRef: credentialRef16(QODER.defaultCredentialRef),
+    credentialRef: credentialRef15(QODER.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(QODER.id, modelId ?? "");
       if (available2) {
@@ -69737,7 +66396,7 @@ function apply(ctx, config = {}) {
       }
       activeQoderAccountId.set(QODER.id, void 0);
       throwIfAllAccountsRateLimited(QODER, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(QODER.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(QODER.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -69763,7 +66422,7 @@ function apply(ctx, config = {}) {
   });
   const qoderCn = new QoderAuth(ctx, { product: QODER_CN });
   const qoderCnAdapter = registerQoderLlm(ctx, {
-    credentialRef: credentialRef16(QODER_CN.defaultCredentialRef),
+    credentialRef: credentialRef15(QODER_CN.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(QODER_CN.id, modelId ?? "");
       if (available2) {
@@ -69775,7 +66434,7 @@ function apply(ctx, config = {}) {
       }
       activeQoderAccountId.set(QODER_CN.id, void 0);
       throwIfAllAccountsRateLimited(QODER_CN, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(QODER_CN.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(QODER_CN.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -69801,7 +66460,7 @@ function apply(ctx, config = {}) {
   });
   const trae = new TraeAuth(ctx);
   const traeAdapter = registerTraeLlm(ctx, {
-    credentialRef: credentialRef16(TRAE.defaultCredentialRef),
+    credentialRef: credentialRef15(TRAE.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(TRAE.id, modelId ?? "");
       if (available2) {
@@ -69810,7 +66469,7 @@ function apply(ctx, config = {}) {
         reportLedgerAccount(TRAE.id, available2.entry.id);
         return available2.credential;
       }
-      const resolved = await ctx.credentials.resolve(credentialRef16(TRAE.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(TRAE.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -69834,7 +66493,7 @@ function apply(ctx, config = {}) {
   let activeClineAccountId = "";
   const clineAdapter = registerClineLlm(ctx, {
     fetchImpl: network.fetch,
-    credentialRef: credentialRef16(CLINE.defaultCredentialRef),
+    credentialRef: credentialRef15(CLINE.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(CLINE.id, modelId ?? "");
       activeClineAccountId = available2?.entry.id ?? "";
@@ -69849,7 +66508,7 @@ function apply(ctx, config = {}) {
         return available2.credential;
       }
       throwIfAllAccountsRateLimited(CLINE, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(CLINE.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(CLINE.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -69875,7 +66534,7 @@ function apply(ctx, config = {}) {
   });
   const loomy = new LoomyAuth(ctx);
   const resolveLoomyCredentialByRef = async (refName) => {
-    const resolved = await ctx.credentials.resolve(credentialRef16(refName));
+    const resolved = await ctx.credentials.resolve(credentialRef15(refName));
     if (!resolved) return void 0;
     try {
       return JSON.parse(resolved.value);
@@ -69889,7 +66548,7 @@ function apply(ctx, config = {}) {
     onBalanceSample: recordCreditUsage(LOOMY.id)
   });
   const loomyAdapter = registerLoomyLlm(ctx, {
-    credentialRef: credentialRef16(LOOMY.defaultCredentialRef),
+    credentialRef: credentialRef15(LOOMY.defaultCredentialRef),
     /**
      * 解析本轮该用哪个账号的凭据。
      *
@@ -69927,7 +66586,7 @@ function apply(ctx, config = {}) {
         }
       }
       throwIfAllAccountsRateLimited(LOOMY, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(LOOMY.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(LOOMY.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -69940,7 +66599,7 @@ function apply(ctx, config = {}) {
       if (accountId !== void 0 && entry === void 0) throw new Error("loomy: account no longer exists");
       if (entry) await loomy.refreshAccountCredential(entry.credentialRef, pool, entry.id);
       else await loomy.refresh();
-      const resolved = await ctx.credentials.resolve(credentialRef16(entry?.credentialRef ?? LOOMY.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(entry?.credentialRef ?? LOOMY.defaultCredentialRef));
       if (!resolved) throw new Error("loomy: credential no longer exists");
       return JSON.parse(resolved.value);
     },
@@ -69959,7 +66618,7 @@ function apply(ctx, config = {}) {
     // 失败时返回空数组，由适配器回退兜底表。
     fetchRemoteModels: async () => {
       const available2 = await pool.getAvailableAccount(LOOMY.id, "");
-      const resolved = available2 !== null && available2 !== void 0 ? { value: JSON.stringify(available2.credential) } : await ctx.credentials.resolve(credentialRef16(LOOMY.defaultCredentialRef));
+      const resolved = available2 !== null && available2 !== void 0 ? { value: JSON.stringify(available2.credential) } : await ctx.credentials.resolve(credentialRef15(LOOMY.defaultCredentialRef));
       if (resolved === void 0) return [];
       let credential;
       try {
@@ -69981,7 +66640,7 @@ function apply(ctx, config = {}) {
   });
   const raccoon = new RaccoonAuth(ctx);
   const resolveRaccoonCredentialByRef = async (refName) => {
-    const resolved = await ctx.credentials.resolve(credentialRef16(refName));
+    const resolved = await ctx.credentials.resolve(credentialRef15(refName));
     if (!resolved) return void 0;
     try {
       return JSON.parse(resolved.value);
@@ -70029,7 +66688,7 @@ function apply(ctx, config = {}) {
       }
       return void 0;
     }
-    const resolved = await ctx.credentials.resolve(credentialRef16(RACCOON.defaultCredentialRef));
+    const resolved = await ctx.credentials.resolve(credentialRef15(RACCOON.defaultCredentialRef));
     if (!resolved) return void 0;
     try {
       return {
@@ -70043,7 +66702,7 @@ function apply(ctx, config = {}) {
     }
   };
   const raccoonAdapter = registerRaccoonLlm(ctx, {
-    credentialRef: credentialRef16(RACCOON.defaultCredentialRef),
+    credentialRef: credentialRef15(RACCOON.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const picked = await pickRaccoonAccount(modelId ?? "", true);
       if (picked) {
@@ -70051,7 +66710,7 @@ function apply(ctx, config = {}) {
         return picked.credential;
       }
       throwIfAllAccountsRateLimited(RACCOON, modelId);
-      const resolved = await ctx.credentials.resolve(credentialRef16(RACCOON.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(RACCOON.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -70072,7 +66731,7 @@ function apply(ctx, config = {}) {
       const entry = pool.listAccountsByProvider(RACCOON.id).find((account) => account.id === accountId);
       if (entry === void 0) throw new Error("raccoon: account no longer exists");
       await raccoon.refreshAccountCredential(entry.credentialRef, pool, entry.id);
-      const resolved = await ctx.credentials.resolve(credentialRef16(entry.credentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(entry.credentialRef));
       if (!resolved) throw new Error("raccoon: credential no longer exists");
       return JSON.parse(resolved.value);
     },
@@ -70108,7 +66767,7 @@ function apply(ctx, config = {}) {
   });
   const minimax = new MinimaxAuth(ctx);
   const minimaxAdapter = registerMinimaxLlm(ctx, {
-    credentialRef: credentialRef16(MINIMAX.defaultCredentialRef),
+    credentialRef: credentialRef15(MINIMAX.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(MINIMAX.id, modelId ?? "");
       if (available2) {
@@ -70117,7 +66776,7 @@ function apply(ctx, config = {}) {
         reportLedgerAccount(MINIMAX.id, available2.entry.id);
         return available2.credential;
       }
-      const resolved = await ctx.credentials.resolve(credentialRef16(MINIMAX.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(MINIMAX.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -70160,7 +66819,7 @@ function apply(ctx, config = {}) {
   const geminiAdapter = registerGeminiLlm(ctx, {
     fetchImpl: network.fetch,
     projectFetcher: network.fetch,
-    credentialRef: credentialRef16(GEMINI.defaultCredentialRef),
+    credentialRef: credentialRef15(GEMINI.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(GEMINI.id, modelId ?? "");
       if (available2) {
@@ -70172,7 +66831,7 @@ function apply(ctx, config = {}) {
         reportLedgerAccount(GEMINI.id, available2.entry.id);
         return available2.credential;
       }
-      const resolved = await ctx.credentials.resolve(credentialRef16(GEMINI.defaultCredentialRef));
+      const resolved = await ctx.credentials.resolve(credentialRef15(GEMINI.defaultCredentialRef));
       if (!resolved) return void 0;
       try {
         return JSON.parse(resolved.value);
@@ -70205,8 +66864,8 @@ function apply(ctx, config = {}) {
     projectCache: geminiProjectCache,
     persistProject: async (value) => {
       const available2 = await pool.getAvailableAccount(GEMINI.id, "");
-      const ref = available2 ? available2.entry.credentialRef : credentialRef16(GEMINI.defaultCredentialRef);
-      await ctx.credentials.set(credentialRef16(ref), value);
+      const ref = available2 ? available2.entry.credentialRef : credentialRef15(GEMINI.defaultCredentialRef);
+      await ctx.credentials.set(credentialRef15(ref), value);
     },
     ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
   });
@@ -70244,7 +66903,7 @@ function apply(ctx, config = {}) {
   };
   const activeZcodeAccountId = /* @__PURE__ */ new Map();
   const zcodeAdapter = registerZcodeLlm(ctx, {
-    credentialRef: credentialRef16(ZCODE.defaultCredentialRef),
+    credentialRef: credentialRef15(ZCODE.defaultCredentialRef),
     resolveCredential: async (modelId) => {
       const available2 = await pool.getAvailableAccount(ZCODE.id, modelId ?? "");
       if (available2) {
@@ -70392,8 +67051,6 @@ function apply(ctx, config = {}) {
   const REFRESH_INTERVAL_MS = 30 * 60 * 1e3;
   const refreshTargets = [
     ["codearts", (p) => service.refreshAll(p)],
-    ["buddy", (p) => buddy.refreshAll(p)],
-    ["workbuddy", (p) => workbuddy.refreshAll(p)],
     ["lobsterai", (p) => lobsterai.refreshAll(p)],
     ["qoder", (p) => qoder.refreshAll(p)],
     ["qodercn", (p) => qoderCn.refreshAll(p)],
@@ -70434,8 +67091,6 @@ function apply(ctx, config = {}) {
     ctx.effect(() => () => {
       clearInterval(refreshTimer);
       service.stop();
-      buddy.stop();
-      workbuddy.stop();
       lobsterai.stop();
       qoder.stop();
       qoderCn.stop();
@@ -70452,8 +67107,6 @@ function apply(ctx, config = {}) {
   });
   ctx.effect(() => () => {
     service.stop();
-    buddy.stop();
-    workbuddy.stop();
     lobsterai.stop();
     qoder.stop();
     qoderCn.stop();
@@ -70469,7 +67122,7 @@ function apply(ctx, config = {}) {
     opencodeAdapter = registerOpencodeLlm(ctx, {
       identitySlots: async () => listIdentitySlots(
         await Promise.all(pool.listAccountsByProvider(OPENCODE.id).map(async (entry) => {
-          const resolved = await ctx.credentials.resolve(credentialRef16(entry.credentialRef)).catch(() => void 0);
+          const resolved = await ctx.credentials.resolve(credentialRef15(entry.credentialRef)).catch(() => void 0);
           let parsed = {};
           if (resolved !== void 0) {
             try {
@@ -70522,7 +67175,7 @@ function apply(ctx, config = {}) {
     });
     void ensureDefaultAnonymousSlot(
       (entry) => pool.addAccount(entry),
-      (refName, value) => ctx.credentials.set(credentialRef16(refName), value),
+      (refName, value) => ctx.credentials.set(credentialRef15(refName), value),
       () => pool.listAccountsByProvider(OPENCODE.id),
       // ⚠️ 判据是「池里有没有匿名条目」而不是「有没有账号」：用户若主动
       // 删光了匿名通道，那是明确选择，不该每次启动又塞回来（删除会像失灵）。
@@ -70556,8 +67209,6 @@ function apply(ctx, config = {}) {
     // `codearts` 是 registerCodeArtsLlm 返回的**适配器实例**（与 CodeArtsAuth
     // 服务实例 `service` 不同名，故这里可以简写）。
     codearts: pruned(PROVIDER, codearts),
-    buddy: pruned("buddy", buddyAdapter),
-    workbuddy: pruned("workbuddy", workbuddyAdapter),
     lobsterai: pruned(LOBSTERAI.id, lobsteraiAdapter),
     qoder: pruned(QODER.id, qoderAdapter),
     qodercn: pruned(QODER_CN.id, qoderCnAdapter),
@@ -70574,7 +67225,11 @@ function apply(ctx, config = {}) {
     void geminiSigStore.flush().catch(() => {
     });
   });
-  registerChannelPackRpc(ctx, pool, service, buddy, workbuddy, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, { ...config, creditUsage });
+  registerChannelPackRpc(ctx, pool, service, lobsterai, qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, {
+    ...config,
+    codeartsFetcher: signedNetwork.fetch,
+    creditUsage
+  });
   mountOpenAiGateway(ctx, pool);
   installLoopResume(ctx);
   ctx.provide("accountPool", pool);
@@ -70587,10 +67242,14 @@ export {
   RaccoonBalanceSelector,
   apply,
   channelProxyBypassed,
+  closeDirectFetch,
   createChannelFetch,
   createCreditUsageStore,
+  createDirectFetch,
   creditBalancePools,
   creditSampleTtlMs,
+  directFetch,
+  directLane,
   inject,
   makeReadImage,
   makeReadImageRequest,
