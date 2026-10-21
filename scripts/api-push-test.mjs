@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict'
 
 const {
-  parseDiffTree, describeApiError, DELETED_ENTRY_MODE,
+  parseDiffTree, describeApiError, DELETED_ENTRY_MODE, pushTouchesReleaseContent,
 } = await import('./api-push-squash.mjs')
 
 let failures = 0
@@ -182,6 +182,50 @@ await (async () => {
     // 两段式重构后，删除条目的归一必须在**共用的** pushOneCommit 里，
     // 否则第二段（只推 catalog/feed）虽不受影响，但第一段会退回 422。
     assert.match(source, /status === 'D'[\s\S]{0,80}entry\.mode/, '删除条目必须用 parseDiffTree 归一后的 mode')
+  })
+
+  /**
+   * ── 「用了没导入」这一类：必须**执行**到那行代码 ─────────────────────────
+   *
+   * ⚠️ 真实缺陷（2026-10-21 真机推送）：`pushOneCommit` 里调用了
+   * `isReleaseContentPath` 却没有 import，推送一跑到那行就 ReferenceError 中断。
+   * 当时代码是**全绿**的 —— 这条判定藏在需要网络的函数深处，没有任何测试
+   * 执行过它；用例只测了 helper 本身（那个文件里它是本地定义）。
+   *
+   * 所以判定逻辑抽成导出的 `pushTouchesReleaseContent`，用例直接调用它：
+   * 少一个 import 就会在这里炸出来，而不是等真机推送。
+   */
+  check('发布内容判定：调用真实代码路径（缺 import 会在此炸出来）', () => {
+    const paths = ['package.json', 'src', 'client.js']
+    assert.equal(pushTouchesReleaseContent([{ path: 'catalog/dsh-plugin.json' }], paths), false,
+      '只改 catalog 不算动了发布内容')
+    assert.equal(pushTouchesReleaseContent([{ path: 'README.md' }], paths), false,
+      'README 不在 files 里')
+    assert.equal(pushTouchesReleaseContent([{ path: 'src/index.js' }], paths), true,
+      '目录前缀要算发布内容')
+    assert.equal(pushTouchesReleaseContent([{ path: 'client.js' }], paths), true)
+    assert.equal(pushTouchesReleaseContent([], paths), false)
+    // 混合条目：只要有一个碰了发布内容就算（降级路径据此选 revision）。
+    assert.equal(pushTouchesReleaseContent(
+      [{ path: 'catalog/dsh-plugin.json' }, { path: 'package.json' }], paths), true)
+  })
+
+  check('共用 helper 的名字：用了就必须导入（窄口径静态校验）', () => {
+    const libSource = fs2.readFileSync(new URL('./lib/catalog-revision.mjs', import.meta.url), 'utf8')
+    const exported = [...libSource.matchAll(/export (?:function|const|class) ([A-Za-z_$][\w$]*)/g)]
+      .map(match => match[1])
+    assert.ok(exported.length > 0, '应该能从 helper 里解析出导出名')
+    for (const file of ['api-push-squash.mjs', 'sync-upstream.mjs']) {
+      const text = fs2.readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
+      const clause = /import\s*\{([^}]*)\}\s*from\s*'\.\/lib\/catalog-revision\.mjs'/.exec(text)
+      const imported = new Set(clause === null
+        ? []
+        : clause[1].split(',').map(item => item.trim()).filter(Boolean))
+      const body = clause === null ? text : text.replace(clause[0], '')
+      const missing = exported.filter(name =>
+        new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(body) && !imported.has(name))
+      assert.deepEqual(missing, [], `${file} 用了但没从 helper 导入：${missing.join(', ')}`)
+    }
   })
 })()
 

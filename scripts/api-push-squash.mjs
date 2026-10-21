@@ -36,6 +36,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   catalogRevision,
+  isReleaseContentPath,
   readReleaseContentPaths,
   remoteContentRevision,
 } from './lib/catalog-revision.mjs'
@@ -191,6 +192,28 @@ async function uploadBlob(sha) {
 }
 
 /**
+ * 这次推送有没有动发布内容 —— 降级路径下 revision 取谁，由它决定。
+ *
+ * ## ⚠️ 为什么单独导出（真实缺陷，2026-10-21 真机推送）
+ *
+ * 原先是内联在 `pushOneCommit` 里的一行。`isReleaseContentPath` **用了却没
+ * import**，于是 `pushOneCommit` 一跑到这行就 `ReferenceError` 中断，main 推送
+ * 当场失败。而当时**所有用例都是绿的**：这条判定藏在需要网络的
+ * `pushOneCommit` 深处，没有任何测试真正**执行**过它 —— 用例只测了 helper
+ * 本身（那个文件里 `isReleaseContentPath` 是本地定义），没测这里的引用。
+ *
+ * 导出之后，用例可以直接喂 entries 调用它：缺 import 会在测试里立刻炸出来，
+ * 而不是等到真机推送。
+ *
+ * @param {Array<{ path: string }>} entries `parseDiffTree` 的差异清单
+ * @param {string[]} releasePaths 发布内容路径（`readReleaseContentPaths`）
+ * @returns {boolean}
+ */
+export function pushTouchesReleaseContent(entries, releasePaths) {
+  return entries.some(entry => isReleaseContentPath(entry.path, releasePaths))
+}
+
+/**
  * 以 `baseSha` 为远端基线，把**本地工作树的内容**推成**一个**提交。
  *
  * 抽成函数只为一件事：两段式推送的第二段要复用同一套差异推送（第二次
@@ -212,7 +235,7 @@ async function pushOneCommit({ baseSha, message, verbose = true }) {
   const raw = git('diff-tree', '-r', '-z', '--no-commit-id', remoteTree, 'HEAD')
   const entries = parseDiffTree(raw)
   const releasePaths = readReleaseContentPaths({ root })
-  const touchedReleaseContent = entries.some(entry => isReleaseContentPath(entry.path, releasePaths))
+  const touchedReleaseContent = pushTouchesReleaseContent(entries, releasePaths)
   const items = []
   for (const entry of entries) {
     if (entry.status === 'D') {

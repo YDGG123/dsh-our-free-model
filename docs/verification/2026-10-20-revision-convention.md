@@ -116,6 +116,40 @@
 | `revision = pushedSha` | `api-push-test`（调用点断言） |
 | `lib` 里把 `ref` 换成 `HEAD` | `catalog-revision-test`（本地落后远端用例） |
 | 基线读到推送之后 | `api-push-test`（顺序断言） |
+| **删掉 lib 名字的 import** | `api-push-test`（执行真实代码路径 + 窄口径静态校验） |
+
+## ⚠️ 补记：真机推送撞出的「用了没导入」（2026-10-21）
+
+上面那轮 commit（`88697bd`）在真机推送时**当场失败**：
+
+```
+api-push-squash.mjs:215  ReferenceError: isReleaseContentPath is not defined
+```
+
+它用了 `isReleaseContentPath` 却没 import —— 而当时**所有用例都是绿的**。
+
+### 为什么测试没抓到（这是这一节存在的理由）
+
+那条判定内联在 `pushOneCommit` 深处，而 `pushOneCommit` 需要网络（`GET /git/commits`），
+用例跑不到它。用例只测了 helper 本身 —— 而在 `lib/catalog-revision.mjs` 里
+`isReleaseContentPath` 是**本地定义**，所以「helper 的用例」永远发现不了
+「调用方少了一行 import」。
+
+### 两道守卫
+
+1. **执行真实代码路径**：把判定抽成导出的 `pushTouchesReleaseContent(entries, paths)`，
+   `pushOneCommit` 调它，用例直接调它。缺 import 就在测试里 `ReferenceError`，
+   不必等真机推送。
+2. **窄口径静态校验**：`lib/catalog-revision.mjs` 的每个导出名，只要在
+   `api-push-squash.mjs` / `sync-upstream.mjs` 里被**调用**，就必须出现在该文件的
+   import 子句里。
+
+⚠️ 试过但**放弃**的方案：用 `tsc --checkJs` 全量检查 `scripts/**`。`tsconfig.json`
+只 include `adapter/**`（所以 typecheck 本来就覆盖不到 scripts），而给 scripts
+单独跑 tsc 有两个问题：没有 `@types/node` ⇒ `process`/`Buffer`/`console` 报几百条
+噪音；`scripts/vault-test.mjs` 还有一个 tsc 解析不了的语法点，直接把整个程序
+的诊断吞掉。也不再写「全仓未定义标识符扫描」——原型实测 399 条误报
+（动态 `import(`、对象方法简写等），靠不断加白名单维持的守卫迟早会烂。
 
 ## 验证结果
 
@@ -123,7 +157,7 @@
 |---|---|
 | `catalog-revision-test` | **14/14** |
 | `cloud-sync-test` | **39/39** |
-| `api-push-test` | **18/18** |
+| `api-push-test` | **20/20** |
 | `test-all --mode contributor` | **77/77 suites**（`reload` 这次也过了） |
 | `test-all --mode release` | **3/3**（`catalog` 通过） |
 | `typecheck` | 通过 |
