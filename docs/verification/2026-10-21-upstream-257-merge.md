@@ -155,12 +155,21 @@ fork 定制项核对：`src/updater.js` 的 `REPO`、`PINNED_MANIFEST_PUBLIC_KEY
 1. **第二段推送真实的树**：新增 `workingTreeWith(files)`（用 `GIT_INDEX_FILE` 临时索引
    把工作区内容编成树，不污染用户索引/工作区、不产生提交），`pushOneCommit` 接受显式
    `tree`，第二段传它。若第二段仍算出「无差异」⇒ **直接报错**，不再当作成功。
-2. **远端 revision 做成真查询**：新增 `scripts/lib/catalog-revision.mjs` 的
-   `fetchRemoteReleaseRevision()` —— 对每个发布内容路径问 GitHub API
-   「该分支上最后碰它的是谁」（`/commits?sha=<branch>&path=<p>&per_page=1`），
-   多候选时用 `/compare/<a>...<b>` 的**祖先关系**定序（不靠提交日期）。
-   调用顺序：`git fetch` 重算 → **API 真查询** → 靠 diff 推断（并注明推断在
-   「投影提交自身改了发布内容」时会错，必须由推送后自证兜住）。
+2. **远端 revision 做成真查询，并收进一个带降级的 helper**：
+   `scripts/lib/catalog-revision.mjs` 新增
+   - `fetchRemoteReleaseRevision()` —— 对每个发布内容路径问 GitHub API
+     「该分支上最后碰它的是谁」（`/commits?sha=<branch>&path=<p>&per_page=1`），
+     多候选时用 `/compare/<a>...<b>` 的**祖先关系**定序（不靠提交日期；`diverged`
+     直接报错）；
+   - `resolveRemoteReleaseRevision()` —— 顺序是 **git fetch 重算 → API 真查询**，
+     两条都不通就抛错（错误里写清两条原因）。
+   **两个调用点都用它**：`sync-upstream.mjs`（云端，三处）与 `api-push-squash.mjs`
+   （本机：判定 + 推送后自证），不再各写一套。`owner/repo` 从
+   `git remote get-url` 解析、token 取 `GH_TOKEN` 或 `.private/gh-token`，
+   所以调用点不必各自知道这些细节；云端 workflow 的同步步骤补了 `GH_TOKEN`，
+   否则那条降级在云端拿不到凭据。
+   靠 diff 推断降为**最后手段**（注释里写明它在「投影提交自身改了发布内容」时
+   会错，必须由推送后自证兜住）。
 
 顺带修掉一个一直在的毛病：推送成功后把本地 catalog **还原**成推送前的口径
 （本地记录本地、远端记录远端）。否则每次推送都留下一棵脏树，下一次同步的
@@ -191,7 +200,7 @@ M  catalog/provenance.json
 | `workingTreeWith` 退回 `HEAD` 树 | 「工作区改动必须编进树」用例 |
 | 自证退回「跳过」 | 两条断言（不允许静默跳过） |
 
-`api-push-test` 从 20 项增到 **29 项**。
+`api-push-test` 20 → **29 项**，`catalog-revision-test` 14 → **18 项**。
 
 ## 未做（明确留给后续）
 

@@ -192,14 +192,14 @@ await checkAsync('--ci 刷新 revision 必须用「最后触碰发布内容的�
   //    —— 后者只能证明写了什么，证明不了算得对（算法正确性由
   //    scripts/catalog-revision-test.mjs 用真实 git 仓库验证）。
   //
-  // ⚠️ 切片必须卡在「写 catalog 之前」：自证段后面也会调 remoteContentRevision，
+  // ⚠️ 切片必须卡在「写 catalog 之前」：自证段后面也会调同一个 helper，
   //    否则把第一段改回 contentRevisionAt('HEAD') 仍然能匹配上（变异测试实测漏过）。
   const writeAt = ciBlock.indexOf('set-catalog-revision.mjs')
   const beforeWrite = ciBlock.slice(0, writeAt === -1 ? undefined : writeAt)
-  assert.match(beforeWrite, /remoteContentRevision\(\s*workBranch/,
-    '写入 catalog 之前必须在远端工作分支上重算 revision（本地 HEAD 不算）')
+  assert.match(beforeWrite, /resolveRemoteReleaseRevision\(\s*workBranch/,
+    '写入 catalog 之前必须在远端工作分支上求 revision（本地 HEAD 不算）')
   assert.ok(!/contentRevisionAt\(\s*'HEAD'\s*,[^)]*\)\s*$/m.test(beforeWrite)
-    || /const contentRevision = remoteContentRevision/.test(beforeWrite),
+    || /resolvedWork = await resolveRemoteReleaseRevision/.test(beforeWrite),
     '写 catalog 用的 contentRevision 不能取自本地 HEAD')
   // 且不能把 workHead / 推送前 sha 直接喂给 set-catalog-revision。
   assert.ok(!/set-catalog-revision\.mjs', workHead/.test(ciBlock),
@@ -218,8 +218,8 @@ await checkAsync('投影发布分支后也要在远端分支上自证 revision',
   const source = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
   const ciBlock = source.slice(source.indexOf('if (ciMode)'), source.indexOf('if (ciMode)') + 14000)
   // history 模式：main 与工作分支同提交 ⇒ 两边的远端重算值必须相等。
-  assert.match(ciBlock, /remoteContentRevision\(\s*releaseBranch/,
-    `投影后必须在 ${'${releaseBranch}'} 上重算并比对`)
+  assert.match(ciBlock, /resolveRemoteReleaseRevision\(\s*releaseBranch/,
+    `投影后必须在 ${'${releaseBranch}'} 上求 revision 并比对`)
   assert.match(ciBlock, /投影后 .* 的 revision 与工作分支不一致|revision 与工作分支不一致/,
     '不一致必须报错')
 })

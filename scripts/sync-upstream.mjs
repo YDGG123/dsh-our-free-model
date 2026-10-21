@@ -74,7 +74,7 @@ import { fileURLToPath } from 'node:url'
 import {
   catalogRevision,
   contentRevisionAt,
-  remoteContentRevision,
+  resolveRemoteReleaseRevision,
 } from './lib/catalog-revision.mjs'
 
 const root = path.join(fileURLToPath(new URL('..', import.meta.url)))
@@ -538,8 +538,13 @@ async function main() {
       // 算法本身收在 `scripts/lib/catalog-revision.mjs`：本脚本、`api-push-squash.mjs`
       // 与任何未来的推送通道共用一份，不再各写一套（两次漂移都是这么来的）。
       say('刷新 catalog revision（在远端分支上重算）…')
-      const contentRevision = remoteContentRevision(workBranch, { root })
-      say(`  最后触碰发布内容 = ${contentRevision.slice(0, 7)}（${workBranch} HEAD 是 ${workHead.slice(0, 7)}）`)
+      const resolvedWork = await resolveRemoteReleaseRevision(workBranch, {
+        root, attempts: 2, timeout: 30_000,
+      })
+      const contentRevision = resolvedWork.revision
+      say(`  最后触碰发布内容 = ${contentRevision.slice(0, 7)}`
+        + `（${resolvedWork.via === 'git' ? 'git fetch 重算' : 'API 真查询'}；`
+        + `${workBranch} HEAD 是 ${workHead.slice(0, 7)}）`)
       const refreshed = run('node', ['scripts/set-catalog-revision.mjs', contentRevision])
       say(refreshed.output.trim().slice(-800))
       if (refreshed.code !== 0) throw new Error('刷新 revision 失败')
@@ -568,15 +573,19 @@ async function main() {
        * 为什么刷新提交本身不会让这里失败：它只碰 `catalog/` 与 `feed/`，
        * 不属于发布内容 ⇒ 远端重算值不变（幂等）。
        */
-      const verifyRevision = remoteContentRevision(workBranch, { root })
+      const verifiedWork = await resolveRemoteReleaseRevision(workBranch, {
+        root, attempts: 2, timeout: 30_000,
+      })
+      const verifyRevision = verifiedWork.revision
       const recordedRevision = catalogRevision({ root })
       if (recordedRevision !== verifyRevision) {
         throw new Error(
           `catalog revision 与远端真相不一致：catalog 写的是 ${String(recordedRevision).slice(0, 7)}，`
-          + `远端 ${workBranch} 重算得到 ${verifyRevision.slice(0, 7)}`,
+          + `远端 ${workBranch} 得到 ${verifyRevision.slice(0, 7)}`,
         )
       }
-      say(`  ✅ 自证通过：catalog revision = ${verifyRevision.slice(0, 7)}（${workBranch} 远端重算）`)
+      say(`  ✅ 自证通过：catalog revision = ${verifyRevision.slice(0, 7)}`
+        + `（${workBranch} ${verifiedWork.via === 'git' ? '远端重算' : 'API 真查询'}）`)
 
       if (!pushBranch) {
         say(`OFM_PUSH_BRANCH_ONLY=1：跳过 ${releaseBranch} 的投影推送`)
@@ -610,14 +619,18 @@ async function main() {
          * 工作分支多出一个碰了发布内容的提交」，这里会立刻红，而不是让
          * `release-sign.yml` 去发现。
          */
-        const releaseRevision = remoteContentRevision(releaseBranch, { root })
+        const resolvedRelease = await resolveRemoteReleaseRevision(releaseBranch, {
+          root, attempts: 2, timeout: 30_000,
+        })
+        const releaseRevision = resolvedRelease.revision
         if (releaseRevision !== contentRevision) {
           throw new Error(
             `投影后 ${releaseBranch} 的 revision 与工作分支不一致：`
             + `${releaseRevision.slice(0, 7)} ≠ ${contentRevision.slice(0, 7)}`,
           )
         }
-        say(`  ✅ ${releaseBranch} revision 自证通过：${releaseRevision.slice(0, 7)}`)
+        say(`  ✅ ${releaseBranch} revision 自证通过：${releaseRevision.slice(0, 7)}`
+          + `（${resolvedRelease.via === 'git' ? '远端重算' : 'API 真查询'}）`)
       } else {
         say(`投影 HEAD → origin/${releaseBranch}（squash，单提交）…`)
         const tokenForPush = process.env.GH_TOKEN

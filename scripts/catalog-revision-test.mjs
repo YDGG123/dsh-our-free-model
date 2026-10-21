@@ -200,6 +200,64 @@ try {
     assert.notEqual(remoteValue, localValue, '本地值此时已经过期 —— 这正是事故现场')
   })
 
+  // ── 带降级的求解（两个调用点都用它）─────────────────────────────────────
+
+  await checkAsync('带降级的求解：git 可用走 git fetch 重算', async () => {
+    const resolved = await lib.resolveRemoteReleaseRevision('main', { root: repo, remote: 'origin' })
+    assert.equal(resolved.via, 'git')
+    assert.equal(resolved.revision, lib.contentRevisionAt('origin/main', { root: repo }))
+  })
+
+  await checkAsync('带降级的求解：git 传输不通 ⇒ 自动改走 API 真查询', async () => {
+    // 造一个 fetch 必然失败的仓库（origin 指向不存在的路径）。
+    const broken = path.join(work, 'broken')
+    fs.mkdirSync(broken, { recursive: true })
+    gitIn(broken, 'init', '-q', '-b', 'main')
+    gitIn(broken, 'remote', 'add', 'origin', path.join(work, 'does-not-exist.git'))
+    const queried = 'c'.repeat(40)
+    const fetchImpl = async url => (url.includes('/commits?')
+      ? { ok: true, status: 200, json: async () => [{ sha: queried }] }
+      : { ok: false, status: 404, json: async () => ({}) })
+    const resolved = await lib.resolveRemoteReleaseRevision('main', {
+      root: broken, remote: 'origin', owner: 'o', repo: 'r', token: 't',
+      fetchImpl, paths: ['package.json'], attempts: 1, timeout: 5_000,
+    })
+    assert.equal(resolved.via, 'api', 'git 不通时必须走真查询，而不是放弃')
+    assert.equal(resolved.revision, queried)
+  })
+
+  await checkAsync('带降级的求解：两条都不通 ⇒ 报错并写清两条原因', async () => {
+    const broken = path.join(work, 'broken2')
+    fs.mkdirSync(broken, { recursive: true })
+    gitIn(broken, 'init', '-q', '-b', 'main')
+    gitIn(broken, 'remote', 'add', 'origin', path.join(work, 'does-not-exist.git'))
+    await assert.rejects(() => lib.resolveRemoteReleaseRevision('main', {
+      root: broken, remote: 'origin', owner: 'o', repo: 'r', token: 't',
+      fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({}) }),
+      paths: ['package.json'], attempts: 1, timeout: 5_000,
+    }), /API 真查询也失败/)
+  })
+
+  await checkAsync('带降级的求解：gitAttempts: 0 ⇒ 跳过 git 直接真查询（不再等第二遍）', async () => {
+    // origin 指向不存在的路径：若真去 fetch 会失败并浪费时间；gitAttempts: 0
+    // 应当完全跳过 git，直接问 API。
+    const broken = path.join(work, 'broken3')
+    fs.mkdirSync(broken, { recursive: true })
+    gitIn(broken, 'init', '-q', '-b', 'main')
+    gitIn(broken, 'remote', 'add', 'origin', path.join(work, 'does-not-exist.git'))
+    const started = Date.now()
+    const resolved = await lib.resolveRemoteReleaseRevision('main', {
+      root: broken, remote: 'origin', owner: 'o', repo: 'r', token: 't',
+      paths: ['package.json'], gitAttempts: 0,
+      fetchImpl: async url => (url.includes('/commits?')
+        ? { ok: true, status: 200, json: async () => [{ sha: 'd'.repeat(40) }] }
+        : { ok: false, status: 404, json: async () => ({}) }),
+    })
+    assert.equal(resolved.via, 'api')
+    assert.equal(resolved.revision, 'd'.repeat(40))
+    assert.ok(Date.now() - started < 5_000, '不应在 git 上等待')
+  })
+
   // ── 拿不到真相时必须报错，绝不猜 ─────────────────────────────────────────
 
   await checkAsync('fetch 失败 ⇒ 抛错（不返回猜测值）', async () => {

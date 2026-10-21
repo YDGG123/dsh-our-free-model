@@ -163,6 +163,12 @@ jobs:
           OFM_PUSH_BRANCH: main
           # 让 main 与 custom-main 同历史（常规历史），revison 口径全仓统一。
           OFM_MAIN_SYNC_MODE: history
+          # revision 的「真查询」降级要用它：`resolveRemoteReleaseRevision` 先走
+          # `git fetch` 重算，git 传输万一失败就改问 GitHub API
+          # （`/commits?path=…`）。没有 token 这条降级用不了 —— 而它是
+          # 2026-10-21 那次 `got/want` 事故里唯一能给出正确答案的路径。
+          # 只读用途，与推送用的是同一个已配置的 secret。
+          GH_TOKEN: ${{ secrets.OFM_RELEASE_PUSH_TOKEN }}
         run: |
           set +e
           if [ "${{ inputs.dry_run }}" = "true" ]; then

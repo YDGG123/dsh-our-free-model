@@ -153,7 +153,7 @@ await (async () => {
      */
     assert.match(source, /const resolved = await resolveRemoteRevision\(\{/,
       '第二段 revision 必须由远端重算决定（调用点，非定义）')
-    assert.match(source, /remoteContentRevision\(/, '必须复用 lib/catalog-revision（唯一实现）')
+    assert.match(source, /resolveRemoteReleaseRevision\(/, '必须复用 lib/catalog-revision（唯一实现）')
     assert.ok(!/refreshCatalogRevision\(pushedSha\)/.test(source),
       '不能把刚推上去的 sha 直接当 revision（它可能没碰发布内容）')
     assert.ok(!/const revision = pushedSha/.test(source),
@@ -163,8 +163,8 @@ await (async () => {
   check('api-push-squash 写完必须自证：远端真相 == 写进去的值', () => {
     // 自证必须问**远端**（git fetch 或 API 真查询），不是读本地文件自说自话。
     assert.match(source, /verifyRemoteRevision\(/, '必须有推送后自证')
-    assert.match(source, /remoteContentRevision\(/, '自证要能走 git fetch 重算')
-    assert.match(source, /fetchRemoteReleaseRevision\(/, '自证要能走 API 真查询')
+    assert.match(source, /resolveRemoteReleaseRevision\(/, '自证要能走 git fetch 重算')
+    assert.match(source, /resolveRemoteReleaseRevision\([\s\S]{0,200}?gitAttempts/, '自证要能走 API 真查询（判定过 git 不通就不再等）')
     assert.ok(!/自证跳过/.test(source), '不允许存在「跳过自证」的静默路径')
     // 第二段只该动 catalog；真动了发布内容说明混入了别的差异。
     assert.match(source, /touchedReleaseContent/, '必须判断这次推送动没动发布内容')
@@ -189,7 +189,7 @@ await (async () => {
   check('git 传输不可用只判定一次（不重复等 75 秒）', () => {
     // 本机 github:443 被阻断，单次失败要等 75 秒。判定过就记住，别再试。
     assert.match(source, /gitTransportUnavailable/, '必须有「传输不可用」的记忆标志')
-    assert.match(source, /if \(!gitTransportUnavailable\)/, '第一次之后不应再尝试 fetch')
+    assert.match(source, /gitAttempts: gitTransportUnavailable \? 0 : 1/, '第一次之后不应再尝试 fetch（跳过 git 直接真查询）')
   })
 
   check('按同一套差异推送：删除条目 mode 仍走 DELETED_ENTRY_MODE', () => {
@@ -301,9 +301,13 @@ await (async () => {
 
   check('推送后自证：git fetch 不可用时走 API 真查询，不得静默跳过', () => {
     assert.match(source, /verifyRemoteRevision\(/, '必须有推送后自证')
-    assert.match(source, /fetchRemoteReleaseRevision\(\{[\s\S]{0,200}?branch: BRANCH/,
-      '自证/判定必须接 API 真查询')
-    // 老实现里「fetch 失败 ⇒ 打印一句跳过 ⇒ return」—— 那等于不自证。
+    // 真查询能力收在 lib 的带降级 helper 里：这里断言自证把「怎么问远端」交给它，
+    // 而不是自己再写一套（写两套必然漂移）。helper 的降级行为由
+    // scripts/catalog-revision-test.mjs 用真实仓库 + 假 fetch 验证。
+    assert.match(source, /verifyRemoteRevision[\s\S]{0,500}?resolveRemoteReleaseRevision/,
+      '自证必须走带真查询降级的 helper')
+    assert.match(source, /resolveRemoteReleaseRevision\([\s\S]{0,300}?owner: OWNER/,
+      '必须把 owner/repo/token 传下去，否则 helper 无法真查询')
     assert.ok(!/推送后自证跳过/.test(source), '不得存在「跳过自证」的静默路径')
   })
 })()

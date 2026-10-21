@@ -181,6 +181,95 @@ export function remoteContentRevision(branch, options = {}) {
 }
 
 /**
+ * 从 remote URL 里解析 `owner/repo`（`git remote get-url`）。
+ *
+ * 兼容本机与云端的两种写法：
+ * - `https://github.com/OWNER/REPO.git`
+ * - `https://x-access-token:<token>@github.com/OWNER/REPO.git`
+ *
+ * @returns {{ owner: string, repo: string }|null}
+ */
+export function githubCoordinates(options = {}) {
+  const root = options.root ?? REPO_ROOT
+  const remote = options.remote ?? 'origin'
+  let url
+  try {
+    url = execFileSync('git', ['remote', 'get-url', remote], { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim()
+  } catch {
+    return null
+  }
+  const match = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url)
+  if (match === null) return null
+  return { owner: match[1], repo: match[2] }
+}
+
+/** 取 GitHub token：环境变量优先，其次 `.private/gh-token`（本机）。 */
+export function readToken(options = {}) {
+  const root = options.root ?? REPO_ROOT
+  if (typeof options.token === 'string' && options.token !== '') return options.token
+  if (typeof process.env.GH_TOKEN === 'string' && process.env.GH_TOKEN !== '') return process.env.GH_TOKEN
+  try {
+    const value = fs.readFileSync(path.join(root, '.private', 'gh-token'), 'utf8').trim()
+    return value === '' ? undefined : value
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 求「远端分支上发布内容的最后触碰提交」，**带真查询降级** —— 调用方首选这个。
+ *
+ * 1. `git fetch` 后在远端 ref 上重算（与 `catalog-test` 同一条 `git log`）；
+ * 2. 失败时改用 GitHub API **真查询**（`fetchRemoteReleaseRevision`）——
+ *    本机 git 传输被阻断时这是唯一能拿到正确答案的路径；
+ * 3. 两者都不可用 ⇒ 抛出把两条原因都写清的错，**绝不返回猜测值**。
+ *
+ * `owner/repo` 与 token 不传时会自己找：前者从 `git remote get-url <remote>` 解析，
+ * 后者取 `GH_TOKEN` 或 `.private/gh-token`。这样两个调用点（云端
+ * `sync-upstream.mjs` 与本机 `api-push-squash.mjs`）不必各自知道这些细节。
+ *
+ * ⚠️ 这是**异步**函数（API 查询用 `fetch`）。两个调用点的 `main()` 都是 async，
+ * 直接 `await` 即可 —— 不要为了「同步」再写第二份查询实现（两份必然漂移）。
+ *
+ * @returns {Promise<{ revision: string, via: 'git'|'api' }>}
+ */
+export async function resolveRemoteReleaseRevision(branch, options = {}) {
+  let gitError = null
+  /**
+   * `gitAttempts: 0` ⇒ 跳过 git 传输直接走真查询。
+   *
+   * 调用方（本机推送）第一次就知道这条路要等 75 秒才失败，判定过之后没必要
+   * 每次再等一遍 —— 由 `via: 'api'` 这个返回值告诉它「git 那条不通」。
+   */
+  if (options.gitAttempts !== 0) {
+    try {
+      return { revision: remoteContentRevision(branch, options), via: 'git' }
+    } catch (error) {
+      gitError = error
+    }
+  }
+  const coordinates = (options.owner !== undefined && options.repo !== undefined)
+    ? { owner: options.owner, repo: options.repo }
+    : githubCoordinates(options)
+  const token = readToken(options)
+  const gitReason = gitError === null ? '已跳过 git 传输' : gitError.message
+  if (coordinates === null || token === undefined) {
+    throw new Error(
+      `${gitReason}；且无法走 API 真查询（`
+      + `${coordinates === null ? '拿不到 owner/repo' : '没有 token'}）`,
+    )
+  }
+  try {
+    const revision = await fetchRemoteReleaseRevision({
+      ...options, ...coordinates, token, branch,
+    })
+    return { revision, via: 'api' }
+  } catch (error) {
+    throw new Error(`${gitReason}；API 真查询也失败：${error.message}`)
+  }
+}
+
+/**
  * **真查询**远端分支上「发布内容的最后触碰提交」（GitHub REST API）。
  *
  * ## 为什么需要它（真实缺陷，2026-10-21 真机推送 2.5.7）

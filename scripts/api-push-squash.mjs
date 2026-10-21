@@ -36,10 +36,9 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
-  fetchRemoteReleaseRevision,
   isReleaseContentPath,
   readReleaseContentPaths,
-  remoteContentRevision,
+  resolveRemoteReleaseRevision,
 } from './lib/catalog-revision.mjs'
 import { REVISION_TARGETS } from './set-catalog-revision.mjs'
 
@@ -367,26 +366,25 @@ let gitTransportUnavailable = false
  * @returns {Promise<{ revision: string, source: 'remote'|'api'|'pushed'|'baseline' }>}
  */
 async function resolveRemoteRevision({ pushedSha, touchedReleaseContent, baselineRevision }) {
-  if (!gitTransportUnavailable) {
-    try {
-      // 本机连不上 github 时单次要等 75 秒 ⇒ 只给一次机会、20 秒上限。
-      // 云端（runner 直连）正常是秒级，这个上限也够。
-      const computed = remoteContentRevision(BRANCH, { root, attempts: 1, timeout: 20_000 })
-      console.log(`  远端重算 revision = ${computed.slice(0, 7)}（git fetch）`)
-      return { revision: computed, source: 'remote' }
-    } catch (error) {
-      gitTransportUnavailable = true
-      console.log(`⚠️ git fetch 不可用（${String(error.message).split('\n')[0]}），改用 API 真查询`)
-    }
-  }
   try {
-    const queried = await fetchRemoteReleaseRevision({
-      branch: BRANCH, owner: OWNER, repo: REPO, token, root,
+    // 本机连不上 github 时单次要等 75 秒 ⇒ 只给一次机会、20 秒上限；
+    // 判定过 git 不通（`gitTransportUnavailable`）就直接走真查询，不再等第二遍。
+    const resolved = await resolveRemoteReleaseRevision(BRANCH, {
+      root,
+      owner: OWNER,
+      repo: REPO,
+      token,
+      attempts: 1,
+      timeout: 20_000,
+      gitAttempts: gitTransportUnavailable ? 0 : 1,
     })
-    console.log(`  远端真查询 revision = ${queried.slice(0, 7)}（commits?path=…）`)
-    return { revision: queried, source: 'api' }
+    if (resolved.via === 'api') gitTransportUnavailable = true
+    console.log(`  远端 revision = ${resolved.revision.slice(0, 7)}`
+      + `（${resolved.via === 'git' ? 'git fetch 重算' : 'API 真查询'}）`)
+    return { revision: resolved.revision, source: resolved.via }
   } catch (error) {
-    console.log(`⚠️ API 真查询失败（${String(error.message).split('\n')[0]}），最后才用 diff 推断`)
+    gitTransportUnavailable = true
+    console.log(`⚠️ git fetch 与 API 真查询都不可用（${String(error.message).split('\n')[0]}），最后才用 diff 推断`)
   }
   if (touchedReleaseContent) {
     console.log(`  本次推送动了发布内容 ⇒ revision = ${pushedSha.slice(0, 7)}（squash 提交本身，推断）`)
@@ -549,38 +547,29 @@ async function main() {
 }
 
 /**
- * 推送后在**远端**核对 revision：优先 git fetch 重算，其次 API 真查询。
+ * 推送后在**远端**核对 revision：git fetch 重算，其次 API 真查询。
  *
  * 两条都不可用 ⇒ **报错**，不把「无法自证」当成通过（历史教训：`catch` 里
  * `return` 掉的降级路径会在真机上永远静默）。
  */
 async function verifyRemoteRevision(expected) {
-  if (!gitTransportUnavailable) {
-    try {
-      const computed = remoteContentRevision(BRANCH, { root, attempts: 1, timeout: 20_000 })
-      if (computed !== expected) {
-        throw new Error(
-          `catalog revision 与远端真相不一致：写的是 ${expected.slice(0, 7)}，`
-          + `远端 ${BRANCH} 重算得到 ${computed.slice(0, 7)}`,
-        )
-      }
-      return computed
-    } catch (error) {
-      if (String(error.message).includes('不一致')) throw error
-      gitTransportUnavailable = true
-      console.log(`⚠️ 自证改用 API 真查询（git fetch 不可用：${String(error.message).split('\n')[0]}）`)
-    }
-  }
-  const queried = await fetchRemoteReleaseRevision({
-    branch: BRANCH, owner: OWNER, repo: REPO, token, root,
+  const resolved = await resolveRemoteReleaseRevision(BRANCH, {
+    root,
+    owner: OWNER,
+    repo: REPO,
+    token,
+    attempts: 1,
+    timeout: 20_000,
+    gitAttempts: gitTransportUnavailable ? 0 : 1,
   })
-  if (queried !== expected) {
+  if (resolved.via === 'api') gitTransportUnavailable = true
+  if (resolved.revision !== expected) {
     throw new Error(
       `catalog revision 与远端真相不一致：写的是 ${expected.slice(0, 7)}，`
-      + `远端 ${BRANCH} 真查询得到 ${queried.slice(0, 7)}`,
+      + `远端 ${BRANCH} ${resolved.via === 'git' ? '重算' : '真查询'}得到 ${resolved.revision.slice(0, 7)}`,
     )
   }
-  return queried
+  return resolved.revision
 }
 
 /**
