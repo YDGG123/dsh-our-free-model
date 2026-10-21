@@ -172,6 +172,16 @@ const TESTS = process.env.OFM_SYNC_TESTS !== undefined && process.env.OFM_SYNC_T
 
 const say = message => console.log(`[${new Date().toISOString()}] ${message}`)
 const git = (...args) => execFileSync('git', args, { cwd: root, maxBuffer: 512 * 1024 * 1024 }).toString()
+/**
+ * 子进程一律用 `process.execPath`，**不要写 `'node'`**（真实缺陷，2026-10-21）。
+ *
+ * `run('node', …)` 会去 PATH 里找 node —— 这台机器上 PATH 里的 node 是
+ * **v20.17.0**，而测试集里的 `raccoon-balance-test.mjs` 用了 Node 22+ 才有的
+ * `registerHooks` ⇒ 整个同步在「跑测试」这一步失败（真实现场：
+ * `SyntaxError: The requested module 'node:module' does not provide an export named 'registerHooks'`）。
+ * launchd 的 plist 指定的是 Node 24，但那只管**本脚本**自己；子进程仍会落到
+ * PATH 上。用 `process.execPath` 之后，整条流水线都跑在同一个 Node 上。
+ */
 const run = (command, args, env = {}) => {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, env: { ...process.env, ...env } })
   return { code: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
@@ -318,7 +328,7 @@ async function main() {
   try {
     // ── 5. 重建 pack.js（上游改过 vendor 源码时旧产物已过期） ─────────────
     say('重建 vendor/channel-pack/pack.js …')
-    const built = run('node', ['scripts/build-channel-pack.mjs'])
+    const built = run(process.execPath, ['scripts/build-channel-pack.mjs'])
     if (built.code !== 0) throw new Error(`pack 重建失败：${built.output.slice(0, 300)}`)
     if (git('status', '--porcelain', '--', 'vendor/channel-pack/pack.js').trim() !== '') {
       run('git', ['add', 'vendor/channel-pack/pack.js'])
@@ -341,7 +351,7 @@ async function main() {
      * 里，不进发布清单，故不需要重签 manifest。
      */
     say('重建独立端产物（packages/standalone/web）…')
-    const builtUi = run('node', ['scripts/build-standalone-ui.mjs'])
+    const builtUi = run(process.execPath, ['scripts/build-standalone-ui.mjs'])
     if (builtUi.code !== 0) {
       // 独立端构建依赖 vite（`packages/standalone` 的 devDependency）。
       // 云端装了依赖，本地可能没装 —— 记清楚，不要伪装成通过。
@@ -411,7 +421,7 @@ async function main() {
     if (!hasKey) {
       say('⚠️ 未找到签名密钥：跳过重签，交由 main 上的 release-sign.yml 处理')
     } else {
-      const signed = run('node', ['scripts/build-manifest.mjs', '--key', keyPath])
+      const signed = run(process.execPath, ['scripts/build-manifest.mjs', '--key', keyPath])
       if (signed.code !== 0) throw new Error(`manifest 签名失败：${signed.output.slice(0, 300)}`)
       run('git', ['add', 'feed/manifest.json', 'catalog/integrity.json', 'catalog/dsh-plugin.json', 'catalog/provenance.json'])
       const signCommit = run('git', ['commit', '-m', `catalog: sign the release over ${contentRevision.slice(0, 7)}`], GIT_ENV)
@@ -423,14 +433,14 @@ async function main() {
     // ── 7. 测试 ───────────────────────────────────────────────────────────
     say('运行目标测试集 …')
     for (const test of TESTS) {
-      const result = run('node', [test])
+      const result = run(process.execPath, [test])
       const passed = result.code === 0
       say(`  ${passed ? '✅' : '❌'} ${path.basename(test)}`)
       if (!passed) throw new Error(`测试失败：${test}\n${result.output.slice(-1500)}`)
     }
     // 清单与树的字节一致性：签过名才可校验（跳过重签时旧清单描述的是旧树）。
     if (signedRelease) {
-      const check = run('node', ['scripts/build-manifest.mjs', '--check'])
+      const check = run(process.execPath, ['scripts/build-manifest.mjs', '--check'])
       if (check.code !== 0) throw new Error(`manifest --check 失败：${check.output.slice(0, 300)}`)
       say('  ✅ build-manifest --check')
     } else {
@@ -545,7 +555,7 @@ async function main() {
       say(`  最后触碰发布内容 = ${contentRevision.slice(0, 7)}`
         + `（${resolvedWork.via === 'git' ? 'git fetch 重算' : 'API 真查询'}；`
         + `${workBranch} HEAD 是 ${workHead.slice(0, 7)}）`)
-      const refreshed = run('node', ['scripts/set-catalog-revision.mjs', contentRevision])
+      const refreshed = run(process.execPath, ['scripts/set-catalog-revision.mjs', contentRevision])
       say(refreshed.output.trim().slice(-800))
       if (refreshed.code !== 0) throw new Error('刷新 revision 失败')
 
@@ -635,7 +645,7 @@ async function main() {
         say(`投影 HEAD → origin/${releaseBranch}（squash，单提交）…`)
         const tokenForPush = process.env.GH_TOKEN
           ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
-        const projected = run('node', ['scripts/api-push-squash.mjs'], {
+        const projected = run(process.execPath, ['scripts/api-push-squash.mjs'], {
           GH_TOKEN: tokenForPush,
           OFM_PUSH_BRANCH: releaseBranch,
         })
@@ -645,7 +655,7 @@ async function main() {
     } else {
       const token = process.env.GH_TOKEN ?? (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8').trim() : '')
       if (token === '') throw new Error('无 GH_TOKEN（环境变量或 .private/gh-token）')
-      const pushed = run('node', ['scripts/api-push-squash.mjs'], { GH_TOKEN: token })
+      const pushed = run(process.execPath, ['scripts/api-push-squash.mjs'], { GH_TOKEN: token })
       say(pushed.output.trim())
       if (pushed.code !== 0) throw new Error('推送失败')
     }

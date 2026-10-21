@@ -581,7 +581,7 @@ function refreshCatalogRevision(revision) {
   // ⚠️ ESM 里没有 `require` —— 原来写 `const { execFileSync } = require(...)`
   // 会直接抛 `require is not defined`（本文件顶部已 import execFileSync）。
   const before = git('diff', '--name-only').trim()
-  execFileSync('node', ['scripts/set-catalog-revision.mjs', revision], { cwd: root, stdio: 'inherit' })
+  execFileSync(process.execPath, ['scripts/set-catalog-revision.mjs', revision], { cwd: root, stdio: 'inherit' })
   const after = git('diff', '--name-only').trim()
   return before !== after
 }

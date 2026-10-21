@@ -540,6 +540,22 @@ await checkAsync('workflow 必须安装独立端依赖（esbuild / vite 都在�
   assert.match(yamlText, /packages\/standalone\/package-lock\.json/, '独立端 lockfile 也要还原')
 })
 
+await checkAsync('子进程必须用当前解释器（PATH 里的 node 可能是旧版）', async () => {
+  // 真实缺陷（2026-10-21）：脚本用 `run('node', …)` 跑测试集，而 PATH 里的 node
+  // 是 v20，套件里的 `registerHooks`（Node 22+）直接 SyntaxError ⇒ 整个同步在
+  // 「跑测试」这一步失败，看起来像测试挂了。plist 指定的 Node 24 只管脚本自己，
+  // 管不到子进程。`process.execPath` 才能保证整条流水线同一个 Node。
+  const fs2 = await import('node:fs')
+  for (const rel of ['sync-upstream.mjs', 'api-push-squash.mjs']) {
+    const text = fs2.readFileSync(new URL(`./${rel}`, import.meta.url), 'utf8')
+    const body = text.split('\n').filter(line => !/^\s*\*/.test(line)).join('\n')
+    assert.ok(!/run\('node'|execFileSync\('node'/.test(body),
+      `${rel} 不得用 PATH 里的 node 跑子进程（应用 process.execPath）`)
+  }
+  const sync = fs2.readFileSync(new URL('./sync-upstream.mjs', import.meta.url), 'utf8')
+  assert.match(sync, /run\(process\.execPath,/, '必须用 process.execPath')
+})
+
 await checkAsync('workflow 检出 custom-main（事实源），不是 main', async () => {
   const fs2 = await import('node:fs')
   const yamlText = fs2.readFileSync(new URL('../.github/workflows/sync-upstream.yml', import.meta.url), 'utf8')
