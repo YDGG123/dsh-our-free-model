@@ -1,5 +1,5 @@
 {
-  "version": "2.5.7",
+  "version": "2.5.8",
   "algorithm": "sha256",
   "files": [
     {
@@ -50,7 +50,7 @@
     {
       "path": "package.json",
       "size": 2962,
-      "sha256": "a3ecf4f15c58370dbf036bc3c6bf71e8cf583ee3260779395f8f4d2617930eda"
+      "sha256": "2d963a5034a08e066bd048e840d271b4a8761a5e8919e2a44fafa1c85e312a79"
     },
     {
       "path": "src/adapter.js",
@@ -89,8 +89,8 @@
     },
     {
       "path": "src/core/completion.js",
-      "size": 9524,
-      "sha256": "2e551e671cce92d988079b768aebd0f20db6636861fc4aceb26e96622c42808d"
+      "size": 9670,
+      "sha256": "b2ea4e3fe00e833b5609f60badac657297932de9fe82dd90565e082f153a4509"
     },
     {
       "path": "src/core/runtime.js",
@@ -174,8 +174,8 @@
     },
     {
       "path": "src/messages.js",
-      "size": 19034,
-      "sha256": "8c350c9905e8f69a9621efef5405a44b0a48ca28ead7b3f44a2703cad595ce76"
+      "size": 19185,
+      "sha256": "217fd90273824f135ed0b5417c8ea48089f5f78cdcf2cc6436008cb017997421"
     },
     {
       "path": "src/model-test.js",
@@ -394,8 +394,8 @@
     },
     {
       "path": "vendor/channel-pack/pack.js",
-      "size": 2823356,
-      "sha256": "58fbd26b2114761c81af9e356217a5fbe05939eda7e765f7d626a72a5ce84675"
+      "size": 2824038,
+      "sha256": "cf177662243b614978f75c52d48c61a505692cd7fe055f2f7b81da5346648e44"
     },
     {
       "path": "vendor/channel-pack/qoder-auth-wasm.wasm",
