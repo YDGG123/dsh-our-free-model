@@ -36731,6 +36731,74 @@ function qoderProductById(id) {
   return ALL_QODER_PRODUCTS.find((product) => product.id === id);
 }
 
+// vendor/channel-pack/src/reasoning-ladder.ts
+var REASONING_EFFORT_RANK = Object.freeze({
+  off: 0,
+  none: 0,
+  minimal: 1,
+  light: 2,
+  low: 3,
+  medium: 4,
+  high: 5,
+  // 「开启思考」没有强度语义 —— 与 high 同序，使它在规范名里反查成 `high`。
+  on: 5,
+  extra_high: 6,
+  xhigh: 7,
+  max: 8,
+  ultra: 9
+});
+var CANONICAL_REASONING_EFFORTS = Object.freeze([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra"
+]);
+function reasoningRankOf(effort) {
+  return Object.prototype.hasOwnProperty.call(REASONING_EFFORT_RANK, effort) ? REASONING_EFFORT_RANK[effort] : void 0;
+}
+function isThinkingOffEffort(effort) {
+  return reasoningRankOf(effort) === 0;
+}
+function translateReasoningEffort(requested, declared) {
+  if (declared.includes(requested)) return { kind: "exact", effort: requested };
+  const rank = reasoningRankOf(requested);
+  if (rank === void 0) return { kind: "unknown" };
+  const wantOff = rank === 0;
+  let best;
+  for (const candidate of declared) {
+    const candidateRank = reasoningRankOf(candidate);
+    if (candidateRank === void 0) continue;
+    if (candidateRank === 0 !== wantOff) continue;
+    const distance = Math.abs(candidateRank - rank);
+    if (best === void 0 || distance < best.distance || distance === best.distance && candidateRank > best.rank) {
+      best = { effort: candidate, distance, rank: candidateRank };
+    }
+  }
+  if (best === void 0) return { kind: "unexpressible" };
+  return { kind: "mapped", effort: best.effort, requested, rank };
+}
+function canonicalReasoningEffortFor(effort) {
+  if (CANONICAL_REASONING_EFFORTS.includes(effort)) return effort;
+  const rank = reasoningRankOf(effort);
+  if (rank === void 0) return void 0;
+  const wantOff = rank === 0;
+  let best;
+  for (const canonical of CANONICAL_REASONING_EFFORTS) {
+    const canonicalRank = reasoningRankOf(canonical);
+    if (canonicalRank === void 0) continue;
+    if (canonicalRank === 0 !== wantOff) continue;
+    const distance = Math.abs(canonicalRank - rank);
+    if (best === void 0 || distance < best.distance || distance === best.distance && canonicalRank > best.rank) {
+      best = { canonical, distance, rank: canonicalRank };
+    }
+  }
+  return best?.canonical;
+}
+
 // vendor/channel-pack/src/openai-compat.ts
 import { LlmError as LlmError5, ToolCallId as ToolCallId3 } from "@deepseek-ai/dsh-llm";
 function contentToText3(content) {
@@ -37259,10 +37327,14 @@ var QODER_EFFORT_NAMES = {
   xhigh: "\u6781\u9AD8",
   max: "\u6700\u5927"
 };
+var UNKNOWN_EFFORT_RANK = 100;
+function sortEffortsByStrength(efforts) {
+  return efforts.map((id, index) => ({ id, index, rank: reasoningRankOf(id) ?? UNKNOWN_EFFORT_RANK })).sort((a, b) => a.rank - b.rank || a.index - b.index).map(({ id }) => id);
+}
 function qoderEffortsFor(model) {
   const efforts = [...model.efforts ?? []];
   if (model.supportsDisable === true && !efforts.includes("none")) efforts.push("none");
-  return efforts;
+  return sortEffortsByStrength(efforts);
 }
 function resolveQueueTimeoutMs() {
   const raw = process.env.DSH_QODER_QUEUE_TIMEOUT_MS;
@@ -37807,74 +37879,6 @@ function registerQoderLlm(ctx, options) {
 // vendor/channel-pack/src/trae-adapter.ts
 import { LlmAdapter as LlmAdapter4, LlmError as LlmError7, ReasoningEffortId as ReasoningEffortId4 } from "@deepseek-ai/dsh-llm";
 import { ToolCallId as ToolCallId4 } from "@deepseek-ai/dsh-llm";
-
-// vendor/channel-pack/src/reasoning-ladder.ts
-var REASONING_EFFORT_RANK = Object.freeze({
-  off: 0,
-  none: 0,
-  minimal: 1,
-  light: 2,
-  low: 3,
-  medium: 4,
-  high: 5,
-  // 「开启思考」没有强度语义 —— 与 high 同序，使它在规范名里反查成 `high`。
-  on: 5,
-  extra_high: 6,
-  xhigh: 7,
-  max: 8,
-  ultra: 9
-});
-var CANONICAL_REASONING_EFFORTS = Object.freeze([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra"
-]);
-function reasoningRankOf(effort) {
-  return Object.prototype.hasOwnProperty.call(REASONING_EFFORT_RANK, effort) ? REASONING_EFFORT_RANK[effort] : void 0;
-}
-function isThinkingOffEffort(effort) {
-  return reasoningRankOf(effort) === 0;
-}
-function translateReasoningEffort(requested, declared) {
-  if (declared.includes(requested)) return { kind: "exact", effort: requested };
-  const rank = reasoningRankOf(requested);
-  if (rank === void 0) return { kind: "unknown" };
-  const wantOff = rank === 0;
-  let best;
-  for (const candidate of declared) {
-    const candidateRank = reasoningRankOf(candidate);
-    if (candidateRank === void 0) continue;
-    if (candidateRank === 0 !== wantOff) continue;
-    const distance = Math.abs(candidateRank - rank);
-    if (best === void 0 || distance < best.distance || distance === best.distance && candidateRank > best.rank) {
-      best = { effort: candidate, distance, rank: candidateRank };
-    }
-  }
-  if (best === void 0) return { kind: "unexpressible" };
-  return { kind: "mapped", effort: best.effort, requested, rank };
-}
-function canonicalReasoningEffortFor(effort) {
-  if (CANONICAL_REASONING_EFFORTS.includes(effort)) return effort;
-  const rank = reasoningRankOf(effort);
-  if (rank === void 0) return void 0;
-  const wantOff = rank === 0;
-  let best;
-  for (const canonical of CANONICAL_REASONING_EFFORTS) {
-    const canonicalRank = reasoningRankOf(canonical);
-    if (canonicalRank === void 0) continue;
-    if (canonicalRank === 0 !== wantOff) continue;
-    const distance = Math.abs(canonicalRank - rank);
-    if (best === void 0 || distance < best.distance || distance === best.distance && canonicalRank > best.rank) {
-      best = { canonical, distance, rank: canonicalRank };
-    }
-  }
-  return best?.canonical;
-}
 
 // vendor/channel-pack/src/trae.ts
 import { createHash as createHash4 } from "node:crypto";
@@ -61641,6 +61645,11 @@ function gatewaySource() {
 function createGatewayMessage(role, content, source) {
   return { id: randomUUID9(), role, content, source };
 }
+function inboundReasoning(value) {
+  const raw = typeof value.reasoning_content === "string" ? value.reasoning_content : typeof value.reasoning === "string" ? value.reasoning : void 0;
+  if (raw === void 0 || raw.length === 0) return void 0;
+  return raw;
+}
 function convertToolCalls(raw) {
   if (!Array.isArray(raw)) throw new OpenAiGatewayError("assistant.tool_calls must be an array");
   return raw.map((value) => {
@@ -61668,7 +61677,10 @@ async function convertMessage(raw, provider, model, bridge, limits) {
   }
   if (role === "assistant") {
     const text = textFromContent(value.content);
-    const content = text.length > 0 ? [{ type: "text", text }] : [];
+    const content = [];
+    const reasoning = inboundReasoning(value);
+    if (reasoning !== void 0) content.push({ type: "reasoning", text: reasoning });
+    if (text.length > 0) content.push({ type: "text", text });
     if (value.tool_calls !== void 0) content.push(...convertToolCalls(value.tool_calls));
     return createGatewayMessage("assistant", content, { kind: "model", provider, model });
   }
