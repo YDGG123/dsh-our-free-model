@@ -1,7 +1,7 @@
 {
   "version": "2.5.7",
   "base": "../",
-  "publishedAt": "2026-10-21T04:16:05.705Z",
+  "publishedAt": "2026-10-21T05:10:20.714Z",
   "notes": "",
   "files": [
     {
@@ -361,8 +361,8 @@
     },
     {
       "path": "src/updater.js",
-      "size": 51796,
-      "sha256": "269c59214c2b07e7d031926f22a8e8def0310263db1cefbd4b0df47e3f2ca17b"
+      "size": 53213,
+      "sha256": "5c8c3f47a7169f0eb2ee77352e23626b3b27e8a4e2116d582084d7d780b87a62"
     },
     {
       "path": "src/upstream.js",
@@ -405,5 +405,5 @@
       "sha256": "6419471effa631519def7797d76d7ede38b9fcfa9a83c2148c8ef5d43355b43d"
     }
   ],
-  "signature": "dBimnqpwhya4vuUQ9ckiBzPY/UqD+BFawxCCd1+XVT8qzblN9pKutFRsTh8dbLieosZ9uNtWtW/gttf2lM8sBA=="
+  "signature": "H9e9CwDXDytNkhGGgq0+5fkrImCWjKTyRlQvWTEXI946mE/jHvvWj66wLau8xKYXM8g81AZZXWSLvf7nlcoDCw=="
 }
