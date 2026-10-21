@@ -51,9 +51,14 @@ const gitIn = (cwd, ...args) => execFileSync('git', args, {
     ...process.env,
     GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
     GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
-    // 隔离用户级 git 配置（签名、hooks、默认分支名），否则在别人机器上会飘。
+    // 隔离用户级 / 系统级 git 配置（签名、hooks、默认分支名）。
+    //
+    // ⚠️ 本机（macOS）在**系统级**配置里也设了 `init.defaultBranch=main`，
+    // 而 GitHub runner 上没有 —— 只隔离全局配置时，夹具在本机与云端行为不同
+    // （2026-10-21 CI 实测：本地分支名差异导致套件在云端变红、本机全绿）。
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_SYSTEM: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
   },
 }).trim()
 
@@ -143,11 +148,21 @@ try {
   /**
    * 模拟真实事故现场：本地算出来的值**在远端不存在**（squash/新提交），
    * 或者本地 HEAD 又前进了（刷新提交）。唯一正确的是「远端分支上」的值。
+   *
+   * ⚠️ 全部 git 调用都必须走 `gitIn`（它隔离了用户/系统 git 配置），
+   * 并且**显式指定分支名**：
+   *
+   * - `git init --bare` 不带 `-b` 时，bare 仓库的 HEAD 取决于
+   *   `init.defaultBranch`（本机是 main、GitHub runner 上没有配置 ⇒ master）。
+   *   2026-10-21 CI 实测：clone 出来的本地分支因此不是 main，
+   *   下一句 `git push origin main:main` 报 `src refspec main does not match any`，
+   *   整个套件在云端变红 —— 而本机永远绿。**夹具依赖开发机配置**就是这类事故。
+   * - 推送一律写 `HEAD:main`，不去赌本地分支叫什么。
    */
   const origin = path.join(work, 'origin.git')
-  execFileSync('git', ['init', '-q', '--bare', origin], { stdio: 'pipe' })
+  gitIn(work, 'init', '-q', '--bare', '-b', 'main', 'origin.git')
   gitIn(repo, 'remote', 'add', 'origin', origin)
-  gitIn(repo, 'push', '-q', 'origin', 'main:main')
+  gitIn(repo, 'push', '-q', 'origin', 'HEAD:main')
   const remoteContentSha = lib.contentRevisionAt('origin/main', { root: repo })
 
   await checkAsync('远端重算：fetch 后取 origin/<branch> 上的值', async () => {
@@ -162,7 +177,7 @@ try {
     }, null, 2) + '\n')
     gitIn(repo, 'add', '-A')
     gitIn(repo, 'commit', '-q', '-m', 'catalog: refresh revision over remote')
-    gitIn(repo, 'push', '-q', 'origin', 'main:main')
+    gitIn(repo, 'push', '-q', 'origin', 'HEAD:main')
     const head = gitIn(repo, 'rev-parse', 'HEAD')
     assert.notEqual(head, before, '前置条件：远端 HEAD 应该已经前进')
     assert.equal(lib.remoteContentRevision('main', { root: repo }), before,
@@ -172,11 +187,11 @@ try {
   await checkAsync('本地 HEAD 落后远端时，仍取远端值（不能信任本地）', async () => {
     // 远端再往前走一个**碰发布内容**的提交，本地不动。
     const clone = path.join(work, 'other')
-    execFileSync('git', ['clone', '-q', origin, clone], { stdio: 'pipe' })
+    gitIn(work, 'clone', '-q', '-b', 'main', origin, 'other')
     write(path.join(clone, 'src', 'index.js'), 'export const b = 9\n')
     gitIn(clone, 'add', '-A')
     gitIn(clone, 'commit', '-q', '-m', 'remote content change')
-    gitIn(clone, 'push', '-q', 'origin', 'main:main')
+    gitIn(clone, 'push', '-q', 'origin', 'HEAD:main')
     const remoteHead = gitIn(clone, 'rev-parse', 'HEAD')
 
     const localValue = lib.contentRevisionAt('HEAD', { root: repo })
