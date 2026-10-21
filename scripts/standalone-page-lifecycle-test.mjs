@@ -11,7 +11,8 @@ const require = createRequire(import.meta.url)
 // symlink check. Locally, where the devDependency is installed, it runs.
 let transformSync
 try {
-  ({ transformSync } = require('esbuild'))
+  const standaloneRequire = createRequire(new URL('../packages/standalone/package.json', import.meta.url))
+  ;({ transformSync } = standaloneRequire('esbuild'))
 } catch {
   console.log('ok  standalone-page-lifecycle skipped: esbuild is not installed (the offline job installs nothing)')
   process.exit(0)

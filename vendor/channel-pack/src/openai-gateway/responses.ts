@@ -81,7 +81,6 @@ import {
 } from './messages.js'
 import { normalizeUpstreamFailure } from './model-errors.js'
 import { failureToOpenAiError, withSuggestion, type SuggestionHook } from './stream.js'
-import { rewriteTencentContentFingerprints } from './tencent-fingerprint.js'
 import { toOpenAiUsage } from './usage.js'
 
 /** 请求体形状（只声明我们用到的字段；其余原样忽略）。 */
@@ -457,11 +456,9 @@ async function toMessages(
         continue
       }
       if (raw.role === 'system' || raw.role === 'developer') {
-        // ⚠️ 腾讯系内容级风控的改写点之一 —— **必须与 Chat 路径同一判据**，
-        // 否则同一份提示词在 `/v1/responses` 上被拦、在 `/v1/chat/completions` 上放行。
         messages.push(createGatewayMessage('system', [{
           type: 'text',
-          text: rewriteTencentContentFingerprints(textFromContent(content), provider),
+          text: textFromContent(content),
         }], gatewaySource()))
         continue
       }
@@ -600,11 +597,9 @@ export async function toResponsesGenerateOptions(
     }
     // 与 Chat 路径的 `system` 消息**同一种构造**（同样的 plugin source），
     // 否则同一份提示词在两个端点上的来源标记不同，排查时会误导。
-    // ⚠️ 同样要走腾讯系指纹改写：`instructions` 是 Responses 端**唯一**的
-    // system 通道（客户端常把整份系统提示词放这里），漏掉它等于该端点没修。
     messages.push(createGatewayMessage('system', [{
       type: 'text',
-      text: rewriteTencentContentFingerprints(body.instructions, provider),
+      text: body.instructions,
     }], gatewaySource()))
   }
   messages.push(...await toMessages(body.input, provider, model, images.bridge, limits))

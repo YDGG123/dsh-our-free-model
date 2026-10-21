@@ -9,7 +9,6 @@ import {
   type ImageLimits,
 } from './images.js'
 import { isThinkingOffEffort, translateReasoningEffort } from '../reasoning-ladder.js'
-import { rewriteTencentContentFingerprints } from './tencent-fingerprint.js'
 
 export class OpenAiGatewayError extends Error {
   constructor(
@@ -305,12 +304,9 @@ async function convertMessage(
   const value = raw as OpenAiChatMessage
   const role = value.role
   if (role === 'system') {
-    // ⚠️ 腾讯系（`buddy` / `workbuddy`）后端有**内容级**风控：客户端自带的
-    // 模板句（如 ZCode 的 gitStatus 注入）会让整轮请求 400 + 11128。
-    // 改写只作用于 system、且只改腾讯系 —— 依据见 ./tencent-fingerprint.ts。
     return createGatewayMessage('system', [{
       type: 'text',
-      text: rewriteTencentContentFingerprints(textFromContent(value.content), provider),
+      text: textFromContent(value.content),
     }], gatewaySource())
   }
   if (role === 'user') {
