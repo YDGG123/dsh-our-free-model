@@ -181,6 +181,80 @@ export function remoteContentRevision(branch, options = {}) {
 }
 
 /**
+ * **真查询**远端分支上「发布内容的最后触碰提交」（GitHub REST API）。
+ *
+ * ## 为什么需要它（真实缺陷，2026-10-21 真机推送 2.5.7）
+ *
+ * `remoteContentRevision()` 依赖 `git fetch`，而这台机器到 `github.com:443`
+ * 的 git 传输是被阻断的。于是本机走的全是「靠 diff 推断」的降级路径，而推断在
+ * **投影提交自身改了发布内容**（2.5.7 删渠道 ⇒ `package.json` / `client.js` /
+ * `pack.js` 全变）时说不出「远端哪个提交才是答案」。
+ *
+ * 这里的查询与 `git log -1 -- <paths>` 语义一致：对每个发布内容路径各问一次
+ * 「该分支上最后碰它的是谁」，再在候选之间用 compare 求**祖先关系**定序
+ * （不靠提交日期 —— 时钟偏移/改写会让日期序与拓扑序不一致）。
+ *
+ * ## 顺序为什么要用 compare 而不是「取第一个」
+ *
+ * 多个路径的「各自最后触碰提交」通常不是同一个（一次发版动 `client.js`、
+ * 下一次只动 `package.json`）。取任意一个都可能选到**更旧**的那个，
+ * 于是又写错值。compare 会明确回答谁在谁前面；一旦出现 `diverged`
+ * （无法定序）**直接报错**，绝不在这种情况下猜。
+ *
+ * @param {{ branch: string, owner: string, repo: string, token: string,
+ *           paths?: string[], fetchImpl?: typeof fetch }} options
+ * @returns {Promise<string>} 40 位 sha
+ */
+export async function fetchRemoteReleaseRevision(options) {
+  const {
+    branch, owner, repo, token,
+    paths = readReleaseContentPaths({ root: options.root }),
+    fetchImpl = fetch,
+  } = options
+  if (typeof branch !== 'string' || branch === '') throw new Error('fetchRemoteReleaseRevision 需要 branch')
+  if (typeof owner !== 'string' || typeof repo !== 'string' || owner === '' || repo === '') {
+    throw new Error('fetchRemoteReleaseRevision 需要 owner / repo')
+  }
+  const apiBase = `https://api.github.com/repos/${owner}/${repo}`
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'user-agent': 'ofm-catalog-revision',
+  }
+  const get = async (endpoint) => {
+    const response = await fetchImpl(`${apiBase}${endpoint}`, { headers })
+    if (!response.ok) {
+      throw new Error(`GET ${endpoint} -> HTTP ${response.status}（无法确认远端 revision）`)
+    }
+    return response.json()
+  }
+
+  const candidates = []
+  for (const filePath of paths) {
+    const list = await get(`/commits?sha=${encodeURIComponent(branch)}&path=${encodeURIComponent(filePath)}&per_page=1`)
+    if (Array.isArray(list) && list.length > 0 && typeof list[0]?.sha === 'string') candidates.push(list[0].sha)
+  }
+  const unique = [...new Set(candidates)]
+  if (unique.length === 0) {
+    throw new Error(`远端 ${branch} 上找不到触碰发布内容的提交（查询了 ${paths.length} 个路径）`)
+  }
+  if (unique.length === 1) return unique[0]
+
+  // 多个候选：逐个用 compare 定序，取「所有其他候选都是它祖先」的那个。
+  let best = unique[0]
+  for (const other of unique.slice(1)) {
+    const { status } = await get(`/compare/${other}...${best}`)
+    if (status === 'ahead' || status === 'identical') continue // best 更新（或同一个提交）
+    if (status === 'behind') { best = other; continue } // other 更新
+    throw new Error(
+      `无法确定 ${branch} 上哪个提交是最新（compare ${other.slice(0, 7)}...${best.slice(0, 7)} 返回 ${status}）——`
+      + '拒绝猜测，请人工确认',
+    )
+  }
+  return best
+}
+
+/**
  * 读 catalog 里当前记录的 revision（`catalog/dsh-plugin.json`）。
  *
  * 只用于**推送后的自证**：远端重算值必须等于我们刚写进去的值，否则宁可

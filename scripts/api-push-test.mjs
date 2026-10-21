@@ -1,22 +1,28 @@
 /**
- * `api-push-squash.mjs` 的两个易错点回归：**删除条目的 tree mode** 与
- * **API 错误提示**。
+ * `api-push-squash.mjs` 的易错点回归：**删除条目的 tree mode**、
+ * **API 错误提示**、**发布内容判定**、**两段式第二段真的推得出去**、
+ * **远端 revision 的真查询**。
  *
- * ## 为什么需要它（2026-10-19 线上实锤）
+ * ## 为什么需要它（2026-10-19 / 10-21 两次线上实锤）
  *
- * 推送差异里含删除文件时 `POST /git/trees` 返回 422 `Must supply a valid
- * tree.mode`：`git diff-tree` 的删除记录 newMode 是 `"000000"`，原实现原样
- * 发给 GitHub。当时**没有任何测试覆盖**这段解析 —— 它内联在一个带网络请求
- * 的循环里，线上才炸。故把解析抽成纯函数 `parseDiffTree` 并在这里直接喂
- * 字符串。
+ * 1. 推送差异里含删除文件时 `POST /git/trees` 返回 422 `Must supply a valid
+ *    tree.mode`：`git diff-tree` 的删除记录 newMode 是 `"000000"`，原实现原样
+ *    发给 GitHub。故把解析抽成纯函数 `parseDiffTree` 并在这里直接喂字符串。
+ * 2. 第二段用 `HEAD^{tree}` 推**工作区**改动 ⇒ 树与远端相同 ⇒ 静默 `return null`，
+ *    两段式从未生效（见 `workingTreeWith` 用例）。
  *
  * Run: node scripts/api-push-test.mjs
  */
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const {
-  parseDiffTree, describeApiError, DELETED_ENTRY_MODE, pushTouchesReleaseContent,
+  parseDiffTree, describeApiError, DELETED_ENTRY_MODE, pushTouchesReleaseContent, workingTreeWith,
 } = await import('./api-push-squash.mjs')
+const { fetchRemoteReleaseRevision } = await import('./lib/catalog-revision.mjs')
 
 let failures = 0
 const check = (name, run) => {
@@ -154,11 +160,19 @@ await (async () => {
       '不能把刚推上去的 sha 直接当 revision（同上一行的等价写法）')
   })
 
-  check('api-push-squash 写完必须自证：catalog 值 == 远端重算值', () => {
-    assert.match(source, /catalogRevision\(/, '必须读取 catalog 现值做自证')
-    assert.match(source, /自证通过/, '自证失败要红，不能静默通过')
-    // 第二段只该动 catalog/feed；真动了发布内容说明混入了别的差异。
+  check('api-push-squash 写完必须自证：远端真相 == 写进去的值', () => {
+    // 自证必须问**远端**（git fetch 或 API 真查询），不是读本地文件自说自话。
+    assert.match(source, /verifyRemoteRevision\(/, '必须有推送后自证')
+    assert.match(source, /remoteContentRevision\(/, '自证要能走 git fetch 重算')
+    assert.match(source, /fetchRemoteReleaseRevision\(/, '自证要能走 API 真查询')
+    assert.ok(!/自证跳过/.test(source), '不允许存在「跳过自证」的静默路径')
+    // 第二段只该动 catalog；真动了发布内容说明混入了别的差异。
     assert.match(source, /touchedReleaseContent/, '必须判断这次推送动没动发布内容')
+  })
+
+  check('推送后把本地 catalog 还原（否则每次都留下一棵脏树）', () => {
+    assert.match(source, /catalogSnapshot/, '写之前要留一份原样')
+    assert.match(source, /catalogSnapshot\)\)\s*\{[\s\S]{0,120}?fs\.writeFileSync/, '推送成功后要还原')
   })
 
   check('降级基线必须是**推送前**读到的（推送后读会读到我们自己的内容）', () => {
@@ -226,6 +240,154 @@ await (async () => {
         new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(body) && !imported.has(name))
       assert.deepEqual(missing, [], `${file} 用了但没从 helper 导入：${missing.join(', ')}`)
     }
+  })
+
+  /**
+   * ── 两段式第二段**真的推得出去**（真实缺陷，2026-10-21：静默空过） ──────
+   *
+   * 第二段只改**工作区**的 catalog 文件（`set-catalog-revision.mjs` 写盘、不提交），
+   * 而 `pushOneCommit` 原来一律用 `HEAD^{tree}` ⇒ 树与远端相同 ⇒ `return null`，
+   * 什么都没推，还打印「✅ 第二段无差异」的假成功。
+   *
+   * 实测：远端 `main` 的 revision 因此永远停在本地记的值（`89f26ae`），
+   * 而校验器要的是投影提交（`f04a6f4`）—— 两段式在本机通道从未生效。
+   */
+  check('workingTreeWith：工作区改动必须编进树（否则第二段静默空过）', () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-workingtree-'))
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    }
+    const git = (...args) => execFileSync('git', args, { cwd: work, env, encoding: 'utf8', stdio: 'pipe' }).trim()
+    try {
+      git('init', '-q', '-b', 'main')
+      fs.writeFileSync(path.join(work, 'package.json'), '{"name":"x","files":["src"]}\n')
+      fs.mkdirSync(path.join(work, 'catalog'))
+      fs.writeFileSync(path.join(work, 'catalog', 'dsh-plugin.json'), `{"source":{"revision":"${'a'.repeat(40)}"}}\n`)
+      fs.writeFileSync(path.join(work, 'catalog', 'provenance.json'), `{"subject":{"sourceRevision":"${'a'.repeat(40)}"}}\n`)
+      git('add', '-A')
+      git('commit', '-q', '-m', 'base')
+      const headTree = git('rev-parse', 'HEAD^{tree}')
+
+      // 只改工作区（不提交）—— 这正是第二段的处境。
+      fs.writeFileSync(path.join(work, 'catalog', 'dsh-plugin.json'), `{"source":{"revision":"${'b'.repeat(40)}"}}\n`)
+      const files = ['catalog/dsh-plugin.json', 'catalog/provenance.json']
+      const tree = workingTreeWith(files, { root: work })
+      assert.match(tree, /^[0-9a-f]{40}$/)
+      assert.notEqual(tree, headTree, '工作区改了却编出与 HEAD 相同的树 ⇒ 改动会被静默丢掉')
+
+      // 树里必须真的是**新**内容（而不是只有 sha 好看）。
+      const list = git('ls-tree', '-r', tree)
+      assert.match(list, /catalog\/dsh-plugin\.json/)
+      const blob = git('show', `${tree}:catalog/dsh-plugin.json`)
+      assert.match(blob, /b{40}/, '树里的 catalog 必须是工作区那份')
+      // 且不该污染用户索引：HEAD 树没变、工作区改动仍在。
+      assert.equal(git('rev-parse', 'HEAD^{tree}'), headTree, '不得改动 HEAD')
+      assert.match(git('status', '--porcelain'), /catalog\/dsh-plugin\.json/)
+    } finally {
+      fs.rmSync(work, { recursive: true, force: true })
+    }
+  })
+
+  check('第二段必须显式传工作区树（不能退回 HEAD^{tree}）', () => {
+    // 静态守住调用点：`second` 那次 pushOneCommit 必须带 `tree:`。
+    const call = /const second = await pushOneCommit\(\{[\s\S]{0,200}?\}\)/.exec(source)
+    assert.ok(call !== null, '找不到第二段调用')
+    assert.match(call[0], /tree:\s*secondTree/, '第二段必须显式传工作区树')
+    assert.match(source, /workingTreeWith\(REVISION_TARGETS/, '必须用 REVISION_TARGETS 列出的文件编树')
+  })
+
+  check('推送后自证：git fetch 不可用时走 API 真查询，不得静默跳过', () => {
+    assert.match(source, /verifyRemoteRevision\(/, '必须有推送后自证')
+    assert.match(source, /fetchRemoteReleaseRevision\(\{[\s\S]{0,200}?branch: BRANCH/,
+      '自证/判定必须接 API 真查询')
+    // 老实现里「fetch 失败 ⇒ 打印一句跳过 ⇒ return」—— 那等于不自证。
+    assert.ok(!/推送后自证跳过/.test(source), '不得存在「跳过自证」的静默路径')
+  })
+})()
+
+/**
+ * ── 远端 revision 的真查询（GitHub API）──────────────────────────────────
+ *
+ * 2026-10-21 实测：本机 git 传输被阻断，只剩「靠 diff 推断」；而推断在
+ * **投影提交自身改了发布内容**（2.5.7 删渠道）时说不出真话。
+ */
+const fakeFetch = routes => async (url) => {
+  const hit = Object.entries(routes).find(([key]) => url.includes(key))
+  if (hit === undefined) return { ok: false, status: 404, json: async () => ({}) }
+  const body = hit[1]
+  if (typeof body === 'number') return { ok: false, status: body, json: async () => ({}) }
+  return { ok: true, status: 200, json: async () => body }
+}
+
+/** 复用文件顶部已定义的 SHA_A / SHA_B（`a`×40 / `b`×40）。 */
+const checkAsync = async (name, run) => {
+  try { await run(); console.log(`ok   ${name}`) }
+  catch (error) { failures++; console.error(`FAIL ${name}: ${error.message}`) }
+}
+
+await (async () => {
+  await checkAsync('真查询：单一路径命中 ⇒ 那个提交就是答案', async () => {
+    const fetchImpl = fakeFetch({ '/commits?sha=main&path=package.json': [{ sha: SHA_A }] })
+    const revision = await fetchRemoteReleaseRevision({
+      branch: 'main', owner: 'o', repo: 'r', token: 't', paths: ['package.json'], fetchImpl,
+    })
+    assert.equal(revision, SHA_A)
+  })
+
+  await checkAsync('真查询：投影提交改了发布内容 ⇒ 返回投影提交自己（不是更早的重建提交）', async () => {
+    // 场景回放（f04a6f4 vs 89f26ae）：squash 投影提交把 client.js / pack.js 全改了，
+    // 于是每个路径的「最后触碰提交」都指向它。
+    const fetchImpl = fakeFetch({
+      '/commits?sha=main&path=client.js': [{ sha: SHA_B }],
+      '/commits?sha=main&path=package.json': [{ sha: SHA_B }],
+    })
+    const revision = await fetchRemoteReleaseRevision({
+      branch: 'main', owner: 'o', repo: 'r', token: 't',
+      paths: ['package.json', 'client.js'], fetchImpl,
+    })
+    assert.equal(revision, SHA_B, '必须落在投影提交上')
+  })
+
+  await checkAsync('真查询：多候选按祖先关系定序（不靠日期）', async () => {
+    const fetchImpl = fakeFetch({
+      '/commits?sha=main&path=package.json': [{ sha: SHA_B }],
+      '/commits?sha=main&path=client.js': [{ sha: SHA_A }],
+      // base=A, head=B ⇒ B 更新
+      [`/compare/${SHA_A}...${SHA_B}`]: { status: 'ahead' },
+    })
+    const revision = await fetchRemoteReleaseRevision({
+      branch: 'main', owner: 'o', repo: 'r', token: 't',
+      paths: ['package.json', 'client.js'], fetchImpl,
+    })
+    assert.equal(revision, SHA_B, 'B 在后 ⇒ 应当选 B')
+  })
+
+  await checkAsync('真查询：定序不了（diverged）⇒ 报错，绝不猜', async () => {
+    const fetchImpl = fakeFetch({
+      '/commits?sha=main&path=package.json': [{ sha: SHA_B }],
+      '/commits?sha=main&path=client.js': [{ sha: SHA_A }],
+      [`/compare/${SHA_A}...${SHA_B}`]: { status: 'diverged' },
+    })
+    await assert.rejects(() => fetchRemoteReleaseRevision({
+      branch: 'main', owner: 'o', repo: 'r', token: 't',
+      paths: ['package.json', 'client.js'], fetchImpl,
+    }), /拒绝猜测/)
+  })
+
+  await checkAsync('真查询：查不到 / HTTP 失败 ⇒ 报错，不回退到猜测', async () => {
+    // 查询成功但该路径没有任何提交 ⇒ 「找不到」。
+    await assert.rejects(() => fetchRemoteReleaseRevision({
+      branch: 'main', owner: 'o', repo: 'r', token: 't', paths: ['package.json'],
+      fetchImpl: fakeFetch({ '/commits?sha=main&path=package.json': [] }),
+    }), /找不到触碰发布内容的提交/)
+    // HTTP 失败必须如实报出状态码，不能当成「没有提交」。
+    await assert.rejects(() => fetchRemoteReleaseRevision({
+      branch: 'main', owner: 'o', repo: 'r', token: 't', paths: ['package.json'],
+      fetchImpl: fakeFetch({ '/commits?sha=main&path=package.json': 403 }),
+    }), /HTTP 403/)
   })
 })()
 

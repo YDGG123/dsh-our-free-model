@@ -2,6 +2,7 @@
 
 日期：2026-10-21　范围：`custom-main` 上的 `ad5f7fc`（merge）、`89f26ae`（pack 重建）、
 `2956ea8`（独立端重建）、`5e198a5`（catalog 重签）、`299cfca`（测试夹具）
+以及推送后暴露的第三件事（见文末「C」）
 
 ## 两个小时前看起来是同一件事，其实是两件
 
@@ -11,6 +12,7 @@
 |---|---|---|---|
 | A | `test` workflow 的 offline job 红（run `39527065284`，`catalog-revision` 套件） | **我们自己新加的测试夹具**依赖开发机的 git 默认分支名 | 无关 |
 | B | 本机 11:30 同步失败、fork 停在 2.5.6 | 上游 2.5.7 与我们的改动在 6 个文件上冲突（需人工判断） | 就是它 |
+| C | 推完 2.5.7 后 `release-sign` 又红（`want=f04a6f4, got=89f26ae`） | 第二段推送**静默空过**，revision 从未被纠正 | 被 2.5.7 触发，但根因在我们脚本 |
 
 A 让 `main` 的必需检查变红，B 让版本没跟上。两件都得修，但根因完全无关。
 
@@ -128,6 +130,68 @@ WorkBuddy 两个渠道**，已有账号数据保留但不可用（上游的设�
 fork 定制项核对：`src/updater.js` 的 `REPO`、`PINNED_MANIFEST_PUBLIC_KEY` 完好；
 四个功能 commit（`0442e4e` / `0173801` / `dca8d2a` / `1fabee3`）仍在历史里；
 `credit-usage-*`、`raccoon-balance-selector`、`long-term-preferred-store` 均在。
+
+## C. 推完 2.5.7 后 `release-sign` 又红：两段式**从未真正生效**
+
+`main` 推上去后 `release-sign` 报 `want=f04a6f4, got=89f26ae`：
+
+| sha | 是什么 |
+|---|---|
+| `f04a6f4` | 本次 squash 投影提交（`chore(fork): 同步本地内容`），2.5.7 改了 `package.json` / `client.js` / `pack.js` ⇒ 它就是「最后触碰发布内容的提交」 |
+| `89f26ae` | 本地 `custom-main` 上 pack 重建那笔 —— 被第一段原样推上去的 catalog 值 |
+
+### 真因不是「算错」，是「第二段根本没推」
+
+`pushOneCommit` 一律用 **`HEAD^{tree}`**；而 `set-catalog-revision.mjs` 只**写盘、不提交**
+⇒ 第二段算出的 `localTree` 仍等于刚推上去的远端树 ⇒ **`return null`，什么都没推**，
+还打印「✅ 第二段无差异（revision 已是目标值）」这种**假成功**。
+
+所以远端 `main` 的 HEAD 就是 `f04a6f4`、它后面**没有**第二个提交，revision 自然停在
+`89f26ae`。**两段式在本机 API 通道等于从来没生效过** —— 之前几次「好了」都是云端
+`git push` 通道或 release-sign 兜底修好的。
+
+### 修法（两处）
+
+1. **第二段推送真实的树**：新增 `workingTreeWith(files)`（用 `GIT_INDEX_FILE` 临时索引
+   把工作区内容编成树，不污染用户索引/工作区、不产生提交），`pushOneCommit` 接受显式
+   `tree`，第二段传它。若第二段仍算出「无差异」⇒ **直接报错**，不再当作成功。
+2. **远端 revision 做成真查询**：新增 `scripts/lib/catalog-revision.mjs` 的
+   `fetchRemoteReleaseRevision()` —— 对每个发布内容路径问 GitHub API
+   「该分支上最后碰它的是谁」（`/commits?sha=<branch>&path=<p>&per_page=1`），
+   多候选时用 `/compare/<a>...<b>` 的**祖先关系**定序（不靠提交日期）。
+   调用顺序：`git fetch` 重算 → **API 真查询** → 靠 diff 推断（并注明推断在
+   「投影提交自身改了发布内容」时会错，必须由推送后自证兜住）。
+
+顺带修掉一个一直在的毛病：推送成功后把本地 catalog **还原**成推送前的口径
+（本地记录本地、远端记录远端）。否则每次推送都留下一棵脏树，下一次同步的
+「工作区必须干净」检查会直接拒绝；本地 `catalog-test` 也会永远红。
+
+### 真实数据回放（不是构造的用例）
+
+```
+真查询得到     : f04a6f42b21c14ada2725c54cf7de70734201676   ← 正确答案（投影提交自己）
+远端 main HEAD : f04a6f4…
+catalog 现记录 : 89f26ae…（错的）
+```
+
+用同一个 `workingTreeWith` 实测第二段现在编出的树与 `HEAD^{tree}` 的差异：
+
+```
+M  catalog/dsh-plugin.json
+M  catalog/provenance.json
+```
+
+—— 旧实现这里是「无差异」，所以什么都没推。
+
+### 变异测试（全部实测变红）
+
+| 变异 | 被谁抓到 |
+|---|---|
+| 第二段不传工作区树（退回 `HEAD^{tree}`） | `api-push-test` 静态守住调用点 |
+| `workingTreeWith` 退回 `HEAD` 树 | 「工作区改动必须编进树」用例 |
+| 自证退回「跳过」 | 两条断言（不允许静默跳过） |
+
+`api-push-test` 从 20 项增到 **29 项**。
 
 ## 未做（明确留给后续）
 
