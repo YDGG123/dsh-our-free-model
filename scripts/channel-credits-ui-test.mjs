@@ -219,9 +219,10 @@ export async function verifyChannelCreditsUi() {
   assert.ok(!creditMissing.text().includes('今日未领'), '绝不能把已领显示成未领')
   creditMissing.cleanup()
 
-  // 没有状态接口的渠道（codearts / lobsterai / trae / cline / loomy）：
+  // 没有状态接口的渠道（lobsterai / trae / cline / loomy）：
+  // ⚠️ 2.5.9 起上游移除了 CodeArts 渠道，这里换用仍存在的 lobsterai 当样本。
   // 显示能力缺失的说明，而不是故障文案。
-  const noStatus = mount('codearts', async method => {
+  const noStatus = mount('lobsterai', async method => {
     if (method === 'account.list') return { accounts: [accountRows[0]] }
     // 后端对「没有状态接口」的渠道如实返回 unsupported: true（不是故障）。
     if (method === 'credits.status') return { accounts: [
