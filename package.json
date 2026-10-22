@@ -72,7 +72,8 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "devDependencies": {
-    "undici": "8.11.2",
-    "typescript": "^5.9.2"
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.2",
+    "undici": "8.11.2"
   }
 }

@@ -60,3 +60,35 @@
 - 合并过程顺带处理了一件事：本地工作区曾被**插件自升级**覆盖成 2.5.8 的发布树
   （README / package-lock 被删、package.json=2.5.8），已确认内容与远端提交一致后
   还原，再快进到远端 `custom-main`（`519be56`）才开始合并。
+
+## 补记（同日）：vendor 类型棘轮 + 「reason 三条」的核查结论
+
+### 棘轮已进 CI
+
+`scripts/vendor-typecheck-ratchet-test.mjs`（套件名 `vendor-typecheck`）：
+
+- 跑 `tsc --noEmit -p vendor/channel-pack/tsconfig.json`（tsc 5.9.3 + `@types/node` 22.20.5，
+  两者都进了根 devDependencies，CI `npm install` 会装），归一化行号后与**入库基线**
+  （`scripts/lib/vendor-typecheck-baseline.json`，**23** 条）比对，出现基线外的新键即红；
+- 基线更新：`--update`（修掉错误后鼓励降基线，别让修债白做）；
+- 工具链版本变了会**警告**但不失败，失败只看「基线外新错误」；
+- 缺 typescript / `@types/node` 时**失败**（exit 1），不静默跳过；
+- 三个路径变异实测：塞一个假类型错误 → exit 1；删 `@types/node` → exit 1；正常 → exit 0。
+
+### 「index.ts 的 reason 三条旧债」不成立（有证据）
+
+Chief 让顺手修的 3 条（`picked.reason`，行 828/997/1000）**当前工具链下不是错误**：
+
+- `RaccoonSelectionResult` 是判别联合 `{ ok: true; … } | { ok: false; reason }`，
+  两处用法都已经在 `picked.ok` / `!picked.ok` / `if (picked)` 窄化**之后**才访问 `.reason`；
+- 实测：`tsc --noEmit -p vendor/channel-pack/tsconfig.json` 对 `index.ts` 报 **0 条**；
+  standalone 的 `typecheck` 也是 0。因此**没有做**那个 `const reason = picked.ok ? …`
+  改写——给不存在的错误做重构是制造噪音。若 Tester 在别的工具链下能复现，
+  请把确切的 tsc 版本与命令贴出来，我按那个环境核。
+
+### 为什么历史数字（41/35/37/21/22/23）对不上，以后也对不上
+
+- 跨版本对比**共享 node_modules**：2.5.9 改了依赖，旧版本源码对着新依赖检查，
+  错误集合自然漂移（实测同一份 2.5.7 源码今天量是 22，与昨天的 37 不同）；
+- 统计口径也会污染：tsc 输出 53 行里只有 23 行是 `error TS`，把续行数进去就变了样；
+- 所以**基线入库 + 工具链钉死**才是唯一可靠的口径——这就是棘轮的意义。

@@ -61,6 +61,9 @@ const suites = [
   // revision 口径的**算法本身**（真实 git 仓库验证，不是正则断源码）。
   // 与 cloud-sync / api-push 分开：那两个测的是调用点，这个测的是「算得对」。
   ['catalog-revision', 'catalog-revision-test.mjs', []],
+  // vendor 类型债棘轮：错误数不得增加（基线入库，行号归一化）。
+  // 2.5.9 合并时 vendor 从没进过 CI 的类型检查，债悄悄长到 23 条才被发现。
+  ['vendor-typecheck', 'vendor-typecheck-ratchet-test.mjs', []],
   ['api-push', 'api-push-test.mjs', []],
   // ⚠️ `channel-credits-rpc` / `channel-model-actions` **不列为独立套件**：
   // 它们需要 `channel-pack-test.mjs` 挂载出来的宿主上下文（ctx / call / creds /

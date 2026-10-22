@@ -1,0 +1,33 @@
+{
+  "_comment": "vendor/channel-pack 的类型错误基线。更新方式见 scripts/vendor-typecheck-ratchet-test.mjs 头注；对比时行号已归一化。",
+  "toolchain": {
+    "typescript": "5.9.3",
+    "typesNode": "22.20.5"
+  },
+  "count": 23,
+  "errors": [
+    "vendor/channel-pack/src/channel-fetch.ts|error TS2352: Conversion of type '{ dispatcher: Dispatcher; method?: string; keepalive?: boolean; headers?: HeadersInit; body?: BodyInit | null; redirect?: RequestRedirect; ... 7 more ...; duplex?: RequestDuplex; }' to type 'RequestInit' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+    "vendor/channel-pack/src/gemini-adapter.ts|error TS2322: Type 'RequestMessage[]' is not assignable to type 'readonly Message[]'.",
+    "vendor/channel-pack/src/gemini-messages.ts|error TS2339: Property 'content' does not exist on type 'never'.",
+    "vendor/channel-pack/src/gemini-messages.ts|error TS2339: Property 'isError' does not exist on type 'never'.",
+    "vendor/channel-pack/src/gemini-messages.ts|error TS2339: Property 'toolCallId' does not exist on type 'never'.",
+    "vendor/channel-pack/src/gemini-messages.ts|error TS2339: Property 'toolCallId' does not exist on type 'never'.",
+    "vendor/channel-pack/src/gemini-messages.ts|error TS2367: This comparison appears to be unintentional because the types '\"file\" | \"text\" | \"reasoning\" | \"image\" | \"tool-addition\" | \"tool-removal\"' and '\"tool-result\"' have no overlap.",
+    "vendor/channel-pack/src/minimax-adapter.ts|error TS2322: Type 'RequestMessage[]' is not assignable to type 'readonly Message[]'.",
+    "vendor/channel-pack/src/minimax-messages.ts|error TS2339: Property 'content' does not exist on type 'never'.",
+    "vendor/channel-pack/src/minimax-messages.ts|error TS2339: Property 'isError' does not exist on type 'never'.",
+    "vendor/channel-pack/src/minimax-messages.ts|error TS2339: Property 'toolCallId' does not exist on type 'never'.",
+    "vendor/channel-pack/src/minimax-messages.ts|error TS2339: Property 'toolCallId' does not exist on type 'never'.",
+    "vendor/channel-pack/src/minimax-messages.ts|error TS2367: This comparison appears to be unintentional because the types '\"file\" | \"text\" | \"reasoning\" | \"image\" | \"tool-addition\" | \"tool-removal\"' and '\"tool-result\"' have no overlap.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2322: Type '\"tool-result\"' is not assignable to type '\"file\" | \"text\" | \"reasoning\" | \"tool-call\" | \"image\" | \"tool-addition\" | \"tool-removal\"'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2322: Type '{ id: Message[\"id\"]; role: \"user\" | \"tool\" | \"developer\" | \"system\" | \"assistant\"; content: readonly ContentBlock[]; source: MessageSource; }' is not assignable to type 'Message'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2339: Property 'push' does not exist on type 'readonly ContentBlock[]'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2339: Property 'push' does not exist on type 'readonly ContentBlock[]'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2339: Property 'push' does not exist on type 'readonly ContentBlock[]'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2339: Property 'push' does not exist on type 'readonly ContentBlock[]'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2339: Property 'push' does not exist on type 'readonly ContentBlock[]'.",
+    "vendor/channel-pack/src/openai-gateway/messages.ts|error TS2352: Conversion of type '{ kind: \"plugin:dsh-openai-gateway\"; }' to type 'MessageSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+    "vendor/channel-pack/src/openai-gateway/responses.ts|error TS2322: Type '\"tool-result\"' is not assignable to type '\"file\" | \"text\" | \"reasoning\" | \"tool-call\" | \"image\" | \"tool-addition\" | \"tool-removal\"'.",
+    "vendor/channel-pack/src/openai-gateway/responses.ts|error TS2339: Property 'push' does not exist on type 'readonly ContentBlock[]'."
+  ]
+}
