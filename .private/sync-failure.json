@@ -1,12 +1,14 @@
 {
-  "failedAt": "2026-10-25T08:44:11.657Z",
+  "failedAt": "2026-10-26T09:22:39.760Z",
   "failedStep": "merge-conflict",
-  "message": "存在需要人工判断的冲突，已回滚合并，留待处理：\nclient.js\nscripts/standalone-page-lifecycle-test.mjs",
-  "upstreamHead": "119c5bfe869a5dd8c24439d68f7ad415462c7758",
+  "message": "存在需要人工判断的冲突，已回滚合并，留待处理：\nclient.js\npackage-lock.json\npackage.json\nscripts/standalone-page-lifecycle-test.mjs",
+  "upstreamHead": "778862a4d0e183ee753b8cb8f61b0efc9b5d725b",
   "preMergeHead": "",
   "conflictedFiles": [
     "client.js",
+    "package-lock.json",
+    "package.json",
     "scripts/standalone-page-lifecycle-test.mjs"
   ],
-  "runUrl": "https://github.com/YDGG123/dsh-our-free-model/actions/runs/40177786214"
+  "runUrl": "https://github.com/YDGG123/dsh-our-free-model/actions/runs/40299025474"
 }
