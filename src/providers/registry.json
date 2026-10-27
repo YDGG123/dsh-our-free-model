@@ -2081,6 +2081,32 @@
     "modelsUrl": "https://inference.poolside.ai/v1/models"
   },
   {
+    "id": "qnaigc",
+    "name": "QNAIGC",
+    "category": "apikey",
+    "auth": {
+      "kind": "apiKey",
+      "env": "QNAIGC_API_KEY",
+      "url": "https://qnaigc.com"
+    },
+    "baseUrl": "https://api.qnaigc.com/v1",
+    "format": "openai-chat",
+    "models": [
+      {
+        "id": "qiniu/conatus-free",
+        "name": "Conatus Free (Qiniu)",
+        "contextWindow": 256000,
+        "vision": false,
+        "reasoning": true
+      }
+    ],
+    "notes": "User-added OpenAI-compatible relay (api.qnaigc.com); only qiniu/conatus-free pinned per user request.",
+    "website": "https://qnaigc.com",
+    "local": false,
+    "source": "fcc",
+    "modelsUrl": "https://api.qnaigc.com/v1/models"
+  },
+  {
     "id": "qwencloud",
     "name": "QwenCloud Token Plan",
     "category": "apikey",
