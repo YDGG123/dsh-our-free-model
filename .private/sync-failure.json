@@ -1,8 +1,8 @@
 {
-  "failedAt": "2026-10-26T09:22:39.760Z",
+  "failedAt": "2026-10-27T09:22:35.495Z",
   "failedStep": "merge-conflict",
   "message": "存在需要人工判断的冲突，已回滚合并，留待处理：\nclient.js\npackage-lock.json\npackage.json\nscripts/standalone-page-lifecycle-test.mjs",
-  "upstreamHead": "778862a4d0e183ee753b8cb8f61b0efc9b5d725b",
+  "upstreamHead": "38648bf0ebecc63563e2e3324fbed4d323a442ac",
   "preMergeHead": "",
   "conflictedFiles": [
     "client.js",
@@ -10,5 +10,5 @@
     "package.json",
     "scripts/standalone-page-lifecycle-test.mjs"
   ],
-  "runUrl": "https://github.com/YDGG123/dsh-our-free-model/actions/runs/40299025474"
+  "runUrl": "https://github.com/YDGG123/dsh-our-free-model/actions/runs/40480156926"
 }
