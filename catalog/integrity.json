@@ -204,8 +204,8 @@
     },
     {
       "path": "src/providers/registry.json",
-      "size": 124782,
-      "sha256": "bfb03a1621714463e1c4157f2273006f5740dd10adcf650018f80782db1edaa0"
+      "size": 125488,
+      "sha256": "5fb10016842afe4bb12bd5a0f881a1ee514ac84e74273088d174623b98f566cf"
     },
     {
       "path": "src/push.js",
