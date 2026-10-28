@@ -49,9 +49,13 @@ const raw = fs.readFileSync(path.join(repo, 'src/providers/registry.json'), 'utf
 // The `free` category is empty on purpose: OpenCode's keyless pool needs a
 // per-request fingerprint the aggregate transport cannot carry, so it is not a
 // row here (see README's aggregate section) — the free lane serves it instead.
-const EXPECTED_PROVIDERS = 76
-const EXPECTED_BY_CATEGORY = { apikey: 61, 'free-tier': 10, local: 3, oauth: 2 }
-const EXPECTED_MODELS = 502
+// 77 = 上游 2.5.9 的 76 + 本 fork 本地保留的 qnaigc（见下条注释）。
+// 远端把 76 写成固定期望是上游口径；我们有意多一行自有 provider，故独立记账。
+const EXPECTED_PROVIDERS = 77
+// apikey 62（上游 61 + 本地 qnaigc）；其余三类与上游一致。
+const EXPECTED_BY_CATEGORY = { apikey: 62, 'free-tier': 10, local: 3, oauth: 2 }
+// 503 = 上游 502 + qnaigc 自带的 1 个模型。
+const EXPECTED_MODELS = 503
 const FLEETRELAY_MODELS = ['deepseek-v4.1-flash-free', 'gpt-6-astra']
 
 const byCategory = {}
